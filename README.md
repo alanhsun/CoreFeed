@@ -12,8 +12,8 @@
 ### 核心功能
 - 🌍 **多源新闻聚合**: 从NewsAPI、Gnews、RSS等多个源获取新闻
 - 🔗 **第三方API集成**: 提供聚合数据接口，支持跨域调用
-- 🤖 **AI智能翻译**: 使用OpenRouter大模型自动翻译新闻内容
-- 📝 **智能总结**: 使用OpenRouter大模型生成简洁的中文摘要
+- 🤖 **AI智能翻译**: 使用MiniMax等大语言模型自动翻译新闻内容
+- 📝 **智能总结**: 使用大语言模型生成简洁的中文摘要
 - 🧠 **AI智能去重**: 使用AI技术识别和去除重复新闻
 - 🌐 **地区识别**: 智能识别新闻所属地区（支持AI分析与规则匹配）
 - ⏰ **灵活定时更新**: 支持多时间点自动更新新闻
@@ -49,7 +49,7 @@
 
 ### 外部API服务
 - **新闻数据**: [NewsAPI](https://newsapi.org/) + [Gnews](https://gnews.io/) + RSS源
-- **AI服务**: [OpenRouter](https://openrouter.ai/) (用于翻译、摘要、去重等)
+- **AI服务**: [MiniMax开放平台](https://platform.minimaxi.com/) (用于翻译、摘要、去重等)
 - **语音合成**: 自建 [OpenAI-Edge-TTS](https://github.com/travisvn/openai-edge-tts) 服务（可配置端点）
 
 ## 快速开始 🚀
@@ -90,12 +90,11 @@ GNEWS_API_KEY=你的Gnews密钥
 GNEWS_ENABLED=false
 GNEWS_MAX_ARTICLES=10
 
-# OpenAI/OpenRouter 兼容AI配置
-AI_BASE_URL=https://openrouter.ai/api/v1
-AI_API_KEY=your_openrouter_api_key_here
-AI_MODEL=openai/gpt-4o-mini
-OPENROUTER_SITE_URL=http://localhost:3120
-OPENROUTER_APP_NAME=News Aggregator
+# MiniMax AI配置
+# 注意：中国用户使用 api.minimaxi.com，国际用户使用 api.minimax.io
+AI_BASE_URL=https://api.minimaxi.com/v1
+AI_API_KEY=your_minimax_api_key_here
+AI_MODEL=MiniMax-M2.5
 
 # TTS（OpenAI-Edge-TTS）配置
 # 自建TTS服务地址
@@ -189,12 +188,12 @@ SOCKETIO_MAX_BUFFER_SIZE=1000000
 3. 免费版每天100次请求
 4. 设置 `GNEWS_ENABLED=true` 启用
 
-#### OpenRouter AI (必需)
-1. 访问 [OpenRouter官网](https://openrouter.ai/)
-2. 使用Google或邮箱账户登录
-3. 在[Keys页面](https://openrouter.ai/keys)创建一个新的Key
-4. 将获取的Key配置到 `.env` 文件的 `OPENROUTER_API_KEY`
-5. 将你的应用URL（如 `http://localhost:3120`）配置到 `OPENROUTER_SITE_URL`
+#### MiniMax AI (必需)
+1. 访问 [MiniMax官网开放平台](https://platform.minimaxi.com/)
+2. 注册账号并登录
+3. 在[API Keys页面](https://platform.minimaxi.com/user-center/basic-information/api-key)创建一个新的Key
+4. 将获取的Key配置到 `.env` 文件的 `AI_API_KEY`中
+5. 检查并确保对应的 `AI_MODEL` 正确（如 `MiniMax-M2.5`）
 
 
 
