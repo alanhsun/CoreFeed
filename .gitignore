@@ -1,0 +1,121 @@
+# 依赖项
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 环境变量
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 运行时数据
+data/
+*.json
+!package.json
+!ecosystem.config.js
+
+# 日志文件
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+*.temp
+.nyc_output
+
+# 音频文件
+*.mp3
+*.wav
+*.m4a
+*.aac
+*.ogg
+*.flac
+
+# EPUB文件
+*.epub
+
+# 备份文件
+*.bak
+*.backup
+*.old
+backups/
+
+# 定时任务日志
+logs/auto-update.log
+logs/health-check.log
+logs/data-backup.log
+logs/log-cleanup.log
+logs/system-update.log
+logs/cron-manager.log
+
+# 操作系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 缓存
+.cache/
+.npm/
+.eslintcache
+.node_repl_history
+
+# Docker相关
+.dockerignore
+docker-compose.override.yml
+
+# SSL证书
+ssl/
+*.pem
+*.key
+*.crt
+*.csr
+
+# PM2相关
+.pm2/
+
+# 测试覆盖率
+coverage/
+.nyc_output/
+
+# 构建输出
+build/
+dist/
+
+# 监控和分析
+.clinic/
+*.cpuprofile
+*.heapsnapshot
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 压缩文件
+*.zip
+*.tar.gz
+*.rar
+*.7z

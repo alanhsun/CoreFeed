@@ -1,0 +1,43 @@
+module.exports = {
+  apps: [{
+    name: 'news-aggregator',
+    script: 'server.js',
+    instances: 1,
+    exec_mode: 'fork',
+    watch: false,
+    max_memory_restart: '1G',
+    
+    // 日志配置
+    log_file: './logs/pm2-combined.log',
+    out_file: './logs/pm2-out.log',
+    error_file: './logs/pm2-err.log',
+    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    time: true,
+    
+    // 日志格式配置
+    log_type: 'json',
+    merge_logs: true,
+    log_rotate: {
+      max_size: '10M',
+      retain: 7,
+      compress: true,
+      date_format: 'YYYY-MM-DD'
+    },
+    
+    // 环境变量
+    env: {
+      NODE_ENV: 'development',
+      PORT: 3000
+    },
+    env_production: {
+      NODE_ENV: 'production',
+      PORT: 3000
+    },
+    
+    // 进程管理
+    min_uptime: '10s',
+    max_restarts: 10,
+    restart_delay: 4000,
+    kill_timeout: 5000
+  }]
+};
