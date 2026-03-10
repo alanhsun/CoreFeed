@@ -1,7 +1,8 @@
-# 聚核 (CoreFeed) 新闻聚合器 📰🤖
-
-一个基于Node.js的现代化智能新闻聚合网站，集成AI翻译、智能摘要、音频生成和分页加载功能。
-
+<div align="center">
+  <img src="public/images/logo.png" alt="CoreFeed Logo" width="150" style="border-radius: 20px;" />
+  <h1>聚核 (CoreFeed) 新闻聚合器 📰🤖</h1>
+  <p>一个基于Node.js的现代化智能新闻聚合网站，集成AI翻译、智能摘要、音频生成和分页加载功能。</p>
+</div>
 ![项目状态](https://img.shields.io/badge/状态-稳定版本-brightgreen)
 ![Node.js版本](https://img.shields.io/badge/Node.js-18%2B-brightgreen)
 ![许可证](https://img.shields.io/badge/许可证-MIT-blue)
