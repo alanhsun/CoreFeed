@@ -1,33 +1,28 @@
 @echo off
-echo 正在启动新闻聚合服务...
+chcp 65001 >nul
+echo ====================================================
+echo   聚核 CoreFeed v2.0 · 全球知名信源 Agent 情报中心
+echo ====================================================
 
-REM 检查Node.js是否安装
-node --version >nul 2>&1
-if errorlevel 1 (
-    echo 错误: 未检测到Node.js，请先安装Node.js 18+
-    pause
-    exit /b 1
-)
-
-REM 检查依赖是否安装
-if not exist "node_modules" (
-    echo 正在安装依赖...
-    npm install
-    if errorlevel 1 (
-        echo 错误: 依赖安装失败
-        pause
-        exit /b 1
-    )
-)
-
-REM 检查环境配置文件
 if not exist ".env" (
-    echo 警告: 未找到.env文件，使用默认配置
+    echo [提示] 未找到 .env 文件，已从 .env.example 复制默认配置
     copy .env.example .env >nul 2>&1
 )
 
-REM 启动服务
-echo 启动服务...
-npm start
+where node >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [启动] 检测到 Node.js 环境，正在启动服务...
+    node server.js
+    goto :eof
+)
 
+where deno >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [启动] 检测到 Deno (Node兼容模式) 环境，正在启动服务...
+    deno run -A server.js
+    goto :eof
+)
+
+echo [错误] 未检测到 Node.js 或 Deno 运行环境，请先安装 Node.js 18+ 或使用 Docker Compose 启动。
 pause
+exit /b 1

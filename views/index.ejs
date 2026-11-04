@@ -3,952 +3,550 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>智能新闻聚合</title>
-    
-    <!-- 强化防缓存meta标签 - 完全禁用浏览器缓存 -->
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, private, max-age=0">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
-    <meta name="cache-control" content="no-cache, no-store, must-revalidate, private, max-age=0">
-    <meta name="expires" content="0">
-    <meta name="pragma" content="no-cache">
-    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="referrer" content="no-referrer">
-    <meta name="app-version" content="<%= appVersion %>">
-    <meta name="timestamp" content="<%= Date.now() %>">
-    <meta name="random-id" content="<%= Math.random().toString(36).substr(2, 9) %>">
-    
-    <link rel="icon" type="image/svg+xml" href="/favicon.ico">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <link href="/css/style.css?v=<%= appVersion %>" rel="stylesheet">
+    <title><%= config.siteName || '聚核 CoreFeed · 全球知名信源 Agent 情报中心' %></title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-            .news-card {
-                transition: all 0.3s ease;
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#eff6ff',
+                            100: '#dbeafe',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                            900: '#1e3a8a'
+                        }
+                    }
+                }
             }
-            .news-card:hover {
-                box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-            }
-            .loading-dots {
-                display: inline-block;
-            }
-            .loading-dots::after {
-                content: '';
-                animation: dots 1.5s infinite;
-            }
-            @keyframes dots {
-                0%, 20% { content: ''; }
-                40% { content: '.'; }
-                60% { content: '..'; }
-                80%, 100% { content: '...'; }
-            }
-        </style>
+        };
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="/css/style.css">
 </head>
-<body class="min-h-screen font-sans" style="background-color: var(--bg-primary); color: var(--text-primary);">
-    <nav class="header sticky top-0 z-50">
-        <div class="container mx-auto px-4 py-4">
-            <div class="flex items-center justify-between">
-                <div class="flex items-center space-x-4 animate-slide-in-left">
-                    <div class="w-10 h-10 rounded-xl overflow-hidden shadow-sm hover-glow">
-                        <img src="/images/logo.png" alt="Logo" class="w-full h-full object-cover">
+<body class="antialiased selection:bg-blue-600 selection:text-white">
+    <!-- 顶部导航栏 -->
+    <header class="sticky top-0 z-40 glass-panel border-b">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+            <!-- 品牌 Logo 与名称 -->
+            <div class="flex items-center gap-3">
+                <img src="/images/logo.png" alt="CoreFeed Logo" class="w-10 h-10 rounded-xl shadow-sm object-cover" onerror="this.style.display='none'">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-lg sm:text-xl font-bold tracking-tight bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                            聚核 CoreFeed
+                        </h1>
+                        <span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                            Agent v2.0
+                        </span>
                     </div>
-                    <h1 class="text-2xl font-bold hover-scale" style="color: var(--text-primary);">智能新闻聚合</h1>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 hidden sm:block">
+                        全球知名信源多 Agent 协同搜集 · Jina 全文深读 · 跨源交叉验证
+                    </p>
                 </div>
-                
-                <div class="flex items-center space-x-4 animate-slide-in-right">
-                    <!-- 更新时间信息 -->
-                    <% if (lastUpdated) { %>
-                        <div class="hidden md:flex items-center space-x-1 text-sm" style="color: var(--text-secondary);">
-                            <i class="fas fa-clock" style="color: var(--accent-color);"></i>
-                            <span><%= new Date(lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) %></span>
+            </div>
+
+            <!-- 顶部状态与快捷操作 -->
+            <div class="flex items-center gap-2 sm:gap-3">
+                <!-- 连接与模型状态指示 -->
+                <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800/80 text-xs text-slate-600 dark:text-slate-300">
+                    <span id="socketStatusDot" class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span id="aiModelBadge"><%= config.aiModel || 'MiniMax-M2.5' %></span>
+                    <span class="text-slate-300 dark:text-slate-600">|</span>
+                    <span>已启用 <strong id="enabledSourcesCount"><%= (sourceMatrix || []).filter(s => s.enabled).length %></strong> 个全球名媒</span>
+                </div>
+
+                <!-- 启动 Agent 巡检主按钮 -->
+                <button id="btnRunPatrol" onclick="app.triggerAgentPatrol()" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-sm transition-all cursor-pointer">
+                    <i id="patrolBtnIcon" class="fa-solid fa-satellite-dish"></i>
+                    <span id="patrolBtnText">Agent 全球巡检</span>
+                </button>
+
+                <!-- 全球信源矩阵按钮 -->
+                <button onclick="app.openSourceMatrixModal()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-500 transition-all" title="管理全球知名信源矩阵">
+                    <i class="fa-solid fa-globe text-blue-600 dark:text-blue-400"></i>
+                    <span class="hidden sm:inline">信源矩阵</span>
+                </button>
+
+                <!-- 设置按钮 -->
+                <button onclick="app.openSettingsModal()" class="p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-500 transition-all" title="系统与Agent配置">
+                    <i class="fa-solid fa-sliders text-slate-600 dark:text-slate-300"></i>
+                </button>
+
+                <!-- 主题切换 -->
+                <button onclick="app.toggleTheme()" class="p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-500 transition-all" title="切换深浅色模式">
+                    <i id="themeIcon" class="fa-solid fa-moon text-slate-600 dark:text-slate-300"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主体内容区 -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+        <!-- 1. Agent 指挥中心：按需专题深挖 + 4阶段流水线状态面板 -->
+        <section class="glass-panel rounded-2xl p-4 sm:p-6 space-y-5">
+            <!-- 专题调查搜索栏 -->
+            <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div class="space-y-1">
+                    <div class="flex items-center gap-2">
+                        <span class="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-600 text-white text-xs">
+                            <i class="fa-solid fa-user-secret"></i>
+                        </span>
+                        <h2 class="text-base sm:text-lg font-bold">Agent 全球知名信源按需搜集与专题整合</h2>
+                    </div>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        输入任意国际热点、行业动态或地缘事件，派遣 Agent 实时检索 Reuters、BBC、NYT、AP、彭博等名媒并深读原文生成对比报告
+                    </p>
+                </div>
+
+                <!-- 快捷热点标签 -->
+                <div class="flex flex-wrap items-center gap-1.5 text-xs">
+                    <span class="text-slate-400">快速选题:</span>
+                    <button onclick="app.quickTopic('中东局势与停火谈判')" class="px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-slate-600 dark:text-slate-300 transition">中东局势</button>
+                    <button onclick="app.quickTopic('AI 芯片与大模型最新突破')" class="px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-slate-600 dark:text-slate-300 transition">AI与半导体</button>
+                    <button onclick="app.quickTopic('美联储利率与全球金融市场')" class="px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-slate-600 dark:text-slate-300 transition">美联储与宏观</button>
+                    <button onclick="app.quickTopic('俄乌冲突与欧洲防务')" class="px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-slate-600 dark:text-slate-300 transition">俄乌与欧洲</button>
+                </div>
+            </div>
+
+            <!-- 专题输入框 -->
+            <div class="flex flex-col sm:flex-row gap-2.5">
+                <div class="relative flex-1">
+                    <i class="fa-solid fa-magnifying-glass-chart absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                    <input id="topicResearchInput" type="text" placeholder="输入您想让 Agent 搜集整合的全球话题（例如：全球关税贸易博弈 / OpenAI 最新动态 / 日本央行政策）..."
+                        class="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        onkeydown="if(event.key==='Enter') app.runTopicResearch()">
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 cursor-pointer select-none">
+                        <input id="chkAuthoritativeOnly" type="checkbox" class="rounded text-blue-600 focus:ring-blue-500">
+                        <span>仅限顶级外媒域名</span>
+                    </label>
+                    <button id="btnTopicResearch" onclick="app.runTopicResearch()" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition-all whitespace-nowrap cursor-pointer">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        <span>派遣 Agent 搜集整合</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 4 阶段多 Agent 协作流水线实时状态条 -->
+            <div id="agentPipelinePanel" class="pt-3 border-t border-slate-200/70 dark:border-slate-800">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+                    <div id="node-scout" class="agent-node rounded-xl p-2.5 border border-slate-200 dark:border-slate-800 flex items-center gap-2.5">
+                        <div class="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 flex items-center justify-center text-sm">
+                            <i class="fa-solid fa-radar"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <div class="text-xs font-bold truncate">1. Scout 巡检员</div>
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate">全球名媒并发采集中枢</div>
+                        </div>
+                    </div>
+                    <div id="node-curate" class="agent-node rounded-xl p-2.5 border border-slate-200 dark:border-slate-800 flex items-center gap-2.5">
+                        <div class="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 flex items-center justify-center text-sm">
+                            <i class="fa-solid fa-diagram-project"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <div class="text-xs font-bold truncate">2. Curator 聚类总编</div>
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate">跨信源事件合并与甄选</div>
+                        </div>
+                    </div>
+                    <div id="node-compile" class="agent-node rounded-xl p-2.5 border border-slate-200 dark:border-slate-800 flex items-center gap-2.5">
+                        <div class="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center text-sm">
+                            <i class="fa-solid fa-book-open-reader"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <div class="text-xs font-bold truncate">3. Deep-Reader 编译员</div>
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate">Jina 全文深读与中文精编</div>
+                        </div>
+                    </div>
+                    <div id="node-summary" class="agent-node rounded-xl p-2.5 border border-slate-200 dark:border-slate-800 flex items-center gap-2.5">
+                        <div class="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-sm">
+                            <i class="fa-solid fa-pen-nib"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <div class="text-xs font-bold truncate">4. Chief Editor 主编</div>
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 truncate">深度综述与多端分发</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 进度条与实时状态文字 -->
+                <div id="liveProgressContainer" class="mt-3 hidden">
+                    <div class="flex items-center justify-between text-xs mb-1">
+                        <span id="liveProgressText" class="font-medium text-blue-600 dark:text-blue-400">正在初始化 Agent...</span>
+                        <span id="liveProgressPercent" class="font-bold">0%</span>
+                    </div>
+                    <div class="w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+                        <div id="liveProgressBar" class="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-300" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- 底部概览栏与展开实时日志按钮 -->
+                <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <div class="flex flex-wrap items-center gap-4">
+                        <span><i class="fa-regular fa-clock mr-1"></i>最后更新: <strong id="lastUpdatedLabel"><%= lastUpdated ? new Date(lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未更新' %></strong></span>
+                        <span><i class="fa-solid fa-layer-group mr-1"></i>当前展示: <strong id="displayedCountLabel"><%= displayedNews %></strong> / <strong id="totalPoolCountLabel"><%= totalNews %></strong> 条精选情报</span>
+                    </div>
+                    <button onclick="app.toggleAgentLogDrawer()" class="text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1">
+                        <i class="fa-solid fa-terminal"></i>
+                        <span>查看 Agent 实时执行日志</span>
+                    </button>
+                </div>
+
+                <!-- 可折叠的 Agent 实时终端日志 -->
+                <div id="agentLogDrawer" class="hidden mt-3 p-3 rounded-xl bg-slate-900 text-slate-200 font-mono text-xs max-h-44 overflow-y-auto space-y-1">
+                    <div class="text-slate-400">// CoreFeed Multi-Agent 实时遥测日志流...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. 主工作区选项卡导航 -->
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-2">
+            <div class="flex flex-wrap items-center gap-1.5" role="tablist">
+                <button id="tabBtn-feed" onclick="app.switchTab('feed')" class="tab-btn px-4 py-2 rounded-xl text-sm font-semibold bg-blue-600 text-white shadow-sm transition-all">
+                    <i class="fa-regular fa-newspaper mr-1.5"></i>全球情报流
+                </button>
+                <button id="tabBtn-summary" onclick="app.switchTab('summary')" class="tab-btn px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-all">
+                    <i class="fa-solid fa-file-lines mr-1.5"></i>主编深度综述 & Kindle
+                </button>
+                <button id="tabBtn-research" onclick="app.switchTab('research')" class="tab-btn px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-all">
+                    <i class="fa-solid fa-compass-drafting mr-1.5"></i>专题调查报告
+                </button>
+                <button id="tabBtn-podcast" onclick="app.switchTab('podcast')" class="tab-btn px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-all">
+                    <i class="fa-solid fa-headphones-simple mr-1.5"></i>AI 双主播播客
+                </button>
+            </div>
+
+            <!-- 情报流搜索框 -->
+            <div id="feedSearchWrapper" class="relative w-full sm:w-64">
+                <i class="fa-solid fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                <input id="localFilterInput" type="text" placeholder="在当前情报中筛选标题/媒体..."
+                    oninput="app.applyFilters()"
+                    class="w-full pl-8 pr-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+        </div>
+
+        <!-- ==================== TAB 1: 全球精选情报流 ==================== -->
+        <section id="tabPanel-feed" class="space-y-5">
+            <!-- 地域与领域过滤栏 -->
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div id="regionFilterBar" class="flex flex-wrap items-center gap-1.5">
+                    <!-- 由 main.js 动态渲染地区按钮 -->
+                </div>
+                <div id="categoryFilterBar" class="flex flex-wrap items-center gap-1.5">
+                    <!-- 由 main.js 动态渲染领域按钮 -->
+                </div>
+            </div>
+
+            <!-- 新闻情报卡片网格 -->
+            <div id="newsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <!-- 由 main.js 渲染卡片 -->
+            </div>
+
+            <!-- 加载更多按钮 -->
+            <div id="loadMoreContainer" class="text-center pt-2 hidden">
+                <button onclick="app.loadMoreNews()" class="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-500 shadow-sm transition">
+                    <i class="fa-solid fa-angles-down text-blue-600"></i>
+                    <span>加载更多全球编译情报</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- ==================== TAB 2: 主编深度综述 & Kindle 分发 ==================== -->
+        <section id="tabPanel-summary" class="hidden space-y-5">
+            <div class="glass-panel rounded-2xl p-5 sm:p-8">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
+                    <div>
+                        <span class="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Chief Editor Synthesis</span>
+                        <h2 id="summaryTitle" class="text-xl sm:text-2xl font-bold mt-1">
+                            <%= summaryArticle ? summaryArticle.title : '今日全球要闻深度综述' %>
+                        </h2>
+                        <p id="summaryMeta" class="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                            <% if (summaryArticle) { %>
+                                生成时间：<%= new Date(summaryArticle.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) %> · 涵盖 <%= (summaryArticle.regions || []).join('、') %> · 共 <%= summaryArticle.wordCount || 0 %> 字
+                            <% } else { %>
+                                尚未生成今日深度综述，点击右侧按钮立即由主编 Agent 统筹撰写
+                            <% } %>
+                        </p>
+                    </div>
+
+                    <!-- 综述操作按钮组 -->
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="app.generateSummary()" id="btnGenSummary" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition cursor-pointer">
+                            <i class="fa-solid fa-rotate"></i>
+                            <span>生成/刷新综述</span>
+                        </button>
+                        <button onclick="app.exportEpub()" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-500 transition cursor-pointer">
+                            <i class="fa-solid fa-book"></i>
+                            <span>下载 EPUB 电子书</span>
+                        </button>
+                        <button onclick="app.sendToKindle()" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white transition cursor-pointer">
+                            <i class="fa-solid fa-paper-plane"></i>
+                            <span>推送至 Kindle / 邮箱</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 综述正文 -->
+                <div id="summaryBody" class="summary-content mt-6 prose dark:prose-invert max-w-none">
+                    <% if (summaryArticle && summaryArticle.htmlContent) { %>
+                        <%- summaryArticle.htmlContent %>
+                    <% } else { %>
+                        <div class="text-center py-12 text-slate-400">
+                            <i class="fa-solid fa-newspaper text-4xl mb-3 block"></i>
+                            <p>点击上方「生成/刷新综述」或执行「Agent 全球巡检」，即可生成附带跨信源原文链接的全局深度简报。</p>
                         </div>
                     <% } %>
-                    
-                    <!-- 深色模式切换 -->
-                    <button id="themeToggle" class="btn btn--secondary btn--sm hover-glow" title="切换主题">
-                        <i id="themeIcon" class="fas fa-moon text-lg"></i>
-                    </button>
-                    
-                    <!-- 设置按钮 -->
-                    <button onclick="openSourceManager()" class="btn btn--secondary btn--sm" title="设置">
-                        <i class="fas fa-cog"></i>
-                    </button>
-                    
-
-                    
-                    <!-- 手动刷新按钮 -->
-                    <button onclick="refreshNews()" class="btn btn--primary btn--sm" title="手动获取新闻" style="min-width: 100px; white-space: nowrap;">
-                        <i class="fas fa-sync-alt"></i>
-                        <span class="hidden sm:inline">手动获取</span>
-                    </button>
                 </div>
             </div>
-        </div>
-    </nav>
+        </section>
 
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div class="mb-12">
-            <div class="text-center mb-8 animate-fade-in-up">
-                <div class="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-6 shadow-xl hover-glow">
-                    <i class="fas fa-globe text-2xl text-white"></i>
+        <!-- ==================== TAB 3: Agent 专题调查报告 ==================== -->
+        <section id="tabPanel-research" class="hidden space-y-5">
+            <div class="glass-panel rounded-2xl p-5 sm:p-8">
+                <div id="researchReportContainer">
+                    <div class="text-center py-12 text-slate-400">
+                        <i class="fa-solid fa-magnifying-glass-chart text-4xl mb-3 block text-indigo-500"></i>
+                        <h3 class="text-base font-bold text-slate-700 dark:text-slate-200">派遣 Agent 搜集全球名媒专题情报</h3>
+                        <p class="text-xs mt-1 max-w-lg mx-auto">
+                            在上方搜索框输入任意国际议题（如“中东局势”、“美联储降息”、“AI芯片管制”），Agent 将自动构造多语种检索词，巡检路透社、BBC、NYT、彭博等信源并使用 Jina Reader 深读全文，在此生成跨信源立场对比报告。
+                        </p>
+                    </div>
                 </div>
-                <h1 class="text-4xl font-bold mb-4 hover-scale" style="color: var(--text-primary);">
-                    今日要闻
-                </h1>
-                <p class="text-lg max-w-2xl mx-auto leading-relaxed animate-fade-in-up" style="color: var(--text-secondary); animation-delay: 0.2s;">实时聚合全球热点新闻，智能翻译与总结，为您提供最新的国际资讯</p>
             </div>
-        </div>
+        </section>
 
-
-
-        <!-- 完整版音频播放器 -->
-        <div class="mb-12">
-            <div class="rounded-xl p-6 shadow-sm" style="background: var(--bg-secondary); border: 1px solid var(--border-color);">
-                <div class="flex items-center justify-between mb-6 animate-fade-in-up">
-                    <div class="flex items-center space-x-3">
-                        <div class="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-600 rounded-xl flex items-center justify-center hover-glow">
-                            <i class="fas fa-microphone text-white text-lg"></i>
-                        </div>
-                        <div>
-                            <h3 class="text-2xl font-bold hover-scale" style="color: var(--text-primary);">音频播报</h3>
-                        </div>
+        <!-- ==================== TAB 4: AI 双主播播客工作台 ==================== -->
+        <section id="tabPanel-podcast" class="hidden space-y-5">
+            <div class="glass-panel rounded-2xl p-5 sm:p-8 space-y-6">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
+                    <div>
+                        <span class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">AI Broadcast Studio</span>
+                        <h2 class="text-xl font-bold mt-1">AI 双主播全球新闻联播 (OpenAI-Edge-TTS + FTP)</h2>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                            自动将当日全球精选新闻改编为双人主播对谈脚本，合成 MP3 音频并自动上传至配置的 FTP 服务器
+                        </p>
                     </div>
-                    <div class="flex items-center space-x-3 animate-fade-in-up" style="animation-delay: 0.3s;">
-                        <button onclick="downloadCompletePodcast()" class="btn-secondary">
-                            <i class="fas fa-file-audio"></i>
-                            <span>下载完整音频</span>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="app.generatePodcast(false)" id="btnGenPodcast" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 transition cursor-pointer">
+                            <i class="fa-solid fa-microphone-lines"></i>
+                            <span>生成今日新闻播客</span>
                         </button>
-                        <button onclick="viewSummary()" class="btn-secondary">
-                            <i class="fas fa-file-alt"></i>
-                            <span>文字摘要</span>
-                        </button>
-                        <button onclick="sendToKindle()" class="btn-primary">
-                            <i class="fas fa-envelope"></i>
-                            <span>发送摘要到Kindle</span>
+                        <button onclick="app.generatePodcast(true)" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-500 transition cursor-pointer">
+                            <i class="fa-solid fa-vial"></i>
+                            <span>TTS 快速测试</span>
                         </button>
                     </div>
                 </div>
-                
-                <!-- 音频播放器 -->
-                <div class="mb-6 p-6 rounded-2xl" style="background: var(--bg-primary);">
-                    <!-- 顶部信息和控制 -->
-                    <div class="flex items-start justify-between mb-4">
-                        <div class="flex items-center space-x-4 flex-1 pr-8">
-                            <div class="text-sm font-medium min-h-[4.5rem] flex items-center py-2" style="color: var(--text-primary); line-height: 1.5;" id="currentSegmentText">点击播放开始收听</div>
-                        </div>
-                        <div class="flex flex-col items-end space-y-2">
-                            <!-- 音量控制 -->
-                            <div class="flex items-center justify-between w-24">
-                                <i id="volumeIcon" class="fas fa-volume-up text-sm cursor-pointer hover:scale-110 transition-transform duration-200" style="color: var(--text-secondary);" onclick="toggleMute()" title="点击静音/取消静音"></i>
-                                <input type="range" id="volumeSlider" min="0" max="100" value="100" 
-                                       class="w-16 h-1 bg-gray-300 rounded-lg appearance-none cursor-pointer volume-slider"
-                                       onchange="adjustVolume(this.value)">
+
+                <!-- 播客播放器与脚本展示 -->
+                <div id="podcastContentArea" class="space-y-4">
+                    <div class="p-4 rounded-xl bg-slate-100 dark:bg-slate-800/70 flex flex-col sm:flex-row items-center justify-between gap-4">
+                        <div class="flex items-center gap-3">
+                            <div class="w-12 h-12 rounded-xl bg-indigo-600 text-white flex items-center justify-center text-xl shadow">
+                                <i class="fa-solid fa-tower-broadcast"></i>
                             </div>
-                            <!-- 倍速控制 -->
-                            <div class="flex items-center justify-end space-x-2 w-30">
-                                <span class="text-xs" style="color: var(--text-secondary);">倍速</span>
-                                <select id="playbackRateSelect" onchange="changePlaybackRate(this.value)" 
-                                        class="text-xs px-2 py-1 rounded border-0 cursor-pointer w-16" 
-                                        style="background: var(--bg-secondary); color: var(--text-primary); font-size: 11px; min-width: 4rem;">
-                                    <option value="0.5">0.5x</option>
-                                    <option value="0.75">0.75x</option>
-                                    <option value="1" selected>1x</option>
-                                    <option value="1.25">1.25x</option>
-                                    <option value="1.5">1.5x</option>
-                                    <option value="2">2x</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- 播放控制按钮和进度条 -->
-                    <div class="flex items-center space-x-4 mb-4">
-                        <!-- 播放控制按钮 -->
-                        <div class="audio-controls-group">
-                            <button onclick="previousSegment()" class="audio-control audio-control--nav">
-                                <i class="fas fa-step-backward text-sm"></i>
-                            </button>
-                            <button id="playPauseBtn" onclick="togglePlayPause()" class="audio-control audio-control--play">
-                                <i id="playPauseIcon" class="fas fa-play"></i>
-                            </button>
-                            <button onclick="nextSegment()" class="audio-control audio-control--nav">
-                                <i class="fas fa-step-forward text-sm"></i>
-                            </button>
-                        </div>
-                        
-                        <!-- 播放进度条 -->
-                        <div class="flex-1 flex items-center space-x-3">
-                            <div class="flex-1">
-                                <div class="w-full bg-gray-300 rounded-full h-2 cursor-pointer" onclick="seekAudio(event)">
-                                    <div id="audioProgressBar" class="bg-gradient-to-r from-purple-500 to-pink-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                            <div>
+                                <div id="podcastTitleLabel" class="font-bold text-sm">
+                                    <%= podcastInfo ? podcastInfo.title : '聚核 AI 全球新闻联播' %>
+                                </div>
+                                <div id="podcastMetaLabel" class="text-xs text-slate-500 dark:text-slate-400">
+                                    <% if (podcastInfo) { %>
+                                        预估时长: <%= podcastInfo.duration || 0 %> 秒 · 片段数: <%= podcastInfo.stats?.totalSegments || 0 %>
+                                    <% } else { %>
+                                        尚未生成音频，点击上方按钮开始合成
+                                    <% } %>
                                 </div>
                             </div>
-                            
-                            <div class="text-sm whitespace-nowrap" style="color: var(--text-secondary);">
-                                <span id="currentTime">00:00</span> / <span id="totalTime">--:--</span>
-                            </div>
                         </div>
+                        <audio id="podcastAudioPlayer" controls class="w-full sm:w-80 h-10" <% if (podcastInfo) { %>src="/api/podcast/complete?t=<%= Date.now() %>"<% } %>></audio>
                     </div>
+
+                    <% if (podcastInfo && podcastInfo.script) { %>
+                        <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                            <h4 class="text-xs font-bold uppercase text-slate-400 mb-2">双主播对话脚本文稿</h4>
+                            <pre id="podcastScriptBox" class="text-xs leading-relaxed whitespace-pre-wrap font-sans text-slate-700 dark:text-slate-300 max-h-80 overflow-y-auto"><%= podcastInfo.script %></pre>
+                        </div>
+                    <% } else { %>
+                        <div id="podcastScriptWrapper" class="hidden p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                            <h4 class="text-xs font-bold uppercase text-slate-400 mb-2">双主播对话脚本文稿</h4>
+                            <pre id="podcastScriptBox" class="text-xs leading-relaxed whitespace-pre-wrap font-sans text-slate-700 dark:text-slate-300 max-h-80 overflow-y-auto"></pre>
+                        </div>
+                    <% } %>
                 </div>
-                
-
-                
-
             </div>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8" id="news-container">
-            <% if (news && news.length > 0) { %>
-                <% news.forEach((article, index) => { %>
-                     <div class="card group cursor-pointer hover-glow animate-fade-in-up" onclick="openNewsUrl(this)" style="animation-delay: <%= index * 0.1 %>s" data-url="<%= article.url || '' %>">
-                         <% if (article.urlToImage) { %>
-                             <div class="card__image relative overflow-hidden">
-                                 <img src="<%= article.urlToImage %>" class="w-full h-48 object-cover group-hover:scale-110 transition-transform duration-700" alt="新闻图片">
-                                 <div class="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                                 <div class="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                                     <div class="w-8 h-8 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
-                                         <i class="fas fa-external-link-alt text-white text-xs"></i>
-                                     </div>
-                                 </div>
-                             </div>
-                         <% } else { %>
-                             <div class="card__image w-full h-48 bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center relative overflow-hidden">
-                                 <div class="text-center z-10">
-                                     <i class="fas fa-newspaper text-4xl text-blue-400 mb-2"></i>
-                                     <p class="text-blue-600 text-sm font-medium">新闻资讯</p>
-                                 </div>
-                                 <div class="absolute inset-0 bg-gradient-to-br from-blue-200/50 to-purple-200/50"></div>
-                             </div>
-                         <% } %>
-                         <div class="card__content p-6 flex flex-col h-full">
-                             <div class="mb-4">
-                                 <div class="flex items-center space-x-2 mb-3">
-                                     <span class="news-tag news-tag--source hover-scale">
-                                         <i class="fas fa-building mr-1 text-xs"></i>
-                                         <%= article.source.name %>
-                                     </span>
-                                     <% if (article.region) { %>
-                                         <span class="news-tag news-tag--region hover-scale">
-                                             <i class="fas fa-map-marker-alt mr-1"></i>
-                                             <%= article.region %>
-                                         </span>
-                                     <% } %>
-                                 </div>
-                                 <div class="text-sm flex items-center rounded-full px-3 py-1 w-fit backdrop-blur-sm" style="color: var(--text-secondary); background: var(--bg-glass);">
-                                     <i class="fas fa-clock mr-2 animate-pulse" style="color: var(--accent-color);"></i>
-                                     <% if (article.publishedAt) { %>
-                                         <%= new Date(article.publishedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) %>
-                                     <% } else { %>
-                                         <span style="color: var(--text-muted); font-style: italic;">时间未知</span>
-                                     <% } %>
-                                 </div>
-                             </div>
-                            
-                            <h3 class="card__title text-lg font-bold mb-3 line-clamp-2 group-hover:text-blue-600 transition-all duration-300" style="color: var(--text-primary);">
-                                <%= article.translatedTitle || article.title %>
-                            </h3>
-                            
-                            <div class="rounded-lg p-3 mb-3 backdrop-blur-sm" style="background: var(--bg-glass); border: 1px solid var(--border-color);">
-                                <p class="text-xs" style="color: var(--text-secondary);">
-                                    <strong style="color: var(--text-primary);">原标题:</strong> <%= article.title %>
-                                </p>
-                            </div>
-                            
-                            <p class="card__description flex-grow mb-6 line-clamp-3 leading-relaxed" style="color: var(--text-secondary);">
-                                <%= article.summary || article.translatedDescription || article.description %>
-                            </p>
-                            
-                            <div class="mt-auto pt-4" style="border-top: 1px solid var(--border-color);">
-                                <div class="btn btn--primary btn--sm flex items-center justify-center space-x-2 w-full">
-                                     <span>阅读原文</span>
-                                     <i class="fas fa-external-link-alt"></i>
-                                 </div>
-                            </div>
-                        </div>
-                    </div>
-                <% }); %>
-            <% } else { %>
-                <div class="col-span-full">
-                    <div class="text-center py-16">
-                        <div class="inline-flex items-center justify-center w-24 h-24 rounded-3xl mb-6" style="background: var(--bg-secondary);">
-                            <i class="fas fa-newspaper text-3xl" style="color: var(--border-color);"></i>
-                        </div>
-                        <h4 class="text-2xl font-bold mb-3" style="color: var(--text-primary);">暂无新闻数据</h4>
-                        <p class="mb-8 max-w-md mx-auto leading-relaxed" style="color: var(--text-secondary);">点击"手动获取"按钮获取最新AI资讯和全球热点新闻</p>
-                        <button onclick="refreshNews()" class="btn-primary">
-                            <i class="fas fa-sync-alt"></i>
-                            <span>立即获取</span>
-                        </button>
-                    </div>
-                </div>
-            <% } %>
-        </div>
-        
-        <!-- 加载更多按钮 -->
-        <div id="loadMoreContainer" class="text-center mt-12 mb-8" style="display: none;">
-            <button id="loadMoreBtn" onclick="loadMoreNews()" class="btn btn--primary btn--lg inline-flex items-center space-x-3 px-8 py-4 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300">
-                <i class="fas fa-plus-circle text-lg"></i>
-                <span>加载更多新闻</span>
-                <span id="remainingCount" class="bg-white/20 px-2 py-1 rounded-full text-sm font-medium"></span>
-            </button>
-        </div>
+        </section>
     </main>
 
-    <footer class="py-12 mt-16" style="background: var(--footer-bg); color: var(--footer-text);">
-        <div class="container mx-auto px-4">
-            <div class="text-center">
-                <div class="flex items-center justify-center mb-6">
-                    <div class="w-12 h-12 rounded-2xl flex items-center justify-center overflow-hidden shadow-sm mr-4">
-                        <img src="/images/logo.png" alt="Logo" class="w-full h-full object-cover">
+    <!-- ==================== MODAL 1: 单篇新闻 Agent 全文深读弹窗 ==================== -->
+    <div id="deepReadModal" class="fixed inset-0 z-50 hidden bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-3xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4">
+                <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                        <span class="px-2 py-0.5 text-xs font-semibold rounded bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                            Jina Reader + Agent 全文精读
+                        </span>
+                        <span id="deepReadSourceBadge" class="text-xs text-slate-500"></span>
                     </div>
-                    <h3 class="text-2xl font-bold" style="color: var(--footer-text);">智能新闻聚合</h3>
+                    <h3 id="deepReadTitle" class="text-base sm:text-lg font-bold truncate mt-1">正在深读外媒原文...</h3>
                 </div>
-                <p class="mb-4 max-w-2xl mx-auto leading-relaxed" style="color: var(--footer-text-secondary);">
-                    由AI驱动的智能新闻聚合平台，为您提供全球最新热点新闻
-                </p>
-                <div class="flex justify-center space-x-6 mb-6">
-                    <div class="flex items-center text-sm" style="color: var(--footer-text-muted);">
-                        <i class="fas fa-robot mr-2 text-blue-400"></i>
-                        <span>AI智能翻译</span>
-                    </div>
-                    <div class="flex items-center text-sm" style="color: var(--footer-text-muted);">
-                        <i class="fas fa-globe mr-2 text-green-400"></i>
-                        <span>全球资讯</span>
-                    </div>
-                    <div class="flex items-center text-sm" style="color: var(--footer-text-muted);">
-                        <i class="fas fa-clock mr-2 text-purple-400"></i>
-                        <span>实时更新</span>
-                    </div>
-                </div>
-                <div class="pt-6" style="border-top: 1px solid var(--footer-border);">
-                    <p class="text-sm" style="color: var(--footer-text-muted);">&copy; 2025 智能新闻聚合. 所有权利保留.</p>
-                    <p class="text-xs mt-2" style="color: var(--footer-text-muted);">作者: Alan Sun</p>
-                </div>
-            </div>
-        </div>
-    </footer>
-
-    <!-- 现代化加载模态框 -->
-    <div id="loadingModal" class="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-        <div class="bg-white rounded-3xl p-10 max-w-md w-full mx-4 shadow-2xl border border-gray-100">
-            <div class="text-center">
-                <div class="relative mb-6">
-                    <div class="w-16 h-16 mx-auto">
-                        <div class="absolute inset-0 rounded-full border-4 border-gray-200"></div>
-                        <div class="absolute inset-0 rounded-full border-4 border-blue-500 border-t-transparent"></div>
-                        <div class="absolute inset-2 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
-                            <i id="loadingIcon" class="fas fa-newspaper text-white text-lg"></i>
-                        </div>
-                    </div>
-                </div>
-                <h3 id="loadingTitle" class="text-xl font-bold text-gray-900 mb-3">正在获取新闻</h3>
-                <p id="loadingMessage" class="text-gray-600 leading-relaxed mb-4">AI正在为您聚合全球最新资讯...</p>
-                
-                <!-- 进度条 -->
-                <div class="w-full bg-gray-200 rounded-full h-2 mb-4">
-                    <div id="progressBar" class="bg-gradient-to-r from-blue-500 to-purple-600 h-2 rounded-full transition-all duration-500 ease-out" style="width: 0%"></div>
-                </div>
-                
-                <!-- 进度百分比和详细信息 -->
-                <div class="flex justify-between items-center text-sm text-gray-500 mb-4">
-                    <span id="progressPercent">0%</span>
-                    <span id="progressDetail"></span>
-                </div>
-                
-                <div class="flex justify-center">
-                    <div class="flex space-x-1">
-                        <div class="w-2 h-2 bg-blue-500 rounded-full animate-bounce"></div>
-                        <div class="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style="animation-delay: 0.1s"></div>
-                        <div class="w-2 h-2 bg-pink-500 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 摘要文章模态框 -->
-    <div id="summaryModal" class="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-        <div class="rounded-3xl p-8 max-w-4xl w-full mx-4 shadow-2xl border max-h-[90vh] overflow-hidden flex flex-col" style="background: var(--bg-primary); border-color: var(--border-color);">
-            <div class="flex items-center justify-between mb-6">
-                <div class="flex items-center space-x-3">
-                    <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
-                        <i class="fas fa-file-alt text-white text-lg"></i>
-                    </div>
-                    <div>
-                        <h3 class="text-2xl font-bold" style="color: var(--text-primary);" id="summaryTitle">新闻摘要文章</h3>
-                        <p class="text-sm" style="color: var(--text-secondary);" id="summaryMeta">AI生成的综合新闻摘要</p>
-                    </div>
-                </div>
-                <button onclick="closeSummaryModal()" class="btn-secondary close-button">
-                    <i class="fas fa-times"></i>
+                <button onclick="app.closeDeepReadModal()" class="p-2 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                    <i class="fa-solid fa-xmark text-lg"></i>
                 </button>
             </div>
-            
-            <div class="flex-1 overflow-y-auto" style="scrollbar-width: thin;">
-                <div id="summaryContent" class="prose prose-lg max-w-none" style="color: var(--text-primary);">
-                    <!-- 摘要内容将在这里显示 -->
-                </div>
+            <div id="deepReadBody" class="p-6 overflow-y-auto space-y-4 text-sm leading-relaxed">
+                <!-- 动态加载深读结果 -->
             </div>
-            
-            <div class="flex items-center justify-between mt-6 pt-6" style="border-top: 1px solid var(--border-color);">
-                <div class="flex items-center space-x-4 text-sm" style="color: var(--text-secondary);">
-                    <div class="flex items-center space-x-2">
-                        <i class="fas fa-clock" style="color: var(--accent-color);"></i>
-                        <span id="summaryTime">生成时间</span>
-                    </div>
-                    <div class="flex items-center space-x-2">
-                        <i class="fas fa-newspaper" style="color: var(--accent-color);"></i>
-                        <span id="summaryNewsCount">新闻数量</span>
-                    </div>
-                </div>
-                <div class="flex items-center space-x-3">
-                    <button onclick="copySummary()" class="btn-secondary flex items-center space-x-2">
-                        <i class="fas fa-copy"></i>
-                        <span>复制</span>
-                    </button>
-                    <button onclick="sendEmail()" class="btn-primary flex items-center space-x-2">
-                        <i class="fas fa-envelope"></i>
-                        <span>发送到Kindle</span>
-                    </button>
-                </div>
+            <div class="px-6 py-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900/50">
+                <a id="deepReadOriginalLink" href="#" target="_blank" rel="noopener noreferrer" class="text-xs font-semibold text-blue-600 hover:underline">
+                    <i class="fa-solid fa-arrow-up-right-from-square mr-1"></i>在新窗口打开外媒原文
+                </a>
+                <button onclick="app.closeDeepReadModal()" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-slate-200 dark:bg-slate-800">关闭</button>
             </div>
         </div>
     </div>
 
-    <!-- 音频生成进度模态框 -->
-    <div id="podcastModal" class="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-        <div class="bg-white rounded-3xl p-10 max-w-md w-full mx-4 shadow-2xl border border-gray-100">
-            <div class="text-center">
-                <div class="relative mb-6">
-                    <div class="w-16 h-16 mx-auto">
-                        <div class="absolute inset-0 rounded-full border-4 border-gray-200"></div>
-                        <div class="absolute inset-0 rounded-full border-4 border-purple-500 border-t-transparent animate-spin"></div>
-                        <div class="absolute inset-2 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center">
-                            <i id="podcastIcon" class="fas fa-microphone text-white text-lg"></i>
-                        </div>
-                    </div>
+    <!-- ==================== MODAL 2: 全球知名信源矩阵管理弹窗 ==================== -->
+    <div id="sourceMatrixModal" class="fixed inset-0 z-50 hidden bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-4xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-bold">🌍 全球知名信源矩阵管理</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        勾选启用的国际权威媒体，支持官方 RSS、Google News 站点代理（自动突破 Cloudflare）及 Jina 网页抽取
+                    </p>
                 </div>
-                <h3 id="podcastTitle" class="text-xl font-bold text-gray-900 mb-3">正在生成音频</h3>
-                <p id="podcastMessage" class="text-gray-600 leading-relaxed mb-4">AI正在为您生成音频对话脚本...</p>
-                
-                <!-- 进度条 -->
-                <div class="w-full bg-gray-200 rounded-full h-2 mb-4">
-                    <div id="podcastProgressBar" class="bg-gradient-to-r from-purple-500 to-pink-600 h-2 rounded-full transition-all duration-500 ease-out" style="width: 0%"></div>
-                </div>
-                
-                <!-- 进度百分比和详细信息 -->
-                <div class="flex justify-between items-center text-sm text-gray-500 mb-4">
-                    <span id="podcastProgressPercent">0%</span>
-                    <span id="podcastProgressDetail"></span>
-                </div>
-                
-                <div class="flex justify-center">
-                    <div class="flex space-x-1">
-                        <div class="w-2 h-2 bg-purple-500 rounded-full animate-bounce"></div>
-                        <div class="w-2 h-2 bg-pink-500 rounded-full animate-bounce" style="animation-delay: 0.1s"></div>
-                        <div class="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 新闻源管理模态框 -->
-    <div id="sourceManagerModal" class="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-        <div class="rounded-3xl p-8 max-w-6xl w-full mx-4 shadow-2xl border max-h-[90vh] overflow-hidden flex flex-col" style="background: var(--bg-primary); border-color: var(--border-color);">
-            <div class="flex items-center justify-between mb-6">
-                <div class="flex items-center space-x-3">
-                    <div class="w-12 h-12 bg-gradient-to-br from-green-500 to-blue-600 rounded-xl flex items-center justify-center">
-                        <i class="fas fa-cog text-white text-lg"></i>
-                    </div>
-                    <div>
-                        <h3 class="text-2xl font-bold" style="color: var(--text-primary);">设置</h3>
-                        <p class="text-sm" style="color: var(--text-secondary);">管理您的新闻源配置</p>
-                    </div>
-                </div>
-                <button onclick="closeSourceManager()" class="btn-secondary close-button">
-                    <i class="fas fa-times"></i>
+                <button onclick="app.closeSourceMatrixModal()" class="p-2 rounded-lg text-slate-400 hover:text-slate-600">
+                    <i class="fa-solid fa-xmark text-lg"></i>
                 </button>
             </div>
-            
-            <div class="flex-1 overflow-y-auto" style="scrollbar-width: thin;">
-                <!-- 标签页导航 -->
-                <div class="flex space-x-1 mb-6 p-1 rounded-xl" style="background: var(--bg-secondary);">
-                    <button onclick="switchSourceTab('api')" id="apiTab" class="flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 source-tab active">
-                        <i class="fas fa-globe mr-2"></i>API源
-                    </button>
-                    <button onclick="switchSourceTab('rss')" id="rssTab" class="flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 source-tab">
-                        <i class="fas fa-rss mr-2"></i>RSS源
-                    </button>
-                    <button onclick="switchSourceTab('ai')" id="aiTab" class="flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 source-tab">
-                        <i class="fas fa-robot mr-2"></i>AI模型
-                    </button>
-                    <button onclick="switchSourceTab('settings')" id="settingsTab" class="flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 source-tab">
-                        <i class="fas fa-clock mr-2"></i>定时更新
-                    </button>
-                    <button onclick="switchSourceTab('filter')" id="filterTab" class="flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 source-tab">
-                        <i class="fas fa-filter mr-2"></i>内容过滤
-                    </button>
-                </div>
-                
-                <!-- API源管理 -->
-                <div id="apiSourcesContent" class="source-content">
-                    <!-- News API 设置 -->
-                    <div class="mb-6">
-                        <div class="flex items-center justify-between mb-4">
-                            <h4 class="text-lg font-semibold" style="color: var(--text-primary);">News API 设置</h4>
-                            <div class="toggle-switch">
-                                <input type="checkbox" id="newsApiEnabled" class="toggle-input">
-                                <div class="toggle-slider">
-                                    <div class="toggle-button"></div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="space-y-4">
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">API Key</label>
-                                <input type="password" id="newsApiKey" placeholder="输入您的 News API Key" class="w-full px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);">
-                                <p class="text-xs mt-1" style="color: var(--text-secondary);">从 <a href="https://newsapi.org" target="_blank" class="text-blue-500 hover:underline">newsapi.org</a> 获取免费API Key，获取热门头条新闻</p>
-                            </div>
-                            
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">每次获取新闻数量</label>
-                                <input type="number" id="newsApiMaxArticles" min="1" max="100" value="20" class="w-full px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);">
-                                <p class="text-xs mt-1" style="color: var(--text-secondary);">每次获取的最大文章数量 (1-100)</p>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- 分隔线 -->
-                    <div class="border-t my-8" style="border-color: var(--border-color);"></div>
-                    
-                    <!-- Gnews API 设置 -->
-                    <div class="mb-6">
-                        <div class="flex items-center justify-between mb-4">
-                            <h4 class="text-lg font-semibold" style="color: var(--text-primary);">Gnews API 设置</h4>
-                            <div class="toggle-switch">
-                                <input type="checkbox" id="gnewsEnabled" class="toggle-input">
-                                <div class="toggle-slider">
-                                    <div class="toggle-button"></div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="space-y-4">
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">API Key</label>
-                                <input type="password" id="gnewsApiKey" placeholder="输入您的 Gnews API Key" class="w-full px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);">
-                                <p class="text-xs mt-1" style="color: var(--text-secondary);">从 <a href="https://gnews.io" target="_blank" class="text-blue-500 hover:underline">gnews.io</a> 获取免费API Key，获取热门头条新闻</p>
-                            </div>
-                            
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">每次获取新闻数量</label>
-                                <input type="number" id="gnewsMaxArticles" min="1" max="100" value="10" class="w-full px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);">
-                                <p class="text-xs mt-1" style="color: var(--text-secondary);">每次获取的最大文章数量 (1-100)</p>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- 分隔线 -->
-                    <div class="border-t my-8" style="border-color: var(--border-color);"></div>
-                    
-                    <!-- 网页抓取源设置 -->
-                    <div class="mb-6">
-                        <div class="flex items-center justify-between mb-4">
-                            <div>
-                                <h4 class="text-lg font-semibold" style="color: var(--text-primary);">网页抓取源</h4>
-                                <p class="text-sm mt-1" style="color: var(--text-secondary);">直接从新闻网站抓取最新文章</p>
-                            </div>
-                            <div class="toggle-switch">
-                                <input type="checkbox" id="webScrapingEnabled" class="toggle-input" onchange="settingsManager.toggleWebScraping()">
-                                <div class="toggle-slider">
-                                    <div class="toggle-button"></div>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="space-y-4">
-                            <!-- AP News 设置 -->
-                            <div class="p-4 rounded-lg" style="background: var(--bg-secondary); border: 1px solid var(--border-color);">
-                                <div class="flex items-center justify-between mb-3">
-                                    <div class="flex items-center space-x-3">
-                                        <div>
-                                            <h5 class="font-medium" style="color: var(--text-primary);">AP News</h5>
-                                            <p class="text-xs" style="color: var(--text-secondary);">美联社新闻</p>
-                                        </div>
-                                    </div>
-                                    <div class="toggle-switch">
-                                        <input type="checkbox" id="apNewsEnabled" class="toggle-input" onchange="settingsManager.toggleApNews()">
-                                        <div class="toggle-slider">
-                                            <div class="toggle-button"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="space-y-2">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">每次获取文章数量</label>
-                                        <input type="number" id="apNewsMaxArticles" min="1" max="20" value="5" class="w-full px-2 py-1 text-sm rounded border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);" oninput="settingsManager.updateWebScrapingMaxArticles(this)">
-                                    </div>
-                                </div>
-                            </div>
-                            
 
-                            
-
-                            <!-- Japan Today 设置 -->
-                            <div class="p-4 rounded-lg" style="background: var(--bg-secondary); border: 1px solid var(--border-color);">
-                                <div class="flex items-center justify-between mb-3">
-                                    <div class="flex items-center space-x-3">
-                                        <div>
-                                            <h5 class="font-medium" style="color: var(--text-primary);">Japan Today</h5>
-                                            <p class="text-xs" style="color: var(--text-secondary);">日本今日新闻</p>
-                                        </div>
-                                    </div>
-                                    <div class="toggle-switch">
-                                        <input type="checkbox" id="japanTodayEnabled" class="toggle-input" onchange="settingsManager.toggleJapanToday()">
-                                        <div class="toggle-slider">
-                                            <div class="toggle-button"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="space-y-2">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">每次获取文章数量</label>
-                                        <input type="number" id="japanTodayMaxArticles" min="1" max="20" value="5" class="w-full px-2 py-1 text-sm rounded border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);" oninput="settingsManager.updateWebScrapingMaxArticles(this)">
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <!-- Fox News 设置 -->
-                            <div class="p-4 rounded-lg" style="background: var(--bg-secondary); border: 1px solid var(--border-color);">
-                                <div class="flex items-center justify-between mb-3">
-                                    <div class="flex items-center space-x-3">
-                                        <div>
-                                            <h5 class="font-medium" style="color: var(--text-primary);">Fox News</h5>
-                                            <p class="text-xs" style="color: var(--text-secondary);">福克斯新闻</p>
-                                        </div>
-                                    </div>
-                                    <div class="toggle-switch">
-                                        <input type="checkbox" id="foxNewsEnabled" class="toggle-input" onchange="settingsManager.toggleFoxNews()">
-                                        <div class="toggle-slider">
-                                            <div class="toggle-button"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="space-y-2">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">每次获取文章数量</label>
-                                        <input type="number" id="foxNewsMaxArticles" min="1" max="20" value="5" class="w-full px-2 py-1 text-sm rounded border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);" oninput="settingsManager.updateWebScrapingMaxArticles(this)">
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <!-- Al Jazeera 设置 -->
-                            <div class="p-4 rounded-lg" style="background: var(--bg-secondary); border: 1px solid var(--border-color);">
-                                <div class="flex items-center justify-between mb-3">
-                                    <div class="flex items-center space-x-3">
-                                        <div>
-                                            <h5 class="font-medium" style="color: var(--text-primary);">Al Jazeera</h5>
-                                            <p class="text-xs" style="color: var(--text-secondary);">半岛电视台</p>
-                                        </div>
-                                    </div>
-                                    <div class="toggle-switch">
-                                        <input type="checkbox" id="alJazeeraEnabled" class="toggle-input" onchange="settingsManager.toggleAlJazeera()">
-                                        <div class="toggle-slider">
-                                            <div class="toggle-button"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="space-y-2">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">每次获取文章数量</label>
-                                        <input type="number" id="alJazeeraMaxArticles" min="1" max="20" value="5" class="w-full px-2 py-1 text-sm rounded border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);" oninput="settingsManager.updateWebScrapingMaxArticles(this)">
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <!-- Channel News Asia 设置 -->
-                            <div class="p-4 rounded-lg" style="background: var(--bg-secondary); border: 1px solid var(--border-color);">
-                                <div class="flex items-center justify-between mb-3">
-                                    <div class="flex items-center space-x-3">
-                                        <div>
-                                            <h5 class="font-medium" style="color: var(--text-primary);">Channel News Asia</h5>
-                                            <p class="text-xs" style="color: var(--text-secondary);">亚洲新闻台</p>
-                                        </div>
-                                    </div>
-                                    <div class="toggle-switch">
-                                        <input type="checkbox" id="channelNewsAsiaEnabled" class="toggle-input" onchange="settingsManager.toggleChannelNewsAsia()">
-                                        <div class="toggle-slider">
-                                            <div class="toggle-button"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="space-y-2">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">每次获取文章数量</label>
-                                        <input type="number" id="channelNewsAsiaMaxArticles" min="1" max="20" value="5" class="w-full px-2 py-1 text-sm rounded border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);" oninput="settingsManager.updateWebScrapingMaxArticles(this)">
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <!-- Taipei Times 设置 -->
-                            <div class="p-4 rounded-lg" style="background: var(--bg-secondary); border: 1px solid var(--border-color);">
-                                <div class="flex items-center justify-between mb-3">
-                                    <div class="flex items-center space-x-3">
-                                        <div>
-                                            <h5 class="font-medium" style="color: var(--text-primary);">Taipei Times</h5>
-                                            <p class="text-xs" style="color: var(--text-secondary);">台北时报</p>
-                                        </div>
-                                    </div>
-                                    <div class="toggle-switch">
-                                        <input type="checkbox" id="taipeiTimesEnabled" class="toggle-input" onchange="settingsManager.toggleTaipeiTimes()">
-                                        <div class="toggle-slider">
-                                            <div class="toggle-button"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="space-y-2">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">每次获取文章数量</label>
-                                        <input type="number" id="taipeiTimesMaxArticles" min="1" max="20" value="5" class="w-full px-2 py-1 text-sm rounded border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);" oninput="settingsManager.updateWebScrapingMaxArticles(this)">
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <!-- NHK World 设置 -->
-                            <div class="p-4 rounded-lg" style="background: var(--bg-secondary); border: 1px solid var(--border-color);">
-                                <div class="flex items-center justify-between mb-3">
-                                    <div class="flex items-center space-x-3">
-                                        <div>
-                                            <h5 class="font-medium" style="color: var(--text-primary);">NHK World</h5>
-                                            <p class="text-xs" style="color: var(--text-secondary);">日本放送协会国际频道</p>
-                                        </div>
-                                    </div>
-                                    <div class="toggle-switch">
-                                        <input type="checkbox" id="nhkWorldEnabled" class="toggle-input" onchange="settingsManager.toggleNhkWorld()">
-                                        <div class="toggle-slider">
-                                            <div class="toggle-button"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="space-y-2">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">每次获取文章数量</label>
-                                        <input type="number" id="nhkWorldMaxArticles" min="1" max="20" value="5" class="w-full px-2 py-1 text-sm rounded border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);" oninput="settingsManager.updateWebScrapingMaxArticles(this)">
-                                    </div>
-                                </div>
-                            </div>
-                            
-
-                            
-                            <div class="p-3 rounded-lg" style="background: var(--bg-primary); border: 1px solid var(--border-color);">
-                                <p class="text-xs" style="color: var(--text-secondary);">💡 <strong>提示：</strong>网页抓取功能可以直接从新闻网站获取最新文章，无需API Key。抓取的文章会自动翻译为中文并包含原始图片。</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- RSS源管理 -->
-                <div id="rssSourcesContent" class="source-content hidden">
-                    <div class="mb-6">
-                        <div class="flex items-center justify-between mb-4">
-                            <h4 class="text-lg font-semibold" style="color: var(--text-primary);">RSS 新闻源</h4>
-                            <button onclick="addRssSource()" class="btn-primary btn-sm">
-                                <i class="fas fa-plus mr-2"></i>添加源
-                            </button>
-                        </div>
-                        <div id="rssSourcesList" class="space-y-3">
-                            <!-- RSS源列表将在这里动态生成 -->
-                        </div>
+            <div class="p-6 overflow-y-auto space-y-5 flex-1">
+                <!-- 快速新增自定义信源 -->
+                <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
+                    <div class="text-xs font-bold uppercase text-slate-500">➕ 添加自定义国际信源 (RSS 或网站域名)</div>
+                    <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                        <input id="newSourceName" type="text" placeholder="媒体名称 (如 Politico)" class="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs">
+                        <input id="newSourceDomain" type="text" placeholder="域名 (如 politico.com)" class="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs">
+                        <input id="newSourceRss" type="text" placeholder="RSS URL (可留空自动走代理)" class="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs">
+                        <button onclick="app.addCustomSource()" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold">
+                            添加至信源矩阵
+                        </button>
                     </div>
                 </div>
 
-                <!-- AI模型管理 -->
-                <div id="aiModelContent" class="source-content hidden">
-                    <div class="space-y-6">
-                        <div class="mb-6">
-                            <h4 class="text-lg font-semibold mb-4" style="color: var(--text-primary);">大语言模型配置</h4>
-                            <p class="text-sm mb-6" style="color: var(--text-secondary);">配置您的AI模型API，用于新闻翻译、摘要生成和去重等功能</p>
-
-                            <!-- API Key 设置 -->
-                            <div class="mb-6">
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">API Key</label>
-                                <input type="password" id="aiApiKey" placeholder="输入您的 MiniMax API Key" class="w-full px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);">
-                                <p class="text-xs mt-1" style="color: var(--text-secondary);">请输入您的 MiniMax API Key</p>
-                            </div>
-
-                            <!-- Base URL 设置 -->
-                            <div class="mb-6">
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">API Base URL</label>
-                                <input type="text" id="aiBaseUrl" placeholder="https://api.minimaxi.com/v1" class="w-full px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);">
-                                <p class="text-xs mt-1" style="color: var(--text-secondary);">默认为 MiniMax 地址: https://api.minimaxi.com/v1 (中国用户)</p>
-                            </div>
-
-                            <!-- 模型名称设置 -->
-                            <div class="mb-6">
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">模型名称</label>
-                                <input type="text" id="aiModel" placeholder="MiniMax-M2.5" class="w-full px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);">
-                                <p class="text-xs mt-1" style="color: var(--text-secondary);">如：MiniMax-M2.5, MiniMax-M2.5-highspeed, abab6.5s-chat 等</p>
-                            </div>
-
-                            <!-- 预设模板 -->
-                            <div class="mb-6">
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">快速设置模板</label>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    <button onclick="applyAiTemplate('minimax')" class="p-3 rounded-lg border text-left hover:bg-opacity-50 transition-all" style="background: var(--bg-secondary); border-color: var(--border-color);">
-                                        <div class="font-medium" style="color: var(--text-primary);">MiniMax</div>
-                                        <div class="text-xs mt-1" style="color: var(--text-secondary);">Base URL: api.minimaxi.com</div>
-                                    </button>
-                                </div>
-                            </div>
-
-                            <!-- 速率限制设置 -->
-                            <div class="mb-6">
-                                <div class="flex items-center justify-between mb-3">
-                                    <h5 class="text-md font-medium" style="color: var(--text-primary);">速率限制</h5>
-                                </div>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">每分钟请求数 (RPM)</label>
-                                        <input type="number" id="aiRateLimitRpm" min="1" max="1000" value="30" class="w-full px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">最大突发请求数</label>
-                                        <input type="number" id="aiRateLimitBurst" min="1" max="50" value="5" class="w-full px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);">
-                                    </div>
-                                </div>
-                                <p class="text-xs mt-2" style="color: var(--text-secondary);">根据您的API套餐限制调整，避免触发速率限制错误</p>
-                            </div>
-
-
-
-                            <div class="p-4 rounded-lg" style="background: var(--bg-primary); border: 1px solid var(--border-color);">
-                                <p class="text-xs" style="color: var(--text-secondary);">
-                                    <i class="fas fa-info-circle mr-1" style="color: var(--accent-color);"></i>
-                                    <strong>提示：</strong>配置后点击"保存配置"即可生效。系统支持多个模型作为备用，当主模型不可用时会自动切换。
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 设置 -->
-                <div id="settingsContent" class="source-content hidden">
-                    <div class="space-y-6">
-
-                        
-                        <div class="mb-6">
-                            <div class="flex items-center justify-between mb-4">
-                                <h4 class="text-lg font-semibold" style="color: var(--text-primary);">启用定时更新</h4>
-                                <div class="toggle-switch">
-                                    <input type="checkbox" id="autoUpdateEnabled" class="toggle-input" onchange="settingsManager.toggleAutoUpdate()">
-                                    <div class="toggle-slider">
-                                        <div class="toggle-button"></div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="mb-4">
-                                <div class="text-xs" style="color: var(--text-secondary);">
-                                    下次更新时间: <span id="nextExecutionTime">未设置</span>
-                                </div>
-                            </div>
-                            <div class="space-y-4">
-                                
-                                <div>
-                                    <div class="flex items-center justify-end mb-3">
-                                        <button onclick="settingsManager.addUpdateTime()" class="btn-primary btn-sm">
-                                            <i class="fas fa-plus mr-1"></i>添加时间
-                                        </button>
-                                    </div>
-                                    <div id="updateTimesList" class="space-y-2">
-                                        <!-- 更新时间列表将在这里动态生成 -->
-                                    </div>
-                                    <p class="text-xs mt-2" style="color: var(--text-secondary);">可以添加多个时间点，系统将在每天的指定时间自动更新新闻</p>
-                                </div>
-                            </div>
-                        </div>
-                        
-
-                    </div>
-                </div>
-                
-                <!-- 内容过滤 -->
-                <div id="filterContent" class="source-content hidden">
-                    <div class="space-y-6">
-                        <div class="mb-6">
-                            <div class="flex items-center justify-between mb-4">
-                                <h4 class="text-lg font-semibold" style="color: var(--text-primary);">关键词屏蔽</h4>
-                                <div class="toggle-switch">
-                                    <input type="checkbox" id="keywordFilterEnabled" class="toggle-input" onchange="settingsManager.toggleKeywordFilter()">
-                                    <div class="toggle-slider">
-                                        <div class="toggle-button"></div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">屏蔽关键词</label>
-                                    <div class="flex space-x-2 mb-3">
-                                        <input type="text" id="newKeywordInput" placeholder="输入要屏蔽的关键词" class="flex-1 px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary);" onkeypress="if(event.key==='Enter') settingsManager.addKeyword()">
-                                        <button onclick="settingsManager.addKeyword()" class="btn-primary btn-sm">
-                                            <i class="fas fa-plus mr-1"></i>添加
-                                        </button>
-                                    </div>
-                                    <div id="keywordsList" class="space-y-2 max-h-60 overflow-y-auto">
-                                        <!-- 关键词列表将在这里动态生成 -->
-                                    </div>
-                                    <p class="text-xs mt-2" style="color: var(--text-secondary);">包含这些关键词的新闻将被自动过滤掉。关键词匹配不区分大小写，支持中英文。</p>
-                                </div>
-                                
-                                <div class="border-t pt-4" style="border-color: var(--border-color);">
-                                    <h5 class="text-md font-medium mb-3" style="color: var(--text-primary);">过滤规则</h5>
-                                    <div class="space-y-3">
-                                        <div class="flex items-center space-x-3">
-                                            <input type="checkbox" id="filterTitle" class="rounded" checked>
-                                            <label for="filterTitle" class="text-sm" style="color: var(--text-secondary);">过滤标题中的关键词</label>
-                                        </div>
-                                        <div class="flex items-center space-x-3">
-                                            <input type="checkbox" id="filterContent" class="rounded" checked>
-                                            <label for="filterContent" class="text-sm" style="color: var(--text-secondary);">过滤内容中的关键词</label>
-                                        </div>
-                                        <div class="flex items-center space-x-3">
-                                            <input type="checkbox" id="filterSource" class="rounded">
-                                            <label for="filterSource" class="text-sm" style="color: var(--text-secondary);">过滤来源中的关键词</label>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                <!-- 信源列表容器 -->
+                <div id="sourceMatrixList" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <!-- 由 main.js 渲染 -->
                 </div>
             </div>
-            
-            <div class="flex items-center justify-end mt-6 pt-6" style="border-top: 1px solid var(--border-color);">
-                <div class="flex items-center space-x-3">
-                    <button onclick="resetSources()" class="btn-secondary flex items-center space-x-2">
-                        <i class="fas fa-undo"></i>
-                        <span>重置</span>
-                    </button>
-                    <button onclick="saveSources()" class="btn-primary flex items-center space-x-2">
-                        <i class="fas fa-save"></i>
-                        <span>保存配置</span>
-                    </button>
+
+            <div class="px-6 py-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900/50">
+                <div class="flex items-center gap-2">
+                    <button onclick="app.toggleAllSources(true)" class="text-xs text-blue-600 hover:underline">全选启用</button>
+                    <span class="text-slate-300">|</span>
+                    <button onclick="app.toggleAllSources(false)" class="text-xs text-slate-500 hover:underline">全部取消</button>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="app.closeSourceMatrixModal()" class="px-4 py-1.5 rounded-lg text-xs font-medium bg-slate-200 dark:bg-slate-800">取消</button>
+                    <button onclick="app.saveSourceMatrix()" class="px-5 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white">保存信源配置</button>
                 </div>
             </div>
         </div>
     </div>
 
+    <!-- ==================== MODAL 3: 系统与 AI 配置弹窗 ==================== -->
+    <div id="settingsModal" class="fixed inset-0 z-50 hidden bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-2xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <h3 class="text-lg font-bold">⚙️ Agent 引擎与系统配置</h3>
+                <button onclick="app.closeSettingsModal()" class="p-2 rounded-lg text-slate-400 hover:text-slate-600">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+            <div class="p-6 overflow-y-auto space-y-5 text-xs sm:text-sm">
+                <!-- AI 模型设置 -->
+                <div class="space-y-3">
+                    <h4 class="font-bold text-blue-600 dark:text-blue-400">1. 大语言模型配置 (MiniMax / OpenAI 兼容接口)</h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs text-slate-500 mb-1">API Base URL</label>
+                            <input id="cfgAiBaseUrl" type="text" class="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-500 mb-1">模型名称 (Model)</label>
+                            <input id="cfgAiModel" type="text" class="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs text-slate-500 mb-1">API Key (留空或保持 *** 则不修改原密钥)</label>
+                            <input id="cfgAiApiKey" type="password" placeholder="sk-..." class="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        </div>
+                    </div>
+                </div>
 
+                <!-- Agent 采集与深读参数 -->
+                <div class="space-y-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                    <h4 class="font-bold text-blue-600 dark:text-blue-400">2. Agent 巡检与全文深读参数</h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                            <label class="block text-xs text-slate-500 mb-1">首页精选条数</label>
+                            <input id="cfgMaxCurated" type="number" min="10" max="60" value="30" class="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-500 mb-1">Jina 全文深读篇数</label>
+                            <input id="cfgDeepReadCount" type="number" min="0" max="25" value="8" class="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-500 mb-1">时效窗口 (小时)</label>
+                            <input id="cfgFreshnessHours" type="number" min="12" max="168" value="48" class="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        </div>
+                    </div>
+                </div>
 
+                <!-- 定时任务与 Kindle 收件箱 -->
+                <div class="space-y-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                    <h4 class="font-bold text-blue-600 dark:text-blue-400">3. 定时自动巡检与 Kindle 邮件推送</h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs text-slate-500 mb-1">每日自动巡检时间 (逗号分隔，如 06:00,16:30)</label>
+                            <input id="cfgUpdateTimes" type="text" placeholder="06:00,16:30" class="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-500 mb-1">默认 Kindle / 接收邮箱</label>
+                            <input id="cfgRecipientEmail" type="email" placeholder="your_kindle@kindle.com" class="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="px-6 py-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2 bg-slate-50 dark:bg-slate-900/50">
+                <button onclick="app.closeSettingsModal()" class="px-4 py-1.5 rounded-lg text-xs font-medium bg-slate-200 dark:bg-slate-800">取消</button>
+                <button onclick="app.saveSettings()" class="px-5 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white">保存并生效</button>
+            </div>
+        </div>
+    </div>
 
+    <!-- 全局 Toast 通知容器 -->
+    <div id="toastContainer" class="fixed bottom-5 right-5 z-50 space-y-2 max-w-sm"></div>
 
+    <!-- 注入服务端初始状态 -->
     <script>
-        // 将服务器端的lastUpdated时间传递给前端
-        window.globalLastUpdated = '<%= lastUpdated %>';
+        window.__INITIAL_STATE__ = {
+            news: <%- JSON.stringify(news || []) %>,
+            totalNews: <%= totalNews || 0 %>,
+            displayedNews: <%= displayedNews || 0 %>,
+            lastUpdated: <%- JSON.stringify(lastUpdated || null) %>,
+            summaryArticle: <%- JSON.stringify(summaryArticle || null) %>,
+            podcastInfo: <%- JSON.stringify(podcastInfo || null) %>,
+            sourceMatrix: <%- JSON.stringify(sourceMatrix || []) %>
+        };
     </script>
-    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
-    <script src="/js/settings_manager.js?v=<%= appVersion %>"></script>
-    <script src="/js/main.js?v=<%= appVersion %>"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/main.js"></script>
 </body>
 </html>

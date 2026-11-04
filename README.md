@@ -1,535 +1,105 @@
 <div align="center">
-  <img src="public/images/logo.png" alt="CoreFeed Logo" width="150" style="border-radius: 20px;" />
-  <h1>聚核 (CoreFeed) 新闻聚合器 📰🤖</h1>
-  <p>一个基于Node.js的现代化智能新闻聚合网站，集成AI翻译、智能摘要、音频生成和分页加载功能。</p>
+  <img src="public/images/logo.png" alt="CoreFeed Logo" width="130" style="border-radius: 20px;" />
+  <h1>聚核 (CoreFeed v2.0) · 全球知名信源 Agent 情报中心 📰🤖</h1>
+  <p>基于多 Agent 协作架构（Scout + Curator + Deep-Reader + Chief Editor）构建的全球权威新闻搜集、全文深读、交叉验证与多端分发平台。</p>
 </div>
-![项目状态](https://img.shields.io/badge/状态-稳定版本-brightgreen)
-![Node.js版本](https://img.shields.io/badge/Node.js-18%2B-brightgreen)
+
+![版本](https://img.shields.io/badge/版本-v2.0.0-blue)
+![架构](https://img.shields.io/badge/Engine-Multi--Agent-indigo)
+![Node.js](https://img.shields.io/badge/Node.js-18%2B-brightgreen)
 ![许可证](https://img.shields.io/badge/许可证-MIT-blue)
-![版本](https://img.shields.io/badge/版本-v1.3.0-blue)
 
-## 功能特点 ✨
-
-### 核心功能
-- 🌍 **多源新闻聚合**: 从NewsAPI、Gnews、RSS等多个源获取新闻
-- 🔗 **第三方API集成**: 提供聚合数据接口，支持跨域调用
-- 🤖 **AI智能翻译**: 使用MiniMax等大语言模型自动翻译新闻内容
-- 📝 **智能总结**: 使用大语言模型生成简洁的中文摘要
-- 🧠 **AI智能去重**: 使用AI技术识别和去除重复新闻
-- 🌐 **地区识别**: 智能识别新闻所属地区（支持AI分析与规则匹配）
-- ⏰ **灵活定时更新**: 支持多时间点自动更新新闻
-- 📄 **分页加载**: 智能分页显示，支持"加载更多"功能
-- 🎧 **AI音频生成**: 使用自建 OpenAI-Edge-TTS 服务将新闻转换为音频
-- 📚 **EPUB电子书**: 自动生成新闻摘要的电子书
-- 📧 **邮件发送**: 支持将新闻摘要通过邮件发送到Kindle
-
-### 用户体验
-- 📱 **响应式设计**: 完美适配桌面、平板和移动设备
-- 🎨 **现代化UI**: 玻璃拟态效果和渐变背景设计
-- ⚡ **实时进度**: WebSocket实时显示处理进度
-- 🌙 **深色模式**: 支持明暗主题切换
-- 🎧 **音频播放器**: 内置完整的音频播放控制
-- 🔄 **智能加载**: 按需加载更多新闻，优化页面性能
-- ⚙️ **可视化配置**: 内置设置面板，支持实时配置管理
-
-## 技术栈 🛠️
-
-### 后端技术
-- **运行环境**: Node.js 18+
-- **Web框架**: Express.js 4.18+
-- **实时通信**: Socket.IO 4.8+
-- **定时任务**: node-cron 3.0+
-- **进程管理**: PM2 5.3+
-- **容器化**: Docker + Docker Compose
-
-### 前端技术
-- **模板引擎**: EJS 3.1+
-- **CSS框架**: Tailwind CSS 3.0+ + 自定义CSS
-- **图标库**: Font Awesome 6.0+
-- **JavaScript**: 原生ES6+
-
-### 外部API服务
-- **新闻数据**: [NewsAPI](https://newsapi.org/) + [Gnews](https://gnews.io/) + RSS源
-- **AI服务**: [MiniMax开放平台](https://platform.minimaxi.com/) (用于翻译、摘要、去重等)
-- **语音合成**: 自建 [OpenAI-Edge-TTS](https://github.com/travisvn/openai-edge-tts) 服务（可配置端点）
-
-## 快速开始 🚀
-
-### 系统要求
-- Node.js 18.0 或更高版本
-- npm 8.0 或更高版本
-- 稳定的网络连接
-
-### 1. 安装依赖
-
-```bash
-npm install
-```
-
-### 2. 配置环境变量
-
-复制环境变量模板并填入你的API密钥：
-
-```bash
-cp .env.example .env
-```
-
-编辑 `.env` 文件：
-
-```env
-# 服务器配置
-PORT=3120
-
-# NewsAPI配置
-NEWS_API_KEY=你的NewsAPI密钥
-NEWS_API_ENABLED=true
-# 每次从News API获取的文章数量
-NEWS_API_MAX_ARTICLES=20
-
-# Gnews API配置
-GNEWS_API_KEY=你的Gnews密钥
-GNEWS_ENABLED=false
-GNEWS_MAX_ARTICLES=10
-
-# MiniMax AI配置
-# 注意：中国用户使用 api.minimaxi.com，国际用户使用 api.minimax.io
-AI_BASE_URL=https://api.minimaxi.com/v1
-AI_API_KEY=your_minimax_api_key_here
-AI_MODEL=MiniMax-M2.5
-
-# TTS（OpenAI-Edge-TTS）配置
-# 自建TTS服务地址
-TTS_BASE_URL=http://10.10.10.80:5050/v1/audio/speech
-# 模型（默认）
-TTS_MODEL=tts-1
-# 输出格式
-TTS_FORMAT=mp3
-# 主持人音色
-TTS_HOST_VOICE=zh-CN-XiaoxiaoNeural
-# 嘉宾音色
-TTS_GUEST_VOICE=zh-CN-YunyangNeural
-# 如服务需要鉴权，这里设置Bearer Token（可留空）
-TTS_API_KEY=
-
-# RSS新闻源（支持两种格式）
-# 格式1：简单URL格式（逗号分隔）
-# RSS_SOURCES=https://timesofindia.indiatimes.com/rssfeeds/296589292.cms,https://feeds.bbci.co.uk/news/world/rss.xml
-# 格式2：自定义名称格式（名称|URL，逗号分隔）
-RSS_SOURCES=印度时报|https://timesofindia.indiatimes.com/rssfeeds/296589292.cms,BBC世界新闻|https://feeds.bbci.co.uk/news/world/rss.xml
-
-# 默认每个新闻源获取的文章数量
-MAX_ARTICLES_PER_SOURCE=5
-
-# 为每个新闻源单独设置获取数量（可选）
-# 格式：源名称:数量,源名称:数量
-# 对于NewsAPI源，使用源ID（如bbc-news,cnn等）
-# 对于RSS源，使用自定义名称（如印度时报,BBC世界新闻等）
-# 示例：
-# SOURCE_ARTICLE_COUNTS=bbc-news:10,cnn:8,印度时报:12,BBC世界新闻:15
-SOURCE_ARTICLE_COUNTS=
-
-# SMTP邮件配置
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_app_password_here
-SMTP_FROM_NAME=聚核 (CoreFeed)
-SMTP_FROM_EMAIL=your_email@gmail.com
-
-# 默认收件人邮箱（用于摘要报告）
-DEFAULT_RECIPIENT_EMAIL=recipient@example.com
-
-# 新闻更新定时配置
-# 是否启用自动更新
-AUTO_UPDATE_ENABLED=true
-# 更新频率（daily, weekly等）
-UPDATE_FREQUENCY=daily
-# 新闻更新间隔（cron格式）
-NEWS_UPDATE_INTERVAL=0 */2 * * *
-# 更新时间列表（逗号分隔，如：08:00,20:00）
-UPDATE_TIMES=08:00
-# 禁用的新闻源（逗号分隔）
-DISABLED_SOURCES=
-
-# 网络配置
-# 网络请求超时时间（毫秒）
-NETWORK_TIMEOUT=30000
-# 网络请求重试次数
-NETWORK_RETRIES=5
-# 重试间隔时间（毫秒）
-NETWORK_RETRY_DELAY=2000
-# 保持连接活跃
-NETWORK_KEEP_ALIVE=true
-# 最大并发连接数
-NETWORK_MAX_SOCKETS=50
-
-# Socket.IO配置
-# Socket.IO ping超时时间（毫秒）
-SOCKETIO_PING_TIMEOUT=60000
-# Socket.IO ping间隔时间（毫秒）
-SOCKETIO_PING_INTERVAL=25000
-# Socket.IO连接超时时间（毫秒）
-SOCKETIO_CONNECT_TIMEOUT=45000
-# Socket.IO最大缓冲区大小（字节）
-SOCKETIO_MAX_BUFFER_SIZE=1000000
-```
-
-### 3. 获取API密钥 🔑
-
-#### NewsAPI（必需）
-1. 访问 [NewsAPI官网](https://newsapi.org/)
-2. 注册免费账户获取API密钥
-3. 免费版每天1000次请求
-4. 配置 `NEWS_API_KEY` 和 `NEWS_API_MAX_ARTICLES`
-
-#### Gnews（可选）
-1. 访问 [Gnews官网](https://gnews.io/)
-2. 注册免费账户获取API密钥
-3. 免费版每天100次请求
-4. 设置 `GNEWS_ENABLED=true` 启用
-
-#### MiniMax AI (必需)
-1. 访问 [MiniMax官网开放平台](https://platform.minimaxi.com/)
-2. 注册账号并登录
-3. 在[API Keys页面](https://platform.minimaxi.com/user-center/basic-information/api-key)创建一个新的Key
-4. 将获取的Key配置到 `.env` 文件的 `AI_API_KEY`中
-5. 检查并确保对应的 `AI_MODEL` 正确（如 `MiniMax-M2.5`）
-
-
-
-#### RSS新闻源配置
-- 支持两种格式：
-  - 简单URL格式：`https://example.com/rss.xml,https://example2.com/feed.xml`
-  - 自定义名称格式：`新闻源1|https://example.com/rss.xml,新闻源2|https://example2.com/feed.xml`
-- 可通过 `SOURCE_ARTICLE_COUNTS` 为每个源单独设置获取数量
-
-#### 网页抓取配置（用于没有RSS源的网站）
-- `WEB_SCRAPING_ENABLED`: 是否启用网页抓取功能（默认false）
-- `WEB_SCRAPING_SOURCES`: 网页抓取源配置
-  - 简单URL格式：`https://apnews.com/world-news,https://www.bbc.com/news`
-  - 自定义名称格式：`AP News|https://apnews.com/world-news,BBC News|https://www.bbc.com/news`
-- `WEB_SCRAPING_MAX_ARTICLES`: 每个源的最大文章数量（默认10）
-- `WEB_SCRAPING_TIMEOUT`: 请求超时时间（默认30秒）
-- `WEB_SCRAPING_DELAY`: 请求间隔时间（默认1秒，避免被反爬虫）
-- `WEB_SCRAPING_USER_AGENT`: 浏览器用户代理字符串
-- 支持的网站：AP News、BBC、NHK World、Channel News Asia 等主流新闻网站
-- 自动提取文章标题、内容、发布时间和图片
-
-#### 网络和性能配置
-- `NETWORK_TIMEOUT`: 网络请求超时时间（默认30秒）
-- `NETWORK_RETRIES`: 失败重试次数（默认5次）
-- `NETWORK_MAX_SOCKETS`: 最大并发连接数（默认50）
-- Socket.IO相关配置用于实时通信优化
-
-### 4. 运行项目
-
-```bash
-# 开发模式
-npm run dev
-
-# 生产模式
-npm start
-
-# 使用Docker（推荐生产环境）
-npm run compose:up
-```
-
-访问 `http://localhost:3120` 查看应用。
-
-## 项目结构 📁
-
-```
-news-aggregator/
-├── server.js              # 主服务器文件
-├── package.json           # 项目配置和依赖
-├── .env.example          # 环境变量模板
-├── .gitignore            # Git忽略文件
-├── README.md             # 项目说明
-
-├── docker-compose.yml    # Docker Compose配置
-├── Dockerfile            # Docker镜像配置
-├── config/               # 配置文件
-│   └── index.js          # 应用配置管理
-├── data/                 # 数据存储目录
-│   ├── epub/             # EPUB文件目录
-│   ├── podcast/          # 音频文件目录
-│   ├── news.json         # 新闻数据缓存
-│   └── summary.json      # 摘要数据缓存
-├── routes/               # API路由
-│   └── api.js            # RESTful API定义
-├── services/             # 业务服务
-│   ├── newsService.js    # 新闻获取服务
-│   ├── aiService.js      # AI翻译和摘要服务
-│   └── audioService.js   # 音频生成服务
-├── utils/                # 工具函数
-│   ├── helpers.js        # 通用辅助函数
-│   ├── logger.js         # 日志工具
-│   ├── healthCheck.js    # 健康检查
-│   ├── networkConfig.js  # 网络配置
-│   ├── scheduleManager.js # 定时任务管理
-│   └── performanceOptimizer.js # 性能优化
-├── views/                # EJS模板
-│   └── index.ejs         # 主页模板
-├── public/               # 静态资源
-│   ├── css/
-│   │   └── style.css     # 自定义样式
-│   └── js/
-│       ├── main.js       # 前端JavaScript
-│       └── settings-manager.js # 设置管理
-├── logs/                 # 日志目录
-└── backups/              # 备份目录
-```
-
-## API接口 📡
-
-### 新闻相关
-```http
-GET /api/news              # 获取新闻数据（前30条）
-GET /api/news/more         # 获取更多新闻数据
-POST /api/refresh          # 手动刷新新闻
-```
-
-### AI功能
-```http
-POST /api/generate-summary # 生成AI摘要文章
-POST /api/generate-podcast # 生成音频对话
-```
-
-### 文件生成
-```http
-POST /api/generate-epub    # 生成EPUB电子书
-POST /api/send-email       # 发送邮件到Kindle
-```
-
-### 配置管理
-```http
-GET /api/config            # 获取当前配置
-POST /api/config           # 更新配置
-GET /api/schedule/config   # 获取定时任务配置
-POST /api/schedule/config  # 更新定时任务配置
-```
-
-### 系统监控
-```http
-GET /api/health            # 基础健康检查
-GET /api/health/detailed   # 详细健康检查
-```
-
-### 聚合数据接口 (第三方集成)
-```http
-GET /api/latest-data       # 获取完整的新闻、摘要和音频信息
-```
-
-## 语音合成（TTS）
-
-本项目已切换为使用自建 OpenAI-Edge-TTS 服务进行语音合成，替代原 Google TTS。你可以在 .env 中配置服务端点与默认音色。
-
-- 服务端点：通过 TTS_BASE_URL 配置，例如：
-  - http://10.10.10.80:5050/v1/audio/speech
-- 默认音色：
-  - 主持人（A/张明）：TTS_HOST_VOICE（默认 zh-CN-XiaoxiaoNeural）
-  - 嘉宾（B/李华）：TTS_GUEST_VOICE（默认 zh-CN-YunyangNeural）
-- 可选鉴权：
-  - 如你的自建服务启用了鉴权，可设置 TTS_API_KEY，它将以 Authorization: Bearer xxx 发送
-
-运行机制
-- 服务位置：services/audioService.js
-- 实现方式：使用 axios 调用 TTS_BASE_URL，传参包含 model、voice、input、response_format，返回音频二进制并保存为 .mp3
-- 片段合并：优先使用 ffmpeg（可通过 USE_FFMPEG/FFMPEG_PATH 配置），失败则回退到简单拼接
-
-快速验证
-1) 配置 .env 中的 TTS_* 变量
-2) 启动服务后调用：
-   - POST /api/generate-podcast（或执行新闻刷新流程触发自动生成）
-   - 可选：POST /api/generate-podcast?demo=1（仅测TTS，绕过AI脚本生成）
-3) 在 data/podcast 下查看生成的 segment_*.mp3 及 podcast_complete.mp3
-4) GET /api/status 中的 ttsConfigured 应为 true
-
-常见问题
-- 404/连接失败：检查 TTS_BASE_URL 是否可达，端口与路径是否正确
-- 鉴权失败：服务若启用鉴权，请设置 TTS_API_KEY
-- 声音不符合预期：调整 TTS_HOST_VOICE / TTS_GUEST_VOICE
-- 合并失败：检查是否安装 ffmpeg，或设置 USE_FFMPEG=false 使用回退合并
-
-## 部署 🚀
-
-### Docker部署
-
-```bash
-# 构建镜像
-npm run docker:build
-
-# 运行容器
-npm run docker:run
-
-# 使用Docker Compose
-npm run compose:up
-```
-
-### Docker部署（推荐生产环境）
-
-```bash
-# 使用Docker Compose启动服务
-npm run compose:up
-
-# 停止服务
-npm run compose:down
-
-# 查看日志
-npm run compose:logs
-```
-
-## 常用命令 📋
-
-### 开发和调试
-```bash
-# 开发模式（自动重启）
-npm run dev
-
-# 生产模式
-npm run prod
-
-# 健康检查
-npm run health
-```
-
-### PM2进程管理
-```bash
-# 启动服务
-npm run pm2:start
-
-# 重启服务
-npm run pm2:restart
-
-# 停止服务
-npm run pm2:stop
-
-# 查看日志
-npm run pm2:logs
-
-# 监控面板
-npm run pm2:monit
-```
-
-### Docker容器管理
-```bash
-# 构建镜像
-npm run docker:build
-
-# 运行容器
-npm run docker:run
-
-# 停止容器
-npm run docker:stop
-
-# 查看日志
-npm run docker:logs
-```
-
-### Docker部署
-```bash
-# 构建镜像
-npm run docker:build
-
-# 运行容器
-npm run docker:run
-
-# 停止容器
-npm run docker:stop
-
-# 查看日志
-npm run docker:logs
-```
-
-### Docker Compose
-```bash
-# 启动服务
-npm run compose:up
-
-# 停止服务
-npm run compose:down
-
-# 查看日志
-npm run compose:logs
-```
-
-### 维护工具
-```bash
-# 创建备份
-npm run backup
-
-# 清理重装
-npm run clean
-
-# 自动更新
-npm run update
-
-# 强制更新
-npm run update:force
-```
-
-## 功能特色 🌟
-
-### 智能新闻处理
-- **多源聚合**: 支持NewsAPI、Gnews、RSS等多种新闻源
-- **AI去重**: 使用大模型智能识别和去除重复新闻
-- **智能翻译**: 自动翻译外文新闻为中文
-- **地区识别**: 自动识别新闻所属地区和分类
-
-### 高级功能
-- **分页加载**: 首页显示30条新闻，支持"加载更多"功能
-- **实时配置**: 可视化配置界面，支持实时修改设置
-- **定时任务**: 支持多时间点自动更新新闻
-- **音频生成**: AI生成新闻对话音频
-- **电子书**: 自动生成EPUB格式的新闻摘要
-
-### 性能优化
-- **缓存机制**: 本地缓存新闻数据，提高访问速度
-- **异步处理**: 后台异步处理AI任务，不阻塞用户操作
-- **错误恢复**: 完善的错误处理和重试机制
-- **健康监控**: 内置健康检查和性能监控
-
-## 许可证 📄
-
-MIT License - 详见 [LICENSE](LICENSE) 文件
-
-## 作者 👨‍💻
-
-Alan Sun
-
-## 贡献 🤝
-
-欢迎提交Issue和Pull Request！
-
-## 更新日志 📝
-
-### v1.3.0 (Current)
-- 🚀 **第三方API集成**: 新增 `/api/latest-data` 聚合接口，支持一站式获取所有数据
-- 🌐 **CORS支持**: 启用跨域资源共享，允许外部程序直接调用API
-- 💾 **持久化配置**: 在Docker环境中引入 `data/settings.json`，解决重启后配置丢失问题
-- 🗺️ **地区识别增强**: 结合AI分析与规则匹配，显著提高新闻地区分类准确性
-
-### v1.2.0 (2025-01-25)
-- ✨ 新增"加载更多新闻"功能
-- 🧠 集成AI智能去重功能
-- ⚙️ 添加可视化配置管理界面
-- 📄 优化新闻分页显示逻辑
-- 🔧 完善定时任务配置
-- 🐛 修复多项已知问题
-
-### v1.1.0
-- 🌍 添加Gnews API支持
-- 📡 增强RSS源处理
-- 🎧 改进音频生成功能
-- 📚 优化EPUB生成
-
-### v1.0.0
-- 🎉 首次发布
-- 🌍 基础新闻聚合功能
-- 🤖 AI翻译和摘要
-- 🎧 音频生成功能
+## 核心升级亮点 (v2.0) ✨
+
+### 1. 🕵️‍♂️ 四阶段多 Agent 协同引擎 (`services/news_agent_service.js`)
+- **Scout Agent (全球信源巡检员)**: 并发巡检内置的 **26+ 全球知名权威信源矩阵**（涵盖路透社 Reuters、美联社 AP、BBC World、纽约时报 NYT、彭博社 Bloomberg、华尔街日报 WSJ、金融时报 FT、英国卫报 Guardian、德国明镜周刊、半岛电视台 Al Jazeera、南华早报 SCMP、新加坡亚洲新闻台 CNA、NHK World、日经亚洲 Nikkei、韩联社 Yonhap、TechCrunch 等）。
+  - **三级自适应防屏蔽降级**: 官方 RSS 优先 → **Google News 站点定向代理 (`site:domain`)** 自动突破 Cloudflare/SPA 反爬 → **Jina Reader (`r.jina.ai`)** 网页解析。
+- **Curator Agent (聚类甄选总编)**: 对多源采集的新闻执行跨媒体事件聚类，将同一事件来自不同名媒的报道合并为 **多信源交叉印证卡片 (`relatedSources`)**，并根据媒体权威度、时效性与交叉热度精选 Top 30。
+- **Deep-Reader & Compiler Agent (全文深读与编译员)**: 调用 `r.jina.ai` 与本地 Cheerio Readability 正文抽取器对重点报道进行全文穿透深读，再通过单次结构化 JSON 批处理完成中文标题编译、百字客观摘要、地域与领域分类、核心要点提取（相比旧版逐条请求节省 85% API 调用）。
+- **Chief Editor & Investigator Agent (主编与专题调查员)**:
+  - 自动统筹当日全球新闻撰写《全球要闻深度综述》（带可点击的信源原文引用链接）。
+  - **按需专题调查 (`/api/agent/research`)**: 输入任意国际热点或行业主题，Agent 自动规划中英文检索词、跨源检索全球名媒、深读原文并生成《多信源观点对比报告》。
+  - **单篇外媒即时精读 (`/api/agent/deep-read`)**: 在前端点击任意卡片的「Agent 全文深读」，即时抓取外媒全文并输出结构化中文精译与背景解读。
+
+### 2. 📡 完整保留并强化下游分发链路
+- **第三方聚合接口 (`GET /api/latest-data`)**: 一站式返回精选新闻（含跨信源印证列表）、深度综述 HTML 与播客音频信息。
+- **AI 双主播播客工作台 (`services/audio_service.js` + `services/ftp_service.js`)**: 自动编写 `[A]` / `[B]` 双人对话脚本，调用 OpenAI-Edge-TTS 合成并合并 MP3，自动上传至 FTP 服务器。
+- **EPUB 电子书与 Kindle 邮件推送 (`services/epub_email_service.js`)**: 自动将今日综述与情报卡片打包为自适应排版的 EPUB 电子书并推送至 Kindle。
 
 ---
 
-**注意**: 请确保在使用前正确配置所有API密钥，并遵守各API服务的使用条款。
+## 项目结构 📁
+
+```text
+news_aggregator/
+├── server.js                      # Express + Socket.IO 主服务入口
+├── config/
+│   ├── index.js                   # 动态配置管理 (支持 .env 与 data/settings.json 热更新)
+│   └── global_sources.js          # 全球知名信源矩阵定义与权威度权重
+├── services/
+│   ├── news_agent_service.js      # 多 Agent 协同中枢 (巡检 / 专题调查 / 单篇深读)
+│   ├── agent_tools.js             # Agent 工具集 (RSS / GoogleNews代理 / Jina全文提取 / 全网检索)
+│   ├── ai_service.js              # LLM 推理、结构化批量编译、事件聚类与 Tool-Use 循环
+│   ├── news_service.js            # 基础新闻源兼容层与本地持久化
+│   ├── audio_service.js           # OpenAI-Edge-TTS 语音合成与 FFmpeg 合并
+│   ├── ftp_service.js             # 播客音频 FTP 自动上传服务
+│   ├── epub_email_service.js      # EPUB 电子书生成与 Kindle/SMTP 邮件发送
+│   └── state_manager.js           # 集中式状态管理与事件广播
+├── routes/
+│   └── api.js                     # RESTful API 路由 (含 Agent 接口与兼容接口)
+├── utils/
+│   ├── schedule_manager.js        # Cron 多时间点自动巡检调度器
+│   ├── rate_limiter.js            # 令牌桶 API 速率限制器
+│   ├── logger.js                  # 彩色结构化日志与指标统计
+│   └── helpers.js                 # 通用工具与内存缓存
+├── views/
+│   └── index.ejs                  # 聚核 v2.0 响应式控制台视图
+└── public/
+    ├── css/style.css              # Glassmorphism 与深浅色主题样式
+    └── js/main.js                 # 前端交互、实时遥测与弹窗管理
+```
+
+---
+
+## 核心 API 接口 📡
+
+### Agent 专属接口
+```http
+POST /api/agent/patrol             # 触发多 Agent 全球知名信源巡检与编译整合
+POST /api/agent/research           # 派遣 Agent 按主题搜集全球外媒并生成对比报告
+GET  /api/agent/research/latest    # 获取最近一次专题调查报告
+POST /api/agent/deep-read          # 对指定外媒 URL 执行 Jina 全文深读与中文解读
+GET  /api/agent/status             # 获取 Agent 实时状态、日志与信源统计
+GET  /api/sources/matrix           # 获取全球知名信源矩阵列表
+POST /api/sources/matrix           # 更新信源启用状态、条数限制或新增自定义信源
+```
+
+### 标准与第三方集成接口
+```http
+GET  /api/latest-data              # 第三方一站式获取最新新闻、综述与播客数据
+GET  /api/news                     # 获取当前新闻列表（支持 region / category / q 过滤）
+GET  /api/news/more?offset=30      # 分页加载更多已编译新闻
+POST /api/refresh                  # 手动刷新（调用多 Agent 巡检流水线）
+POST /api/generate-summary         # 重新生成《全球要闻深度综述》
+POST /api/generate-podcast         # 生成 AI 双主播播客并上传 FTP
+POST /api/generate-epub            # 生成 EPUB 电子书
+POST /api/send-email               # 发送 EPUB 简报至 Kindle 邮箱
+GET  /api/health                   # 健康检查
+```
+
+---
+
+## 快速启动 🚀
+
+```bash
+# 1. 安装依赖
+npm install
+
+# 2. 启动服务 (默认端口 3120)
+npm start
+
+# 或开发模式启动
+npm run dev
+```
+
+访问 `http://localhost:3120` 即可打开 **聚核 CoreFeed v2.0 · 全球知名信源 Agent 情报中心**。

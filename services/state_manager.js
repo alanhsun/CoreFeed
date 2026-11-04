@@ -16,6 +16,7 @@ class StateManager extends EventEmitter {
             summaryArticle: null,
             podcastScript: null,
             podcastInfo: null,
+            sourceStats: [],
             lastUpdated: null,
             isUpdating: false,
             updateProgress: {
@@ -212,33 +213,28 @@ class StateManager extends EventEmitter {
      */
     async saveToFile(filePath = null) {
         try {
-            // 检查是否有有效数据需要保存
             const hasValidData = this.state.newsData && this.state.newsData.length > 0;
-            const hasRecentUpdate = this.state.lastUpdated && 
-                (Date.now() - new Date(this.state.lastUpdated).getTime()) < (10 * 60 * 1000); // 10分钟内
-            
-            if (!hasValidData || !hasRecentUpdate) {
-                logger.debug('STATE', '跳过状态保存，数据无效或过期');
+            if (!hasValidData) {
                 return;
             }
             
             const saveData = {
                 ...this.state,
+                isUpdating: false,
                 savedAt: new Date().toISOString(),
-                version: '1.0'
+                version: '2.0'
             };
             
             const targetPath = filePath || config.storage.stateFile || 'data/state.json';
             await writeJsonFile(targetPath, saveData);
             
-            logger.info('STATE', '状态保存成功', { 
+            logger.debug('STATE', '状态保存成功', { 
                 path: targetPath,
                 newsCount: this.state.newsData?.length || 0,
                 lastUpdated: this.state.lastUpdated
             });
         } catch (error) {
             logger.error('STATE', '状态保存失败', error.message);
-            throw error;
         }
     }
 

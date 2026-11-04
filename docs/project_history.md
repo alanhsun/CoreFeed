@@ -1,69 +1,17 @@
-# Project History & Context
+# Project History & Architecture Evolution
 
-This file serves as an AI-readable history and context reference for the News Aggregator project. It tracks architectural decisions, major features, and the evolution of the codebase to facilitate future maintenance and updates.
+## v2.0.0 — Multi-Agent Global News Intelligence Engine (Current)
+- **Multi-Agent Architecture (`services/news_agent_service.js`)**:
+  - Replaced legacy passive scrapers with a 4-stage collaborative Agent workflow:
+    1. **Scout Agent**: High-concurrency patrol across 30+ global authoritative sources (`config/global_sources.js`) with automatic 3-tier fallback (Official RSS → Google News domain proxy `site:domain` to bypass Cloudflare → Jina Reader markdown scraping).
+    2. **Curator Agent**: Cross-source event clustering that merges duplicate coverage across outlets into `relatedSources` cross-verification badges and ranks events by source authority, freshness, and multi-outlet heat.
+    3. **Deep-Reader & Compiler Agent**: Uses Jina Reader (`r.jina.ai`) and local Cheerio Readability (`services/agent_tools.js`) to extract full article text for top breaking stories, followed by single-pass structured JSON batch compilation (`services/ai_service.js`), reducing LLM API requests by ~85%.
+    4. **Chief Editor & Investigator Agent**: Generates structured Global Executive Briefings (`summaryArticle`), dual-host podcast scripts, on-demand Topic Research reports (`POST /api/agent/research`), and single-article full-text deep-reads (`POST /api/agent/deep-read`).
+- **Codebase Cleanup & Modernization**:
+  - Removed fragile site-specific Cheerio scrapers (`services/scrapers/*`, `services/web_scraping_service.js`, `public/js/settings_manager.js`).
+  - Extracted EPUB generation and Kindle SMTP delivery into `services/epub_email_service.js`.
+  - Rebuilt Web UI (`views/index.ejs`, `public/js/main.js`, `public/css/style.css`) with live Agent pipeline telemetry, on-demand topic investigation, and visual Source Matrix management.
 
-## 1. Project Overview
-- **Name**: CoreFeed (聚核)
-- **Current Version**: v1.3.0
-- **Description**: A Node.js application that fetches news from multiple sources, processes them using AI (translation, summarization, deduplication), and generates audio/EPUB outputs.
-- **Key Stack**: Node.js, Express, Socket.IO, OpenRouter AI, OpenAI-Edge-TTS, Tailwind CSS.
-
-## 2. Documentation Index
-*   `README.md`: User-facing documentation, features, and setup guide.
-*   `CLAUDE.md`: AI assistant guidelines, commands, and architectural details.
-
-## 3. Architecture Summary
-*   **Entry Point**: `server.js` initializes Express app and Socket.IO.
-*   **Service Layer**:
-    *   `newsService.js`: Fetches data from NewsAPI, Gnews, RSS, and scrapers.
-    *   `aiService.js`: Handles translation, summarization, and deduplication via MiniMax.
-    *   `audioService.js`: Manages TTS generation.
-    *   `stateManager.js`: Centralized state management (Pub/Sub).
-    *   `webScrapingService.js`: Fallback for scraping content.
-*   **Configuration**: Centralized in `config/index.js` and `.env`.
-
-## 4. Change Log
-
-### v1.3.0 (Current)
-- **Third-party Integration**:
-    - Added `/api/latest-data` endpoint for one-shot retrieval of news, summary, and podcast data.
-    - Enabled CORS in `server.js` to allow cross-origin requests.
-- **Data Persistence**:
-    - Implemented `data/settings.json` to persist configuration changes across Docker restarts.
-    - Updated `config/index.js` to prioritize settings file over environment variables.
-- **News Processing**:
-    - Enhanced regional classification using a hybrid approach (AI analysis + Rule-based fallback).
-    - Integrated classification logic into the main news fetching pipeline.
-
-### v1.2.0 (Previous)
-- **Core Features**:
-    - Multi-source fetching (NewsAPI, Gnews, RSS, Web Scraping).
-    - AI-powered processing: Translation, Summarization, Deduplication.
-    - Audio generation using custom OpenAI-Edge-TTS service.
-    - EPUB generation and Email delivery (Kindle support).
-    - Real-time updates via Socket.IO.
-- **UI/UX**:
-    - Glassmorphism design with Tailwind CSS.
-    - Responsive layout for mobile/desktop.
-    - Audio player and deep/light mode support.
-- **Infrastructure**:
-    - Docker & Docker Compose support.
-    - PM2 process management.
-    - Rate limiting and automated scheduling (Cron).
-
-### Initial Setup
-- Basic Express server setup.
-- Integration with NewsAPI.
-- Simple frontend with EJS.
-
-## 5. Maintenance Notes
-- **Environment Variables**: Critical configuration is in `.env`. Ensure `AI_API_KEY` and `NEWS_API_KEY` are valid.
-- **Rate Limiting**: AI services have strict rate limits (`utils/rateLimiter.js`) to prevent API exhaustion.
-- **State Management**: The application uses in-memory state (`stateManager.js`) which persists to JSON files in `data/` for recovery.
-- **Scrapers**: Web scrapers (`services/scrapers/`) are fragile and may need updates if source HTML structures change.
-
-## 6. Future Roadmap (Planned)
-- [ ] Enhanced error handling for specific scraper failures.
-- [ ] User authentication system.
-- [ ] Database integration (MongoDB/PostgreSQL) to replace JSON file storage.
-- [ ] More granular control over AI model selection per task.
+## v1.3.0 — Legacy Version
+- Added `/api/latest-data` endpoint and CORS support.
+- Introduced `data/settings.json` persistence and basic regional classification.

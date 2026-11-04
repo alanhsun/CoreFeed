@@ -1,80 +1,43 @@
-# 项目目录结构说明
-
-本文档详细说明了 News Aggregator 项目的目录结构、文件组织方式及命名规范。
-
-## 目录结构概览
+# 项目目录结构说明 (CoreFeed v2.0)
 
 ```text
-.
-├── config/                 # 配置文件
-├── data/                   # 数据存储（JSON文件）
-├── docs/                   # 项目文档
-├── logs/                   # 运行日志
-├── middleware/             # Express中间件
-├── public/                 # 静态资源（前端）
-├── routes/                 # API路由定义
-├── scripts/                # 运维脚本
-├── services/               # 核心业务逻辑
-│   └── scrapers/           # 新闻爬虫模块
-├── utils/                  # 工具函数与类库
-├── views/                  # EJS视图模板
-└── server.js               # 应用入口文件
+news_aggregator/
+├── server.js                      # 应用主入口 (Express + Socket.IO)
+├── package.json                   # 项目依赖与脚本定义
+├── Dockerfile                     # Docker 容器镜像构建配置
+├── docker-compose.yml             # Docker Compose 编排配置
+├── ecosystem.config.js            # PM2 生产环境进程配置
+├── .env.example                   # 环境变量配置模板
+├── config/
+│   ├── index.js                   # 统一配置中心 (支持 data/settings.json 热更新)
+│   └── global_sources.js          # 全球知名信源矩阵 (30+ 国际权威媒体与降级策略)
+├── services/
+│   ├── index.js                   # 服务导出索引
+│   ├── news_agent_service.js      # 多 Agent 协同中枢 (全球巡检、专题调查、单篇深读)
+│   ├── agent_tools.js             # Agent 工具层 (RSS、Google News 域名代理、Jina 全文抽取)
+│   ├── ai_service.js              # 大模型推理、跨源事件聚类、JSON 批量编译与 Tool-Use
+│   ├── news_service.js            # 新闻源兼容接口与本地缓存读写
+│   ├── epub_email_service.js      # EPUB 电子书打包与 Kindle 邮件推送
+│   ├── audio_service.js           # TTS 语音合成与 FFmpeg 音频合并
+│   ├── ftp_service.js             # FTP 音频文件上传服务
+│   └── state_manager.js           # 内存状态管理与事件分发
+├── routes/
+│   └── api.js                     # RESTful API 路由定义
+├── middleware/
+│   └── error_handler.js           # 全局错误处理与速率限制中间件
+├── utils/
+│   ├── index.js                   # 工具函数导出索引
+│   ├── schedule_manager.js        # 定时巡检任务调度器
+│   ├── rate_limiter.js            # LLM API 令牌桶限流器
+│   ├── network_config.js          # HTTP 连接池配置
+│   ├── logger.js                  # 统一日志与指标收集器
+│   └── helpers.js                 # 通用辅助工具与内存缓存
+├── views/
+│   └── index.ejs                  # 聚核 v2.0 响应式 Web 控制台
+├── public/
+│   ├── css/style.css              # 自定义主题与玻璃拟态样式
+│   ├── js/main.js                 # 前端控制器与实时遥测交互
+│   └── images/logo.png            # 品牌 Logo
+└── scripts/
+    └── start.bat                  # Windows 一键启动脚本
 ```
-
-## 详细说明
-
-### 1. 核心目录
-
-- **config/**: 存放项目的所有配置逻辑。
-  - `index.js`: 主配置文件，负责加载环境变量和 `data/settings.json`。
-  - `sources.json`: 爬虫源配置模板。
-
-- **services/**: 业务逻辑层，包含所有核心服务。
-  - `news_service.js`: 新闻获取与处理服务。
-  - `ai_service.js`: AI 摘要与翻译服务。
-  - `audio_service.js`: 语音合成与播客生成服务。
-  - `state_manager.js`: 全局状态管理服务。
-  - `web_scraping_service.js`: 网页爬虫服务协调器。
-  - `scrapers/`: 具体的新闻源爬虫实现（如 `ap_news_scraper.js`）。
-
-- **utils/**: 通用工具库。
-  - `helpers.js`: 通用辅助函数（文件读写、格式化等）。
-  - `logger.js`: 日志记录器。
-  - `rate_limiter.js`: 速率限制器。
-  - `schedule_manager.js`: 定时任务管理。
-
-- **routes/**: API 路由定义。
-  - `api.js`: 定义所有 `/api/*` 接口。
-
-- **middleware/**: Express 中间件。
-  - `error_handler.js`: 全局错误处理。
-
-### 2. 前端与资源
-
-- **views/**: 服务端渲染模板。
-  - `index.ejs`: 主页模板。
-
-- **public/**: 静态资源文件。
-  - `css/`: 样式表。
-  - `js/`: 前端脚本。
-
-### 3. 数据与日志
-
-- **data/**: 运行时数据存储（需持久化）。
-  - `news.json`: 缓存的新闻数据。
-  - `settings.json`: 用户动态配置。
-  - `state.json`: 应用运行状态。
-
-- **logs/**: 应用运行日志。
-
-## 命名规范
-
-- **文件命名**: 统一使用 `snake_case`（小写字母加下划线），例如 `news_service.js`。
-- **类名**: 使用 `PascalCase`（大驼峰），例如 `NewsService`。
-- **变量/函数**: 使用 `camelCase`（小驼峰），例如 `fetchNews`。
-
-## 开发规范
-
-1. **模块引用**: 优先使用 `services/index.js` 和 `utils/index.js` 进行模块导入。
-2. **配置读取**: 禁止直接读取 `process.env`，必须通过 `config` 模块获取配置。
-3. **路径引用**: 使用 `path.join` 处理文件路径，确保跨平台兼容性。
