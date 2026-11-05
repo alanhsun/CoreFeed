@@ -1,5 +1,5 @@
 /**
- * 聚核 CoreFeed v2.0 · 全球知名信源 Agent 情报中心前端控制器
+ * 聚核 CoreFeed v2.0 · Kami (紙) Editorial Design System 前端控制器
  */
 class CoreFeedApp {
     constructor() {
@@ -27,8 +27,7 @@ class CoreFeedApp {
     // ==================== 1. 主题与通知 ====================
     initTheme() {
         const saved = localStorage.getItem('corefeed_theme');
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        if (saved === 'dark' || (!saved && prefersDark)) {
+        if (saved === 'dark') {
             document.documentElement.classList.add('dark');
         }
         this.updateThemeIcon();
@@ -45,19 +44,13 @@ class CoreFeedApp {
         const icon = document.getElementById('themeIcon');
         if (!icon) return;
         const isDark = document.documentElement.classList.contains('dark');
-        icon.className = isDark ? 'fa-solid fa-sun text-amber-400' : 'fa-solid fa-moon text-slate-600';
+        icon.className = isDark ? 'fa-solid fa-sun text-xs' : 'fa-solid fa-moon text-xs';
     }
 
     toast(message, type = 'info') {
         const container = document.getElementById('toastContainer');
         if (!container) return;
 
-        const colors = {
-            info: 'bg-blue-600 text-white',
-            success: 'bg-emerald-600 text-white',
-            warning: 'bg-amber-500 text-white',
-            error: 'bg-rose-600 text-white'
-        };
         const icons = {
             info: 'fa-circle-info',
             success: 'fa-circle-check',
@@ -66,7 +59,10 @@ class CoreFeedApp {
         };
 
         const el = document.createElement('div');
-        el.className = `flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-lg text-xs sm:text-sm font-medium transition-all ${colors[type] || colors.info}`;
+        el.className = 'flex items-center gap-2.5 px-4 py-3 rounded-lg text-xs sm:text-sm transition-all';
+        el.style.background = type === 'error' ? '#3d3d3a' : 'var(--brand)';
+        el.style.color = '#faf9f5';
+        el.style.border = '1px solid var(--line)';
         el.innerHTML = `<i class="fa-solid ${icons[type] || icons.info}"></i><span>${this.escapeHtml(message)}</span>`;
         container.appendChild(el);
 
@@ -93,11 +89,11 @@ class CoreFeedApp {
         const dot = document.getElementById('socketStatusDot');
 
         this.socket.on('connect', () => {
-            if (dot) dot.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse';
+            if (dot) dot.style.background = 'var(--brand)';
         });
 
         this.socket.on('disconnect', () => {
-            if (dot) dot.className = 'w-2 h-2 rounded-full bg-rose-500';
+            if (dot) dot.style.background = 'var(--stone)';
         });
 
         this.socket.on('connected', (data) => {
@@ -153,7 +149,7 @@ class CoreFeedApp {
         if (!drawer || !entry) return;
         const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : '';
         const line = document.createElement('div');
-        line.innerHTML = `<span class="text-slate-500">[${time}]</span> <span class="text-cyan-400 font-semibold">[${this.escapeHtml(entry.agent || 'Agent')}]</span> <span>${this.escapeHtml(entry.message || '')}</span>`;
+        line.innerHTML = `<span style="color: var(--stone);">[${time}]</span> <span style="color: var(--brand); font-weight: 500;">[${this.escapeHtml(entry.agent || 'Agent')}]</span> <span style="color: var(--dark-warm);">${this.escapeHtml(entry.message || '')}</span>`;
         drawer.appendChild(line);
         drawer.scrollTop = drawer.scrollHeight;
     }
@@ -224,11 +220,7 @@ class CoreFeedApp {
             const btn = document.getElementById(`tabBtn-${t}`);
             const panel = document.getElementById(`tabPanel-${t}`);
             if (btn) {
-                if (t === tabName) {
-                    btn.className = 'tab-btn px-4 py-2 rounded-xl text-sm font-semibold bg-blue-600 text-white shadow-sm transition-all';
-                } else {
-                    btn.className = 'tab-btn px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-all';
-                }
+                btn.classList.toggle('active', t === tabName);
             }
             if (panel) {
                 panel.classList.toggle('hidden', t !== tabName);
@@ -258,24 +250,18 @@ class CoreFeedApp {
         });
 
         const regions = Object.keys(regionCounts);
-        regionBar.innerHTML = `<span class="text-xs text-slate-400 mr-1"><i class="fa-solid fa-earth-americas mr-1"></i>地区:</span>` +
+        regionBar.innerHTML = `<span class="text-xs mr-1" style="color: var(--stone);">地域：</span>` +
             regions.map(r => {
                 const active = this.selectedRegion === r;
-                const cls = active
-                    ? 'bg-blue-600 text-white font-semibold'
-                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-blue-500';
-                return `<button onclick="app.setRegionFilter('${r}')" class="px-2.5 py-1 rounded-lg text-xs transition ${cls}">${this.escapeHtml(r)} <span class="opacity-75">(${regionCounts[r]})</span></button>`;
+                return `<button onclick="app.setRegionFilter('${r}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(r)} <span style="opacity: 0.72;">${regionCounts[r]}</span></button>`;
             }).join('');
 
         const categories = Object.keys(categoryCounts);
         if (categories.length > 2) {
-            categoryBar.innerHTML = `<span class="text-xs text-slate-400 mr-1"><i class="fa-solid fa-tag mr-1"></i>领域:</span>` +
+            categoryBar.innerHTML = `<span class="text-xs mr-1" style="color: var(--stone);">版面：</span>` +
                 categories.map(c => {
                     const active = this.selectedCategory === c;
-                    const cls = active
-                        ? 'bg-indigo-600 text-white font-semibold'
-                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-indigo-500';
-                    return `<button onclick="app.setCategoryFilter('${c}')" class="px-2.5 py-1 rounded-lg text-xs transition ${cls}">${this.escapeHtml(c)}</button>`;
+                    return `<button onclick="app.setCategoryFilter('${c}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(c)}</button>`;
                 }).join('');
         } else {
             categoryBar.innerHTML = '';
@@ -329,10 +315,10 @@ class CoreFeedApp {
 
         if (filtered.length === 0) {
             grid.innerHTML = `
-                <div class="col-span-full glass-panel rounded-2xl p-12 text-center space-y-3">
-                    <i class="fa-solid fa-satellite-dish text-4xl text-blue-500"></i>
-                    <h3 class="text-base font-bold">当前筛选条件下暂无新闻情报</h3>
-                    <p class="text-xs text-slate-500 max-w-md mx-auto">点击右上角「Agent 全球巡检」按钮，派遣多 Agent 并发采集路透社、BBC、纽约时报、彭博社、南华早报等全球权威信源。</p>
+                <div class="col-span-full kami-card py-14 text-center space-y-3">
+                    <div class="kami-tag mx-auto">NO DISPATCHES · 暂无情报</div>
+                    <h3 class="text-lg" style="color: var(--near-black);">当前筛选条件下暂无新闻情报</h3>
+                    <p class="text-xs max-w-md mx-auto" style="color: var(--stone);">点击右上角「Agent 全球巡检」按钮，派遣多 Agent 并发采集路透社、BBC、纽约时报、彭博社、南华早报等全球权威信源。</p>
                 </div>
             `;
             return;
@@ -360,62 +346,62 @@ class CoreFeedApp {
         const encodedSummary = encodeURIComponent(summary);
 
         return `
-            <article class="news-card rounded-2xl p-5 flex flex-col justify-between space-y-3">
-                <div class="space-y-2.5">
+            <article class="news-card flex flex-col justify-between space-y-4">
+                <div class="space-y-3">
                     <!-- 顶部元信息：媒体名称 + 地区/分类 + 时间 -->
                     <div class="flex items-center justify-between gap-2 text-xs">
                         <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-                            <span class="px-2 py-0.5 rounded-md font-bold bg-blue-50 text-blue-700 dark:bg-blue-950/70 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate max-w-[160px]">
+                            <span class="kami-tag truncate max-w-[165px]">
                                 ${this.escapeHtml(sourceName)}
                             </span>
-                            <span class="px-2 py-0.5 rounded-md font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                            <span class="kami-tag-neutral">
                                 ${this.escapeHtml(region)}
                             </span>
-                            ${category && category !== region ? `<span class="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">${this.escapeHtml(category)}</span>` : ''}
+                            ${category && category !== region ? `<span class="kami-tag-neutral">${this.escapeHtml(category)}</span>` : ''}
                         </div>
-                        <span class="text-[11px] text-slate-400 whitespace-nowrap">${this.escapeHtml(timeStr)}</span>
+                        <span class="text-xs whitespace-nowrap" style="color: var(--stone); font-variant-numeric: tabular-nums;">${this.escapeHtml(timeStr)}</span>
                     </div>
 
                     <!-- 多信源交叉验证标识 -->
                     ${hasMultiSources ? `
-                        <div class="px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800/50 text-[11px] text-amber-800 dark:text-amber-300 flex items-center justify-between">
-                            <span><i class="fa-solid fa-fire-flame-curved mr-1"></i><strong>${relatedSources.length + 1} 家权威外媒交叉印证</strong></span>
-                            <span class="truncate max-w-[160px] opacity-80">+ ${this.escapeHtml(relatedSources.map(r => r.name).join(', '))}</span>
+                        <div class="kami-callout flex items-center justify-between gap-2" style="font-variant-numeric: tabular-nums;">
+                            <span><strong>${relatedSources.length + 1} 家权威外媒交叉印证</strong></span>
+                            <span class="truncate max-w-[165px]" style="color: var(--olive);">+ ${this.escapeHtml(relatedSources.map(r => r.name).join('、'))}</span>
                         </div>
                     ` : ''}
 
                     <!-- 中文编译主标题与外媒原标题 -->
                     <div>
-                        <h3 class="text-base font-bold leading-snug text-slate-900 dark:text-slate-100 hover:text-blue-600 dark:hover:text-blue-400 transition">
-                            <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(title)}</a>
+                        <h3 class="text-[17px] leading-[1.32]" style="color: var(--near-black); margin: 0;">
+                            <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer" style="color: inherit;" onmouseover="this.style.color='var(--brand)'" onmouseout="this.style.color='inherit'">${this.escapeHtml(title)}</a>
                         </h3>
-                        ${originalTitle ? `<p class="text-[11px] text-slate-400 dark:text-slate-500 mt-1 line-clamp-1" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
+                        ${originalTitle ? `<p class="text-xs mt-1 line-clamp-1" style="color: var(--stone);" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
                     </div>
 
                     <!-- 深度中文摘要 -->
-                    <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed line-clamp-4">
+                    <p class="text-[14px] leading-[1.55] line-clamp-4" style="color: var(--olive); margin: 0;">
                         ${this.escapeHtml(summary)}
                     </p>
 
                     <!-- 核心要点标签 -->
                     ${keyPoints.length > 0 ? `
-                        <div class="pt-1 flex flex-wrap gap-1">
-                            ${keyPoints.map(kp => `<span class="text-[11px] px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800/90 text-slate-600 dark:text-slate-400">• ${this.escapeHtml(kp)}</span>`).join('')}
+                        <div class="pt-1 flex flex-wrap gap-1.5">
+                            ${keyPoints.map(kp => `<span class="kami-tag-neutral">• ${this.escapeHtml(kp)}</span>`).join('')}
                         </div>
                     ` : ''}
                 </div>
 
                 <!-- 卡片底部操作栏：Agent 全文深读 & 原文跳转 -->
-                <div class="pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 text-xs">
+                <div class="pt-3 flex items-center justify-between gap-2 text-xs" style="border-top: 1px solid var(--border-soft);">
                     <button onclick="app.openDeepRead('${encodedUrl}', '${encodedTitle}', '${encodedSource}', '${encodedSummary}')"
-                        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold text-blue-600 dark:text-blue-400 bg-blue-50/80 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/60 transition cursor-pointer">
-                        <i class="fa-solid fa-book-open-reader"></i>
+                        class="inline-flex items-center gap-1.5 py-1 font-medium hover:underline cursor-pointer" style="color: var(--brand);">
+                        <i class="fa-solid fa-book-open-reader text-[11px]"></i>
                         <span>Agent 全文深读</span>
                     </button>
                     <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
-                        class="inline-flex items-center gap-1 text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 transition">
+                        class="inline-flex items-center gap-1 hover:underline" style="color: var(--stone);">
                         <span>访问源站</span>
-                        <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+                        <span>↗</span>
                     </a>
                 </div>
             </article>
@@ -428,9 +414,9 @@ class CoreFeedApp {
             if (isNaN(d.getTime())) return '';
             const diffMin = Math.floor((Date.now() - d.getTime()) / 60000);
             if (diffMin < 5) return '刚刚';
-            if (diffMin < 60) return `${diffMin}分钟前`;
+            if (diffMin < 60) return `${diffMin} 分钟前`;
             const diffHr = Math.floor(diffMin / 60);
-            if (diffHr < 24) return `${diffHr}小时前`;
+            if (diffHr < 24) return `${diffHr} 小时前`;
             return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         } catch (_) {
             return '';
@@ -448,7 +434,7 @@ class CoreFeedApp {
         const text = document.getElementById('patrolBtnText');
 
         if (btn) btn.disabled = true;
-        if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
+        if (icon) icon.className = 'fa-solid fa-spinner fa-spin text-xs';
         if (text) text.textContent = 'Agent 巡检整合中...';
 
         this.toast('已启动多 Agent 全球知名信源巡检，请留意实时流水线进度...', 'info');
@@ -485,7 +471,7 @@ class CoreFeedApp {
             this.toast(`Agent 巡检提示: ${err.message}`, 'error');
         } finally {
             if (btn) btn.disabled = false;
-            if (icon) icon.className = 'fa-solid fa-satellite-dish';
+            if (icon) icon.className = 'fa-solid fa-satellite-dish text-xs';
             if (text) text.textContent = 'Agent 全球巡检';
         }
     }
@@ -553,17 +539,17 @@ class CoreFeedApp {
 
         if (btn) {
             btn.disabled = true;
-            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>Agent 正在跨源检索深读...</span>`;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-xs"></i><span>Agent 正在跨源检索深读...</span>`;
         }
 
         this.switchTab('research');
         const container = document.getElementById('researchReportContainer');
         if (container) {
             container.innerHTML = `
-                <div class="py-12 text-center space-y-3">
-                    <i class="fa-solid fa-compass-drafting fa-spin text-4xl text-indigo-600"></i>
-                    <h3 class="text-base font-bold">Research Agent 正在全球权威信源中搜集「${this.escapeHtml(topic)}」...</h3>
-                    <p class="text-xs text-slate-500">正在执行：多语种检索词规划 → 全球名媒检索 → Jina Reader 全文深读 → 跨信源观点比对合成</p>
+                <div class="py-12 space-y-3">
+                    <div class="kami-tag">AGENT RESEARCH IN PROGRESS · 正在深读</div>
+                    <h3 class="text-xl" style="color: var(--near-black);">Research Agent 正在全球权威信源中搜集「${this.escapeHtml(topic)}」...</h3>
+                    <p class="text-xs" style="color: var(--stone);">正在执行：多语种检索词规划 → 全球名媒检索 → Jina Reader 全文深读 → 跨信源观点比对合成</p>
                 </div>
             `;
         }
@@ -585,9 +571,9 @@ class CoreFeedApp {
         } catch (err) {
             if (container) {
                 container.innerHTML = `
-                    <div class="py-10 text-center text-rose-500 space-y-2">
-                        <i class="fa-solid fa-circle-exclamation text-3xl"></i>
-                        <p class="font-semibold">${this.escapeHtml(err.message)}</p>
+                    <div class="py-10 space-y-2" style="color: var(--dark-warm);">
+                        <div class="kami-tag-neutral">NOTICE</div>
+                        <p class="font-medium">${this.escapeHtml(err.message)}</p>
                     </div>
                 `;
             }
@@ -595,7 +581,7 @@ class CoreFeedApp {
         } finally {
             if (btn) {
                 btn.disabled = false;
-                btn.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i><span>派遣 Agent 搜集整合</span>`;
+                btn.innerHTML = `<i class="fa-solid fa-compass-drafting text-xs"></i><span>派遣 Agent 搜集整合</span>`;
             }
         }
     }
@@ -618,33 +604,31 @@ class CoreFeedApp {
         const articles = Array.isArray(report.articles) ? report.articles : [];
 
         container.innerHTML = `
-            <div class="space-y-6">
-                <div class="pb-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="space-y-8">
+                <div class="pb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-3" style="border-bottom: 1px solid var(--border);">
                     <div>
-                        <div class="flex items-center gap-2">
-                            <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-                                Agent 全球多信源专题卷宗
-                            </span>
-                            <span class="text-xs text-slate-400">检索词: ${this.escapeHtml(report.englishQuery || report.topic)}</span>
+                        <div class="flex flex-wrap items-center gap-2.5 mb-2">
+                            <span class="kami-tag">Agent 全球多信源专题卷宗</span>
+                            <span class="text-xs" style="color: var(--stone);">英文检索式：${this.escapeHtml(report.englishQuery || report.topic)}</span>
                         </div>
-                        <h2 class="text-xl sm:text-2xl font-bold mt-1.5">「${this.escapeHtml(report.topic)}」全球知名信源整合报告</h2>
-                        <p class="text-xs text-slate-500 mt-1">
-                            生成时间: ${new Date(report.generatedAt || Date.now()).toLocaleString('zh-CN')} · 覆盖 ${sources.length} 家国际媒体 (${this.escapeHtml(sources.slice(0, 8).join('、'))})
+                        <h2 class="text-2xl sm:text-3xl" style="color: var(--near-black); margin: 0;">「${this.escapeHtml(report.topic)}」全球知名信源整合报告</h2>
+                        <p class="text-xs mt-2" style="color: var(--stone); font-variant-numeric: tabular-nums;">
+                            生成时间：${new Date(report.generatedAt || Date.now()).toLocaleString('zh-CN')} · 覆盖 ${sources.length} 家国际媒体 (${this.escapeHtml(sources.slice(0, 8).join('、'))})
                         </p>
                     </div>
                 </div>
 
-                <!-- 深度对比报告正文 -->
-                <div class="summary-content prose dark:prose-invert max-w-none">
+                <!-- 深度对比报告正文 (740px 最佳阅读行宽) -->
+                <div class="summary-content">
                     ${report.reportHtml || ''}
                 </div>
 
                 <!-- 支撑该专题报告的外媒情报卡片 -->
-                <div class="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-3">
-                    <h3 class="text-sm font-bold uppercase tracking-wider text-slate-500">
-                        📚 本次专题采集的全球知名信源报道 (${articles.length} 篇)
+                <div class="pt-8 space-y-4" style="border-top: 1px solid var(--border);">
+                    <h3 class="text-base" style="color: var(--near-black); margin: 0;">
+                        本次专题采集的全球知名信源报道 (${articles.length} 篇)
                     </h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                         ${articles.map((a, idx) => this.renderSingleCardHtml(a, idx)).join('')}
                     </div>
                 </div>
@@ -675,10 +659,10 @@ class CoreFeedApp {
         if (linkEl) linkEl.href = url;
 
         bodyEl.innerHTML = `
-            <div class="py-12 text-center space-y-3">
-                <i class="fa-solid fa-book-open-reader fa-beat-fade text-3xl text-blue-600"></i>
-                <div class="font-semibold">Deep-Reader Agent 正在通过 Jina Reader 提取 [${this.escapeHtml(sourceName)}] 原文并精译...</div>
-                <p class="text-xs text-slate-400">正在穿透页面排版，提取核心段落、数据与背景脉络</p>
+            <div class="py-12 space-y-3">
+                <div class="kami-tag">JINA READER EXTRACTION</div>
+                <div class="text-base font-medium" style="color: var(--near-black);">Deep-Reader Agent 正在通过 Jina Reader 提取 [${this.escapeHtml(sourceName)}] 原文并精译...</div>
+                <p class="text-xs" style="color: var(--stone);">正在穿透页面排版，提取核心段落、数据与背景脉络</p>
             </div>
         `;
 
@@ -694,18 +678,18 @@ class CoreFeedApp {
             }
 
             bodyEl.innerHTML = `
-                <div class="space-y-4">
+                <div class="space-y-6">
                     <div class="summary-content">
                         ${data.analysisHtml || ''}
                     </div>
-                    <details class="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs">
-                        <summary class="cursor-pointer font-semibold text-slate-500">查看抓取到的外媒原文摘录 (提取方式: ${this.escapeHtml(data.extractionMethod || 'auto')})</summary>
-                        <pre class="mt-2 whitespace-pre-wrap font-sans text-slate-600 dark:text-slate-300 max-h-60 overflow-y-auto">${this.escapeHtml(data.fullText || '')}</pre>
+                    <details class="kami-code-block text-xs">
+                        <summary class="cursor-pointer font-medium" style="color: var(--olive);">查看抓取到的外媒原文摘录 (提取方式: ${this.escapeHtml(data.extractionMethod || 'auto')})</summary>
+                        <pre class="mt-3 whitespace-pre-wrap max-h-60 overflow-y-auto" style="font-family: var(--serif); color: var(--dark-warm);">${this.escapeHtml(data.fullText || '')}</pre>
                     </details>
                 </div>
             `;
         } catch (err) {
-            bodyEl.innerHTML = `<div class="p-6 text-center text-rose-500">深读失败: ${this.escapeHtml(err.message)}</div>`;
+            bodyEl.innerHTML = `<div class="p-6" style="color: var(--dark-warm);">深读失败：${this.escapeHtml(err.message)}</div>`;
         }
     }
 
@@ -751,7 +735,7 @@ class CoreFeedApp {
 
     async exportEpub() {
         try {
-            this.toast('正在生成自适应排版 EPUB 电子书...', 'info');
+            this.toast('正在生成 Kami 纸感排版 EPUB 电子书...', 'info');
             const res = await fetch('/api/generate-epub', { method: 'POST' });
             const data = await res.json();
             if (!res.ok || !data.success) throw new Error(data.message || '生成 EPUB 失败');
@@ -812,7 +796,7 @@ class CoreFeedApp {
         if (titleEl) titleEl.textContent = info.title || 'AI 全球新闻联播';
         if (metaEl) {
             const ftpStatus = info.ftp?.uploaded ? ' · 已同步上传至 FTP' : '';
-            metaEl.textContent = `预估时长: ${info.duration || 0} 秒 · 片段数: ${info.stats?.totalSegments || 0}${ftpStatus}`;
+            metaEl.textContent = `预估时长：${info.duration || 0} 秒 · 片段数：${info.stats?.totalSegments || 0}${ftpStatus}`;
         }
         if (player) {
             player.src = `/api/podcast/complete?t=${Date.now()}`;
@@ -853,36 +837,36 @@ class CoreFeedApp {
         if (!container) return;
 
         const categoryLabels = {
-            wire: '🌐 国际顶级通讯社与全球门户',
-            western: '🏛️ 欧美权威大报',
-            asiapacific: '🌏 亚太与大中华区名媒',
-            finance: '💹 全球财经与商业',
-            tech: '🔬 前沿科技媒体',
-            custom: '⭐ 自定义国际信源'
+            wire: '国际顶级通讯社与全球门户',
+            western: '欧美权威大报',
+            asiapacific: '亚太与大中华区名媒',
+            finance: '全球财经与商业',
+            tech: '前沿科技媒体',
+            custom: '自定义国际信源'
         };
 
-        container.innerHTML = this.sourceMatrix.map((src, idx) => {
+        container.innerHTML = this.sourceMatrix.map((src) => {
             const badge = categoryLabels[src.category] || '国际信源';
             const stat = src.lastStat;
             const statHtml = stat
-                ? `<span class="text-[11px] ${stat.status === 'ok' ? 'text-emerald-600' : 'text-amber-500'}">上次采集: ${stat.count}条 (${stat.durationMs}ms)</span>`
-                : `<span class="text-[11px] text-slate-400">权威度: ${src.authority || 85}</span>`;
+                ? `<span class="text-[11px]" style="color: ${stat.status === 'ok' ? 'var(--brand)' : 'var(--stone)'}; font-variant-numeric: tabular-nums;">上次采集：${stat.count} 条 (${stat.durationMs}ms)</span>`
+                : `<span class="text-[11px]" style="color: var(--stone); font-variant-numeric: tabular-nums;">权威指数：${src.authority || 85}</span>`;
 
             return `
-                <div class="p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3 bg-white dark:bg-slate-900">
+                <div class="p-3.5 rounded-lg flex items-start justify-between gap-3" style="background: var(--ivory); border: 1px solid var(--border);">
                     <label class="flex items-start gap-2.5 cursor-pointer flex-1 min-w-0">
-                        <input type="checkbox" data-source-id="${this.escapeHtml(src.id)}" class="source-toggle mt-1 rounded text-blue-600" ${src.enabled ? 'checked' : ''}>
+                        <input type="checkbox" data-source-id="${this.escapeHtml(src.id)}" class="source-toggle mt-1 accent-[#1B365D]" ${src.enabled ? 'checked' : ''}>
                         <div class="min-w-0">
-                            <div class="font-bold text-xs sm:text-sm truncate">${this.escapeHtml(src.name)}</div>
-                            <div class="text-[11px] text-slate-400 truncate">${this.escapeHtml(badge)} · ${this.escapeHtml(src.domain || src.rssUrl || '')}</div>
-                            <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">${this.escapeHtml(src.description || '')}</div>
+                            <div class="font-medium text-xs sm:text-sm truncate" style="color: var(--near-black);">${this.escapeHtml(src.name)}</div>
+                            <div class="text-[11px] truncate" style="color: var(--stone);">${this.escapeHtml(badge)} · ${this.escapeHtml(src.domain || src.rssUrl || '')}</div>
+                            <div class="text-[11px] mt-0.5 line-clamp-1" style="color: var(--olive);">${this.escapeHtml(src.description || '')}</div>
                             ${statHtml}
                         </div>
                     </label>
                     <div class="flex flex-col items-end gap-1">
-                        <span class="text-[10px] text-slate-400">单次条数</span>
+                        <span class="text-[10px]" style="color: var(--stone);">单次条数</span>
                         <input type="number" min="1" max="20" value="${src.maxArticles || 5}" data-source-max="${this.escapeHtml(src.id)}"
-                            class="w-14 px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-center">
+                            class="kami-input w-14 px-2 py-1 text-xs text-center" style="font-variant-numeric: tabular-nums;">
                     </div>
                 </div>
             `;

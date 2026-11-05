@@ -1,125 +1,540 @@
+/* ==========================================================================
+   聚核 CoreFeed v2.0 · Kami (紙) Parchment Editorial Design System
+   Invariants:
+   1. Default page background #f5f4ed (parchment), container #faf9f5 (ivory)
+   2. Single accent: ink-blue #1B365D; solid tag tint #E4ECF5 (no rgba)
+   3. All grays warm-toned (yellow-brown undertone), zero cool slate/blue-gray
+   4. Single serif stack across headings & body (--sans aliases --serif)
+   5. Serif weights 400 body / 500 headings, no bold (700), no italic
+   6. No decorative ticks, short rules, or side bars; lines encode structure only
+   ========================================================================== */
+
+@font-face {
+    font-family: "TsangerJinKai02";
+    src: url("https://cdn.jsdelivr.net/gh/tw93/Kami@main/assets/fonts/TsangerJinKai02-W04.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "TsangerJinKai02";
+    src: url("https://cdn.jsdelivr.net/gh/tw93/Kami@main/assets/fonts/TsangerJinKai02-W05.ttf") format("truetype");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("https://cdn.jsdelivr.net/gh/tw93/Kami@main/skills/kami/assets/fonts/JetBrainsMono.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
 :root {
-    --bg-primary: #f8fafc;
-    --bg-secondary: #ffffff;
-    --bg-glass: rgba(255, 255, 255, 0.88);
-    --text-primary: #0f172a;
-    --text-secondary: #475569;
-    --text-muted: #64748b;
-    --border-color: #e2e8f0;
-    --accent-primary: #2563eb;
-    --accent-secondary: #4f46e5;
-    --card-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.06);
+    /* Paper Surfaces */
+    --parchment:      #f5f4ed;
+    --ivory:          #faf9f5;
+    --inline-code-bg: #f0eee6;
+    --warm-sand:      #e8e6dc;
+
+    /* Single Accent: Ink-Blue & Registered Solid Tints */
+    --brand:          #1B365D;
+    --brand-light:    #2D5A8A;
+    --brand-tint:     #EEF2F7;
+    --tag-bg:         #E4ECF5;
+
+    /* Warm Ink Hierarchy */
+    --near-black:     #141413;
+    --dark-warm:      #3d3d3a;
+    --olive:          #504e49;
+    --stone:          #6b6a64;
+
+    /* Structural Hairlines */
+    --border:         #e8e6dc;
+    --border-soft:    #e5e3d8;
+    --line:           #d8d5c8;
+
+    /* Typography Stacks */
+    --serif: "TsangerJinKai02", "Source Han Serif SC", "Source Han Serif CN",
+             "Noto Serif CJK SC", "Noto Serif SC", "Songti SC", "STSong", "SimSun",
+             Charter, Georgia, Palatino, "Times New Roman", serif;
+    --sans:  var(--serif);
+    --mono:  "JetBrains Mono", "SF Mono", Consolas,
+             "TsangerJinKai02", "Source Han Serif SC", monospace;
+    --latin-ui: "PingFang SC", system-ui, -apple-system, sans-serif;
 }
 
 html.dark {
-    --bg-primary: #0b1120;
-    --bg-secondary: #111827;
-    --bg-glass: rgba(17, 24, 39, 0.88);
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --border-color: #1e293b;
-    --accent-primary: #3b82f6;
-    --accent-secondary: #6366f1;
-    --card-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.45);
+    /* Sumi Night (墨夜) Warm Dark Palette */
+    --parchment:      #141413;
+    --ivory:          #1e1e1c;
+    --inline-code-bg: #262522;
+    --warm-sand:      #2e2d29;
+
+    --brand:          #739BC4;
+    --brand-light:    #92B4D8;
+    --brand-tint:     #1B2430;
+    --tag-bg:         #1E2B3A;
+
+    --near-black:     #f5f4ed;
+    --dark-warm:      #d0cdc2;
+    --olive:          #a6a399;
+    --stone:          #7d7b72;
+
+    --border:         #2c2b27;
+    --border-soft:    #252421;
+    --line:           #3a3833;
+}
+
+* {
+    box-sizing: border-box;
+    font-style: normal;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
 }
 
 body {
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    transition: background-color 0.25s ease, color 0.25s ease;
+    background-color: var(--parchment);
+    color: var(--near-black);
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 15px;
+    line-height: 1.55;
+    letter-spacing: 0.3px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     min-height: 100vh;
+    transition: background-color 0.2s ease, color 0.2s ease;
 }
 
+h1, h2, h3, h4, h5, h6, strong, b {
+    font-family: var(--serif);
+    font-weight: 500;
+}
+
+a {
+    color: var(--brand);
+    text-decoration: none;
+    transition: color 0.15s ease;
+}
+
+a:hover {
+    color: var(--brand-light);
+}
+
+/* ========== Page Container & Masthead ========== */
+
+.kami-page {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 36px 28px 96px;
+}
+
+@media (min-width: 768px) {
+    .kami-page {
+        padding: 48px 48px 112px;
+    }
+}
+
+.kami-masthead {
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+}
+
+.kami-eyebrow {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--latin-ui);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.4px;
+    color: var(--stone);
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-soft);
+    margin-bottom: 24px;
+    font-variant-numeric: tabular-nums;
+}
+
+.kami-masthead-main {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+@media (min-width: 768px) {
+    .kami-masthead-main {
+        flex-direction: row;
+        align-items: flex-end;
+        justify-content: space-between;
+    }
+}
+
+.kami-display-title {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: clamp(32px, 4.5vw, 50px);
+    line-height: 1.12;
+    letter-spacing: 0;
+    color: var(--near-black);
+    margin: 0;
+}
+
+.kami-subtitle {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--olive);
+    margin: 8px 0 0;
+}
+
+/* ========== Kami Buttons (Landing-Page Spec) ========== */
+
+.btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: var(--brand);
+    color: #faf9f5;
+    font-family: var(--latin-ui);
+    font-weight: 500;
+    font-size: 14px;
+    font-variant-numeric: lining-nums tabular-nums;
+    letter-spacing: 0.2px;
+    padding: 10px 22px;
+    border-radius: 999px;
+    border: 1px solid var(--brand);
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+html.dark .btn-primary {
+    color: #141413;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: var(--brand-light);
+    border-color: var(--brand-light);
+    transform: translateY(-1px);
+}
+
+.btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-family: var(--latin-ui);
+    font-weight: 500;
+    font-size: 13px;
+    font-variant-numeric: lining-nums tabular-nums;
+    color: var(--near-black);
+    background: var(--ivory);
+    padding: 8px 16px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.btn-ghost:hover:not(:disabled) {
+    background: var(--warm-sand);
+    color: var(--near-black);
+}
+
+.btn-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    color: var(--olive);
+    background: var(--ivory);
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-chip:hover {
+    background: var(--warm-sand);
+    color: var(--near-black);
+}
+
+.btn-chip.active {
+    background: var(--tag-bg);
+    color: var(--brand);
+    border-color: var(--tag-bg);
+    font-weight: 500;
+}
+
+/* ========== Kami Containers, Cards & Tags ========== */
+
+/* Card: one quiet grouping cue (ivory fill), no sub-pixel border/shadow */
+.kami-card,
 .glass-panel {
-    background: var(--bg-glass);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border: 1px solid var(--border-color);
-    box-shadow: var(--card-shadow);
+    background: var(--ivory);
+    border-radius: 8px;
+    padding: 24px 28px;
 }
 
 .news-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    box-shadow: var(--card-shadow);
-    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    background: var(--ivory);
+    border-radius: 8px;
+    padding: 22px 24px;
+    transition: background-color 0.15s ease, transform 0.15s ease;
 }
 
 .news-card:hover {
-    transform: translateY(-2px);
-    border-color: var(--accent-primary);
-    box-shadow: 0 10px 28px -4px rgba(37, 99, 235, 0.14);
+    background: var(--inline-code-bg);
+    transform: translateY(-1px);
 }
 
-/* 综述文章排版 */
+/* Tag: solid fill (#E4ECF5), never rgba */
+.kami-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--tag-bg);
+    color: var(--brand);
+    font-family: var(--serif);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.3px;
+    font-variant-numeric: tabular-nums;
+}
+
+.kami-tag-neutral {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--inline-code-bg);
+    color: var(--olive);
+    font-family: var(--serif);
+    font-size: 12px;
+    font-weight: 400;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.2px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Callout: ivory or brand-tint fill + 4px radius, no side accent edge */
+.kami-callout {
+    background: var(--brand-tint);
+    color: var(--brand);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+/* Inputs */
+.kami-input {
+    background: var(--parchment);
+    color: var(--near-black);
+    font-family: var(--serif);
+    font-size: 14px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    outline: none;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.kami-input::placeholder {
+    color: var(--stone);
+}
+
+.kami-input:focus {
+    border-color: var(--brand);
+    background: var(--ivory);
+}
+
+/* ========== Agent Pipeline Nodes ========== */
+
+.agent-node {
+    background: var(--parchment);
+    border-radius: 6px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.agent-node .node-num {
+    font-family: var(--serif);
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--brand);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.agent-node.active {
+    background: var(--tag-bg);
+    border-color: var(--brand);
+}
+
+.agent-node.done {
+    background: var(--inline-code-bg);
+    border-color: var(--line);
+}
+
+/* ========== Navigation Tabs ========== */
+
+.kami-tabs-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+}
+
+.tab-btn {
+    font-family: var(--serif);
+    font-size: 15px;
+    font-weight: 400;
+    color: var(--stone);
+    background: transparent;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.tab-btn:hover {
+    color: var(--near-black);
+    background: var(--inline-code-bg);
+}
+
+.tab-btn.active {
+    color: var(--brand);
+    background: var(--tag-bg);
+    font-weight: 500;
+}
+
+/* ========== Long-Form Editorial Prose (Summary & Research Report) ========== */
+
+/* Hold screen prose to ~720px reading measure, serif 400, line-height 1.55 */
+.summary-content {
+    max-width: 740px;
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 16px;
+    line-height: 1.62;
+    color: var(--near-black);
+}
+
+/* Section start: serif scale and margin only — no tick, side bar, or short rule (Kami Invariant #9) */
 .summary-content h3.summary-section-title {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: var(--accent-primary);
-    margin-top: 1.4rem;
-    margin-bottom: 0.65rem;
-    padding-left: 0.75rem;
-    border-left: 4px solid var(--accent-primary);
+    font-family: var(--serif);
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.28;
+    color: var(--near-black);
+    margin-top: 32px;
+    margin-bottom: 10px;
+    padding: 0;
+    border: none;
 }
 
 .summary-content p.summary-paragraph {
-    line-height: 1.85;
-    margin-bottom: 1rem;
-    color: var(--text-primary);
-    text-align: justify;
+    font-family: var(--serif);
+    font-weight: 400;
+    line-height: 1.62;
+    margin-top: 0;
+    margin-bottom: 16px;
+    color: var(--dark-warm);
+    text-align: left;
 }
 
 .news-ref-link {
     display: inline-block;
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: var(--accent-primary);
-    background: rgba(37, 99, 235, 0.1);
+    font-family: var(--serif);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--brand);
+    background: var(--tag-bg);
     padding: 1px 6px;
-    border-radius: 4px;
-    margin: 0 2px;
+    border-radius: 3px;
+    margin: 0 3px;
     text-decoration: none;
-    transition: all 0.15s ease;
+    letter-spacing: 0.2px;
+    vertical-align: baseline;
+    transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .news-ref-link:hover {
-    background: var(--accent-primary);
-    color: #ffffff;
+    background: var(--brand);
+    color: #faf9f5;
 }
 
-/* Agent 流水线节点动画 */
-.agent-node {
-    transition: all 0.25s ease;
+/* ========== Telemetry Log & Code Blocks ========== */
+
+.kami-code-block {
+    background: var(--inline-code-bg);
+    color: var(--dark-warm);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    border-radius: 6px;
+    padding: 14px 18px;
 }
 
-.agent-node.active {
-    border-color: #3b82f6;
-    background: rgba(59, 130, 246, 0.12);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+/* ========== Modals ========== */
+
+.kami-modal-backdrop {
+    background: rgba(20, 20, 19, 0.55);
 }
 
-.agent-node.done {
-    border-color: #10b981;
-    background: rgba(16, 185, 129, 0.1);
+.kami-modal-surface {
+    background: var(--parchment);
+    color: var(--near-black);
+    border: 1px solid var(--line);
+    border-radius: 8px;
 }
 
-/* 滚动条美化 */
+/* ========== Scrollbars ========== */
+
 ::-webkit-scrollbar {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-    background: transparent;
+    background: var(--parchment);
 }
 
 ::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.4);
-    border-radius: 9999px;
+    background: var(--line);
+    border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(148, 163, 184, 0.7);
+    background: var(--stone);
 }
