@@ -236,7 +236,27 @@ async function startServer() {
             stateManager.set('allEnhancedNews', currentNewsData, false);
         }
 
-        const finalNewsData = stateManager.get('newsData');
+        let finalNewsData = stateManager.get('newsData');
+        if (Array.isArray(finalNewsData) && finalNewsData.length > 1 && aiService) {
+            const fixedMeta = finalNewsData.map(item => ({
+                ...item,
+                region: aiService.determineNewsRegionSync(
+                    `${item.title || ''} ${item.translatedTitle || ''}`,
+                    `${item.description || ''} ${item.summary || ''}`,
+                    item.source?.name || '',
+                    item.region
+                ),
+                category: aiService.determineNewsCategorySync(
+                    `${item.title || ''} ${item.translatedTitle || ''}`,
+                    `${item.description || ''} ${item.summary || ''}`,
+                    item.source?.category || '',
+                    item.category
+                )
+            }));
+            const deduped = aiService.mergeDuplicateArticlesSync(fixedMeta);
+            finalNewsData = deduped;
+            stateManager.updateNewsData(deduped, deduped);
+        }
         logger.info('SYSTEM', '本地新闻库加载完成', {
             count: finalNewsData?.length || 0
         });
@@ -264,34 +284,32 @@ async function startServer() {
             app.locals.services = services;
             scheduleManager.start();
 
-            // 启动自愈：如果本地已缓存的新闻存在未翻译的英文条目或缺失配图，后台自动补全汉化与标题图
+            // 启动自愈：如果本地已缓存的新闻存在未翻译的英文条目或缺失配图，后台自动补全汉化、去重与标题图
             if (Array.isArray(finalNewsData) && finalNewsData.length > 0 && services.aiService && services.newsAgentService) {
                 const hasUntranslated = finalNewsData.some(item => !services.aiService.isChineseText(item.translatedTitle) || !services.aiService.isChineseText(item.summary));
                 const hasMissingImages = finalNewsData.some(item => !item.urlToImage);
-                if (hasUntranslated || hasMissingImages) {
-                    setImmediate(async () => {
-                        try {
-                            logger.info('SYSTEM', '检测到本地缓存新闻包含未汉化或无配图条目，正在后台自动补全...');
-                            let updatedList = [...finalNewsData];
-                            if (hasUntranslated) {
-                                updatedList = await services.aiService.ensureBatchInChinese(updatedList, 6);
-                            }
-                            if (hasMissingImages) {
-                                await services.newsAgentService._enrichMissingArticleImages(updatedList);
-                            }
-                            await services.newsAgentService._publishNewsSnapshot(
-                                updatedList,
-                                updatedList,
-                                stateManager.get('sourceStats') || [],
-                                new Date(stateManager.get('lastUpdated') || Date.now()),
-                                'completed'
-                            );
-                            logger.info('SYSTEM', '本地缓存新闻自动汉化与配图补全完成');
-                        } catch (e) {
-                            logger.warn('SYSTEM', `缓存新闻自动补全异常: ${e.message}`);
+                setImmediate(async () => {
+                    try {
+                        let updatedList = [...finalNewsData];
+                        if (hasUntranslated) {
+                            logger.info('SYSTEM', '检测到本地缓存新闻包含未汉化条目，正在后台自动补全...');
+                            updatedList = await services.aiService.ensureBatchInChinese(updatedList, 6);
+                            updatedList = services.aiService.mergeDuplicateArticlesSync(updatedList);
                         }
-                    });
-                }
+                        if (hasMissingImages) {
+                            await services.newsAgentService._enrichMissingArticleImages(updatedList);
+                        }
+                        await services.newsAgentService._publishNewsSnapshot(
+                            updatedList,
+                            updatedList,
+                            stateManager.get('sourceStats') || [],
+                            new Date(stateManager.get('lastUpdated') || Date.now()),
+                            'completed'
+                        );
+                    } catch (e) {
+                        logger.warn('SYSTEM', `缓存新闻自动补全异常: ${e.message}`);
+                    }
+                });
             }
         });
 

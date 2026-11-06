@@ -459,8 +459,143 @@ async function extractFullArticleContent(url, options = {}) {
     }
 
     const isGoogleNewsRedirect = url.includes('news.google.com/rss/articles/');
+    const fastTimeout = Math.min(options.timeout || 6500, 7500);
+    let partialLocalResult = null;
 
-    // 策略 A: 使用 Jina Reader (r.jina.ai) 获取干净的 Markdown 正文
+    // 策略 A (首选秒级直连): 本地 HTTP + JSON-LD articleBody + Cheerio Readability 正文抽取
+    try {
+        const response = await axios.get(url, {
+            timeout: fastTimeout,
+            maxRedirects: 5,
+            httpsAgent: httpsAgentIgnoreTls,
+            headers: {
+                'User-Agent': config.webScraping.userAgent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8'
+            }
+        });
+
+        const html = response.data;
+        if (typeof html === 'string' && html.length > 100) {
+            const $ = cheerio.load(html);
+            const resolvedUrl = response.request?.res?.responseUrl || url;
+
+            const rawOgImage =
+                $('meta[property="og:image"]').attr('content') ||
+                $('meta[property="og:image:secure_url"]').attr('content') ||
+                $('meta[property="og:image:url"]').attr('content') ||
+                $('meta[name="twitter:image"]').attr('content') ||
+                $('meta[name="twitter:image:src"]').attr('content') ||
+                $('link[rel="image_src"]').attr('href') ||
+                $('article img').first().attr('src') ||
+                null;
+
+            const imageUrl = normalizeValidImageUrl(rawOgImage, resolvedUrl);
+            const publishedTime = $('meta[property="article:published_time"]').attr('content') || null;
+
+            // 先从 JSON-LD 结构化数据中提取完整 articleBody（CNA、SCMP、BBC、卫报等权威外媒常将全文存于此处）
+            let jsonLdBody = '';
+            $('script[type="application/ld+json"]').each((_, el) => {
+                if (jsonLdBody.length >= 400) return;
+                try {
+                    const rawJson = $(el).html();
+                    if (!rawJson) return;
+                    const bodyMatch = rawJson.match(/"articleBody"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
+                    if (bodyMatch && bodyMatch[1]) {
+                        const decoded = JSON.parse(`"${bodyMatch[1]}"`);
+                        const cleanedLd = stripHtml(decoded).trim();
+                        if (cleanedLd.length > jsonLdBody.length) {
+                            jsonLdBody = cleanedLd;
+                        }
+                    }
+                } catch (_) {}
+            });
+
+            $('script, style, noscript, iframe, nav, footer, header, aside, form, .ad, .advertisement, .social-share, .related-articles, .newsletter').remove();
+
+            const pageTitle =
+                $('meta[property="og:title"]').attr('content') ||
+                $('h1').first().text().trim() ||
+                $('title').text().trim();
+
+            const metaDesc =
+                $('meta[property="og:description"]').attr('content') ||
+                $('meta[name="description"]').attr('content') ||
+                '';
+
+            const selectors = [
+                'article [itemprop="articleBody"] p',
+                '[itemprop="articleBody"] p',
+                'article .article-body p',
+                'article .story-body p',
+                'article .text-long p',
+                'article .c-article-body p',
+                'article p',
+                'main article p',
+                '.article-content p',
+                '.post-content p',
+                '.entry-content p',
+                'main p'
+            ];
+
+            let paragraphs = [];
+            for (const sel of selectors) {
+                const found = [];
+                $(sel).each((_, el) => {
+                    const txt = $(el).text().replace(/\s+/g, ' ').trim();
+                    if (txt.length >= 28 && !/^(Read more|Subscribe|Sign up|Copyright|All rights reserved|Advertisement|Follow us)/i.test(txt)) {
+                        found.push(txt);
+                    }
+                });
+                if (found.join('\n\n').length >= 200) {
+                    paragraphs = found;
+                    break;
+                }
+            }
+
+            if (paragraphs.length === 0) {
+                $('p').each((_, el) => {
+                    const txt = $(el).text().replace(/\s+/g, ' ').trim();
+                    if (txt.length >= 40 && !/^(Read more|Subscribe|Sign up|Copyright|All rights reserved)/i.test(txt)) {
+                        paragraphs.push(txt);
+                    }
+                });
+            }
+
+            const domBodyText = paragraphs.join('\n\n').trim();
+            const bestBodyText = (domBodyText.length >= jsonLdBody.length ? domBodyText : jsonLdBody) || stripHtml(metaDesc);
+
+            if (bestBodyText && bestBodyText.length >= 220) {
+                const result = {
+                    success: true,
+                    url: resolvedUrl,
+                    title: pageTitle,
+                    content: truncateText(bestBodyText, options.maxLength || 4500, ''),
+                    excerpt: truncateText(bestBodyText, 350),
+                    imageUrl,
+                    publishedTime,
+                    method: 'cheerio_readability'
+                };
+                fullTextCache.set(url, result);
+                return result;
+            } else if (bestBodyText && bestBodyText.length >= 60) {
+                partialLocalResult = {
+                    success: true,
+                    url: resolvedUrl,
+                    title: pageTitle,
+                    content: truncateText(bestBodyText, options.maxLength || 4500, ''),
+                    excerpt: truncateText(bestBodyText, 350),
+                    imageUrl,
+                    publishedTime,
+                    method: 'cheerio_readability'
+                };
+            }
+        }
+    } catch (htmlError) {
+        logger.debug('AGENT_TOOL', `本地正文提取未命中 (${url.substring(0, 60)}): ${htmlError.message}`);
+    }
+
+    // 策略 B (穿透增强回退): 当本地直连受反爬限制或正文较短时，调用 Jina Reader (严格限时 5.5 秒，绝不卡死)
     if (config.agent.jinaReaderEnabled && !isGoogleNewsRedirect) {
         try {
             const jinaUrl = `https://r.jina.ai/${url}`;
@@ -473,7 +608,7 @@ async function extractFullArticleContent(url, options = {}) {
             }
 
             const response = await axios.get(jinaUrl, {
-                timeout: options.timeout || 15000,
+                timeout: 5500,
                 httpsAgent: httpsAgentIgnoreTls,
                 headers
             });
@@ -515,118 +650,21 @@ async function extractFullArticleContent(url, options = {}) {
                     title,
                     content: truncateText(cleanedContent, options.maxLength || 4500, ''),
                     excerpt: truncateText(cleanedContent, 350),
-                    imageUrl,
-                    publishedTime,
+                    imageUrl: imageUrl || partialLocalResult?.imageUrl || null,
+                    publishedTime: publishedTime || partialLocalResult?.publishedTime || null,
                     method: 'jina_reader'
                 };
                 fullTextCache.set(url, result);
                 return result;
             }
         } catch (jinaError) {
-            logger.debug('AGENT_TOOL', `Jina全文提取未命中 (${url.substring(0, 60)}): ${jinaError.message}`);
+            logger.debug('AGENT_TOOL', `Jina全文提取跳过 (${url.substring(0, 60)}): ${jinaError.message}`);
         }
     }
 
-    // 策略 B: 本地 HTTP + Cheerio Readability 正文抽取
-    try {
-        const response = await axios.get(url, {
-            timeout: options.timeout || 12000,
-            maxRedirects: 5,
-            httpsAgent: httpsAgentIgnoreTls,
-            headers: {
-                'User-Agent': config.webScraping.userAgent,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8'
-            }
-        });
-
-        const html = response.data;
-        if (typeof html !== 'string') {
-            throw new Error('响应非HTML文本');
-        }
-
-        const $ = cheerio.load(html);
-        const resolvedUrl = response.request?.res?.responseUrl || url;
-
-        const rawOgImage =
-            $('meta[property="og:image"]').attr('content') ||
-            $('meta[property="og:image:secure_url"]').attr('content') ||
-            $('meta[property="og:image:url"]').attr('content') ||
-            $('meta[name="twitter:image"]').attr('content') ||
-            $('meta[name="twitter:image:src"]').attr('content') ||
-            $('link[rel="image_src"]').attr('href') ||
-            $('article img').first().attr('src') ||
-            null;
-
-        const imageUrl = normalizeValidImageUrl(rawOgImage, resolvedUrl);
-
-        $('script, style, noscript, iframe, nav, footer, header, aside, form, .ad, .advertisement, .social-share, .related-articles, .newsletter').remove();
-
-        const pageTitle =
-            $('meta[property="og:title"]').attr('content') ||
-            $('h1').first().text().trim() ||
-            $('title').text().trim();
-
-        const metaDesc =
-            $('meta[property="og:description"]').attr('content') ||
-            $('meta[name="description"]').attr('content') ||
-            '';
-
-        const selectors = [
-            'article [itemprop="articleBody"] p',
-            '[itemprop="articleBody"] p',
-            'article .article-body p',
-            'article .story-body p',
-            'article p',
-            'main article p',
-            '.article-content p',
-            '.post-content p',
-            '.entry-content p',
-            'main p'
-        ];
-
-        let paragraphs = [];
-        for (const sel of selectors) {
-            const found = [];
-            $(sel).each((_, el) => {
-                const txt = $(el).text().replace(/\s+/g, ' ').trim();
-                if (txt.length >= 35 && !/^(Read more|Subscribe|Sign up|Copyright|All rights reserved)/i.test(txt)) {
-                    found.push(txt);
-                }
-            });
-            if (found.join('\n\n').length >= 200) {
-                paragraphs = found;
-                break;
-            }
-        }
-
-        if (paragraphs.length === 0) {
-            $('p').each((_, el) => {
-                const txt = $(el).text().replace(/\s+/g, ' ').trim();
-                if (txt.length >= 45) {
-                    paragraphs.push(txt);
-                }
-            });
-        }
-
-        const bodyText = paragraphs.join('\n\n').trim() || stripHtml(metaDesc);
-
-        if (bodyText && bodyText.length >= 80) {
-            const result = {
-                success: true,
-                url: resolvedUrl,
-                title: pageTitle,
-                content: truncateText(bodyText, options.maxLength || 4500, ''),
-                excerpt: truncateText(bodyText, 350),
-                imageUrl,
-                publishedTime: $('meta[property="article:published_time"]').attr('content') || null,
-                method: 'cheerio_readability'
-            };
-            fullTextCache.set(url, result);
-            return result;
-        }
-    } catch (htmlError) {
-        logger.debug('AGENT_TOOL', `本地正文提取失败 (${url.substring(0, 60)}): ${htmlError.message}`);
+    if (partialLocalResult) {
+        fullTextCache.set(url, partialLocalResult);
+        return partialLocalResult;
     }
 
     return {

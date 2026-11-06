@@ -159,6 +159,8 @@ class NewsAgentService {
                 ...item,
                 urlToImage: item.urlToImage || topForImages[idx]?.urlToImage || null
             }));
+            // 二次中文语义聚类归并：将翻译为中文后显现出同题事件的多媒报道合并为一张卡片
+            candidatePool = this.aiService.mergeDuplicateArticlesSync(candidatePool);
 
             const preliminaryDisplay = candidatePool.slice(0, maxDisplayCount);
             const multiSourceEvents = candidatePool.filter(a => (a.sourceCount || 1) > 1).length;
@@ -523,47 +525,137 @@ class NewsAgentService {
     }
 
     /**
-     * 单篇外媒报道即时全文深读与深度解读
+     * 单篇外媒报道即时全文深读与深度解读（直连无队列阻塞 + 多源兜底提取 + 秒级多段中文精译）
      */
     async deepReadSingleArticle({ url, title = '', sourceName = '', existingSummary = '' }) {
         if (!url) {
             throw new Error('缺少新闻原文 URL');
         }
 
-        const extracted = await extractFullArticleContent(url, { timeout: 15000, maxLength: 4500 });
-        const rawBody = (extracted && extracted.success && extracted.content)
-            ? extracted.content
-            : existingSummary || title;
+        if (!this.deepReadResultCache) {
+            this.deepReadResultCache = new Map();
+        }
+        const cachedResult = this.deepReadResultCache.get(url);
+        if (cachedResult && cachedResult.analysisHtml) {
+            return { ...cachedResult, fromCache: true };
+        }
 
-        const buildFallbackTranslationHtml = async () => {
-            const zhBody = await this.aiService.translateTextToChinese(rawBody.slice(0, 1500));
+        // 1. 从内存状态库查找对应的完整新闻对象（获取已抽取的 fullTextContent、relatedSources、keyPoints 等）
+        const pool = this.stateManager?.get('allEnhancedNews') || this.stateManager?.get('newsData') || [];
+        const matchedArticle = pool.find(a => a && (a.url === url || (title && (a.translatedTitle === title || a.title === title)))) || null;
+
+        let extracted = null;
+        let extractionMethod = 'cheerio_readability';
+
+        if (matchedArticle?.fullTextContent && matchedArticle.fullTextContent.length >= 260) {
+            extracted = {
+                success: true,
+                content: matchedArticle.fullTextContent,
+                title: matchedArticle.title || title,
+                method: matchedArticle.deepReadMethod || 'cached_fulltext'
+            };
+            extractionMethod = extracted.method;
+        } else {
+            extracted = await extractFullArticleContent(url, { timeout: 6500, maxLength: 4200 });
+            if (extracted?.success && extracted.content) {
+                extractionMethod = extracted.method || 'cheerio_readability';
+                if (matchedArticle) {
+                    matchedArticle.fullTextContent = extracted.content;
+                }
+            }
+        }
+
+        // 2. 若主链接受防爬限制正文过短，自动尝试从同题交叉印证媒体 (relatedSources) 提取全文
+        if ((!extracted || !extracted.content || extracted.content.length < 200) && Array.isArray(matchedArticle?.relatedSources)) {
+            for (const rel of matchedArticle.relatedSources.slice(0, 2)) {
+                if (rel?.url && rel.url !== url) {
+                    const relExtracted = await extractFullArticleContent(rel.url, { timeout: 5500, maxLength: 4200 });
+                    if (relExtracted?.success && (relExtracted.content || '').length >= 200) {
+                        extracted = relExtracted;
+                        extractionMethod = `${relExtracted.method || 'readability'} (${rel.name || '交叉信源'})`;
+                        break;
+                    }
+                }
+            }
+        }
+
+        const fallbackContent = [
+            matchedArticle?.content || '',
+            matchedArticle?.description || '',
+            existingSummary || ''
+        ].filter(Boolean).sort((a, b) => b.length - a.length)[0] || title;
+
+        const rawBody = (extracted && extracted.success && extracted.content && extracted.content.length >= 100)
+            ? extracted.content
+            : fallbackContent;
+
+        const leadSummary = matchedArticle?.summary || existingSummary || '';
+        const keyPoints = Array.isArray(matchedArticle?.keyPoints) ? matchedArticle.keyPoints : [];
+        const relatedSources = Array.isArray(matchedArticle?.relatedSources) ? matchedArticle.relatedSources : [];
+
+        // 构造高可读性的结构化中文深读 HTML（即便大模型繁忙或超时，也能在 1 秒内呈现完整多段中文精译）
+        const buildStructuredTranslationHtml = async (preTranslatedBody = null) => {
+            const zhBody = preTranslatedBody || await this.aiService.translateParagraphsToChinese(rawBody, 3200);
+            const zhLead = leadSummary && this.aiService.isChineseText(leadSummary)
+                ? leadSummary
+                : await this.aiService.translateTextToChinese(leadSummary || title);
+
+            const parts = [];
+            if (zhLead) {
+                parts.push(`<h3 class="summary-section-title">核心导读</h3>`);
+                parts.push(`<p class="summary-paragraph">${stripHtml(zhLead)}</p>`);
+            }
+
+            if (keyPoints.length > 0) {
+                const kpItems = keyPoints.map(kp => `<li>${stripHtml(kp)}</li>`).join('');
+                parts.push(`<ul class="summary-list">${kpItems}</ul>`);
+            }
+
+            parts.push(`<h3 class="summary-section-title">全文核心段落精译</h3>`);
             const paragraphs = stripHtml(zhBody)
                 .split(/\n+/)
                 .map(p => p.trim())
-                .filter(Boolean)
+                .filter(p => p.length >= 12 && p !== stripHtml(zhLead))
                 .map(p => `<p class="summary-paragraph">${p}</p>`)
                 .join('');
-            return `<h3 class="summary-section-title">全文核心内容中文直译</h3>${paragraphs || `<p class="summary-paragraph">${stripHtml(zhBody)}</p>`}`;
+
+            parts.push(paragraphs || `<p class="summary-paragraph">${stripHtml(zhBody || zhLead)}</p>`);
+
+            if (relatedSources.length > 0) {
+                parts.push(`<h3 class="summary-section-title">多信源交叉印证 (${relatedSources.length + 1} 家权威媒体)</h3>`);
+                const relItems = relatedSources
+                    .map(r => `<li><strong>${stripHtml(r.name || '国际媒体')}</strong>：${stripHtml(r.title || '')}</li>`)
+                    .join('');
+                parts.push(`<ul class="summary-list">${relItems}</ul>`);
+            }
+
+            return parts.join('\n');
         };
 
+        // 并发启动：1) Google GTX 多段落全文秒级直译；2) 若配置了 AI Key，发起不进队列的限时深度解读 (10秒超时)
+        const fastParagraphTranslationPromise = this.aiService.translateParagraphsToChinese(rawBody, 3200);
+
         if (!this.aiService.getCurrentModelInfo().apiKeyConfigured) {
-            const analysisHtml = await buildFallbackTranslationHtml();
-            return {
+            const zhBody = await fastParagraphTranslationPromise;
+            const analysisHtml = await buildStructuredTranslationHtml(zhBody);
+            const finalRes = {
                 success: true,
                 url,
-                title,
-                sourceName,
-                extractionMethod: extracted?.method || 'fallback',
+                title: matchedArticle?.translatedTitle || title,
+                sourceName: matchedArticle?.source?.name || sourceName,
+                extractionMethod,
                 fullText: rawBody,
                 analysisHtml
             };
+            this.deepReadResultCache.set(url, finalRes);
+            return finalRes;
         }
 
-        const prompt = `你是一位资深国际新闻编译专家。请对以下来自 [${sourceName || '国际知名媒体'}] 的外媒报道进行全文深读与中文精译解读。
+        const prompt = `你是一位资深国际新闻编译专家。请对以下来自 [${sourceName || '国际知名媒体'}] 的报道进行全文深读与中文精译解读。
 
 新闻标题：${title || extracted?.title || ''}
 提取到的原文内容：
-${rawBody}
+${rawBody.slice(0, 2800)}
 
 请按以下结构输出（使用 ### 小标题）：
 ### 核心导读
@@ -571,35 +663,48 @@ ${rawBody}
 ### 全文核心内容精译
 （详实、流畅地将报道的核心段落、关键引语和数据编译为中文，保留关键人物与机构名称）
 ### 背景与深层解读
-（简明分析该报道背后的地缘政治、经济或产业背景）
+（简明分析该报道背后的地缘政治、经济、社会或产业背景）
 
 直接输出内容，不要包含 <think> 标签。`;
 
         try {
-            const analysisText = await this.aiService._callAI([{ role: 'user', content: prompt }]);
+            // 使用 bypassRateLimiter: true 绕过后台批量编译队列，且严格限时 11 秒，确保用户点击后绝不卡死
+            const analysisText = await this.aiService._callAI(
+                [{ role: 'user', content: prompt }],
+                null,
+                { bypassRateLimiter: true, maxRetries: 0, timeout: 11000 }
+            );
+            if (!analysisText || !this.aiService.isChineseText(analysisText)) {
+                throw new Error('模型返回内容非有效中文');
+            }
             const analysisHtml = this.aiService.convertSummaryToRichHtml(analysisText, []);
-            return {
+            const finalRes = {
                 success: true,
                 url,
-                title: title || extracted?.title || '',
-                sourceName,
-                extractionMethod: extracted?.success ? extracted.method : 'summary_fallback',
+                title: matchedArticle?.translatedTitle || title || extracted?.title || '',
+                sourceName: matchedArticle?.source?.name || sourceName,
+                extractionMethod,
                 fullText: rawBody,
                 analysisMarkdown: analysisText,
                 analysisHtml
             };
+            this.deepReadResultCache.set(url, finalRes);
+            return finalRes;
         } catch (err) {
-            logger.warn('AGENT', `单篇深读大模型调用降级，使用自动中文翻译: ${err.message}`);
-            const analysisHtml = await buildFallbackTranslationHtml();
-            return {
+            logger.info('AGENT', `单篇深读切换高速多段中文精译通道 (${err.message})`);
+            const zhBody = await fastParagraphTranslationPromise;
+            const analysisHtml = await buildStructuredTranslationHtml(zhBody);
+            const finalRes = {
                 success: true,
                 url,
-                title: title || extracted?.title || '',
-                sourceName,
-                extractionMethod: extracted?.success ? extracted.method : 'summary_fallback',
+                title: matchedArticle?.translatedTitle || title || extracted?.title || '',
+                sourceName: matchedArticle?.source?.name || sourceName,
+                extractionMethod,
                 fullText: rawBody,
                 analysisHtml
             };
+            this.deepReadResultCache.set(url, finalRes);
+            return finalRes;
         }
     }
 }

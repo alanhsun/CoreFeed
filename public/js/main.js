@@ -588,7 +588,7 @@ class CoreFeedApp {
     }
 
     /**
-     * 打开单篇外媒报道的 Jina Reader + 全文深读弹窗
+     * 打开单篇外媒报道的全文深读弹窗（即时呈现核心导读，并发拉取多段全文精译与深度解读）
      */
     async openDeepRead(encodedUrl, encodedTitle, encodedSource, encodedSummary) {
         const url = decodeURIComponent(encodedUrl || '');
@@ -609,38 +609,64 @@ class CoreFeedApp {
         if (sourceEl) sourceEl.textContent = sourceName;
         if (linkEl) linkEl.href = url;
 
+        const matchedItem = (this.news || []).find(item => item && (item.url === url || item.translatedTitle === title || item.title === title));
+        const keyPoints = Array.isArray(matchedItem?.keyPoints) ? matchedItem.keyPoints : [];
+
+        const instantLeadHtml = existingSummary ? `
+            <div class="summary-content mb-5">
+                <h3 class="summary-section-title">核心导读</h3>
+                <p class="summary-paragraph">${this.escapeHtml(existingSummary)}</p>
+                ${keyPoints.length > 0 ? `<ul class="summary-list">${keyPoints.map(kp => `<li>${this.escapeHtml(kp)}</li>`).join('')}</ul>` : ''}
+            </div>
+        ` : '';
+
         bodyEl.innerHTML = `
-            <div class="py-12 space-y-3">
-                <div class="kami-tag">JINA READER EXTRACTION</div>
-                <div class="text-base font-medium" style="color: var(--near-black);">正在通过 Jina Reader / Readability 穿透提取 [${this.escapeHtml(sourceName)}] 原文并精译...</div>
-                <p class="text-xs" style="color: var(--stone);">正在提取核心段落、关键数据与背景脉络</p>
+            ${instantLeadHtml}
+            <div class="p-5 rounded-xl border flex items-center gap-3.5" style="background: var(--bg-subtle); border-color: var(--border-subtle);">
+                <i class="fa-solid fa-spinner fa-spin text-lg" style="color: var(--brand);"></i>
+                <div>
+                    <div class="text-sm font-semibold" style="color: var(--text-primary);">正在实时提取 [${this.escapeHtml(sourceName)}] 报道全文并执行中文精译...</div>
+                    <div class="text-xs mt-0.5" style="color: var(--text-muted);">正在抽取原文完整段落、关键引语与背景脉络（通常需 2–8 秒）</div>
+                </div>
             </div>
         `;
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 22000);
 
         try {
             const res = await fetch('/api/agent/deep-read', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, title, sourceName, existingSummary })
+                body: JSON.stringify({ url, title, sourceName, existingSummary }),
+                signal: controller.signal
             });
+            clearTimeout(timeoutId);
             const data = await res.json();
             if (!res.ok || !data.success) {
-                throw new Error(data.message || '全文深读失败');
+                throw new Error(data.message || '全文深读请求失败');
             }
 
             bodyEl.innerHTML = `
                 <div class="space-y-6">
                     <div class="summary-content">
-                        ${data.analysisHtml || ''}
+                        ${data.analysisHtml || instantLeadHtml}
                     </div>
                     <details class="kami-code-block text-xs">
-                        <summary class="cursor-pointer font-medium" style="color: var(--olive);">查看抓取到的外媒原文摘录 (提取方式: ${this.escapeHtml(data.extractionMethod || 'auto')})</summary>
-                        <pre class="mt-3 whitespace-pre-wrap max-h-60 overflow-y-auto" style="font-family: var(--serif); color: var(--dark-warm);">${this.escapeHtml(data.fullText || '')}</pre>
+                        <summary class="cursor-pointer font-medium" style="color: var(--text-secondary);">查看抓取到的外媒原文摘录 (提取引擎: ${this.escapeHtml(data.extractionMethod || 'readability')})</summary>
+                        <pre class="mt-3 whitespace-pre-wrap max-h-60 overflow-y-auto" style="font-family: var(--sans); color: var(--text-secondary);">${this.escapeHtml(data.fullText || '')}</pre>
                     </details>
                 </div>
             `;
         } catch (err) {
-            bodyEl.innerHTML = `<div class="p-6" style="color: var(--dark-warm);">深读失败：${this.escapeHtml(err.message)}</div>`;
+            clearTimeout(timeoutId);
+            const errMsg = err.name === 'AbortError' ? '外媒原站响应超时，已为您展示核心编译摘要' : err.message;
+            bodyEl.innerHTML = `
+                ${instantLeadHtml}
+                <div class="p-4 rounded-lg text-xs" style="background: var(--bg-subtle); color: var(--text-secondary);">
+                    提示：${this.escapeHtml(errMsg)}。您可以点击右下角“阅读外媒原文”直接访问原报道页面。
+                </div>
+            `;
         }
     }
 

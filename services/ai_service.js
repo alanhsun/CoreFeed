@@ -87,7 +87,7 @@ class AIService {
      * 底层大模型调用 (使用 axios + TLS 容错，全面兼容自建反代与 OpenAI/Gemini 网关)
      */
     async _callAI(messages, model = null, options = {}) {
-        const { priority = 5, timeout = 90000 } = options;
+        const { priority = 5, timeout = 90000, bypassRateLimiter = false, maxRetries = 2 } = options;
 
         this.refreshConfig();
 
@@ -97,7 +97,7 @@ class AIService {
 
         const modelToUse = model || this.modelConfig.model;
 
-        return await this.rateLimiter.execute(async () => {
+        const doRequest = async () => {
             const headers = {
                 'Authorization': `Bearer ${this.modelConfig.apiKey}`,
                 'Content-Type': 'application/json',
@@ -141,7 +141,13 @@ class AIService {
                 : (msg.content || msg.reasoning_content || '');
 
             return this._cleanAIResponse(rawContent);
-        }, { priority, maxRetries: 2 });
+        };
+
+        if (bypassRateLimiter) {
+            return await doRequest();
+        }
+
+        return await this.rateLimiter.execute(doRequest, { priority, maxRetries });
     }
 
     /**
@@ -194,22 +200,28 @@ class AIService {
 
     /**
      * 跨信源事件聚类与去重 (Event Clustering & Cross-Source Verification)
-     * 将同一事件来自不同名媒（如路透、BBC、NYT）的报道合并为 relatedSources
+     * 支持英文词干/同义词归一化、中文双字词(Bigram)与实体数字重合度、以及翻译后二次归并
      */
     async removeDuplicateNewsWithAI(articles) {
+        return this.mergeDuplicateArticlesSync(articles);
+    }
+
+    mergeDuplicateArticlesSync(articles) {
         if (!articles || articles.length <= 1) return articles || [];
 
         const clusters = this._clusterArticlesBySimilarity(articles);
-        logger.info('AI', `跨信源事件预聚类: ${articles.length} 篇报道聚合为 ${clusters.length} 个独立事件簇`);
+        logger.info('AI', `跨信源事件聚类去重: ${articles.length} 篇报道聚合为 ${clusters.length} 个独立事件簇`);
 
         const curatedList = [];
 
         for (const cluster of clusters) {
             if (cluster.length === 1) {
+                const single = cluster[0];
+                const existingRelated = Array.isArray(single.relatedSources) ? single.relatedSources : [];
                 curatedList.push({
-                    ...cluster[0],
-                    relatedSources: [],
-                    sourceCount: 1
+                    ...single,
+                    relatedSources: existingRelated,
+                    sourceCount: 1 + existingRelated.length
                 });
             } else {
                 const sorted = [...cluster].sort((a, b) => {
@@ -224,16 +236,35 @@ class AIService {
                 const seenOutlets = new Set([primary.source?.name]);
                 const relatedSources = [];
 
+                // 先保留主报道已有的 relatedSources
+                if (Array.isArray(primary.relatedSources)) {
+                    for (const rel of primary.relatedSources) {
+                        if (rel && rel.name && !seenOutlets.has(rel.name)) {
+                            seenOutlets.add(rel.name);
+                            relatedSources.push(rel);
+                        }
+                    }
+                }
+
                 for (const other of sorted.slice(1)) {
                     const outlet = other.source?.name || '其他媒体';
                     if (!seenOutlets.has(outlet)) {
                         seenOutlets.add(outlet);
                         relatedSources.push({
                             name: outlet,
-                            title: other.title,
+                            title: other.translatedTitle || other.title,
                             url: other.url,
                             publishedAt: other.publishedAt
                         });
+                    }
+                    // 合并被归并报道中已有的 relatedSources
+                    if (Array.isArray(other.relatedSources)) {
+                        for (const subRel of other.relatedSources) {
+                            if (subRel && subRel.name && !seenOutlets.has(subRel.name)) {
+                                seenOutlets.add(subRel.name);
+                                relatedSources.push(subRel);
+                            }
+                        }
                     }
                     if (!primary.urlToImage && other.urlToImage) {
                         primary.urlToImage = other.urlToImage;
@@ -254,15 +285,22 @@ class AIService {
 
     _clusterArticlesBySimilarity(articles) {
         const clusters = [];
-        const threshold = 0.36;
+        const threshold = 0.30;
 
         const sorted = [...articles].sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
 
         for (const article of sorted) {
             let matchedCluster = null;
             for (const cluster of clusters) {
-                const sim = this._calculateSimilarity(article.title, cluster[0].title);
-                if (sim >= threshold) {
+                let isSameEvent = false;
+                for (const member of cluster) {
+                    const sim = this._calculateArticleSimilarity(article, member);
+                    if (sim >= threshold) {
+                        isSameEvent = true;
+                        break;
+                    }
+                }
+                if (isSameEvent) {
                     matchedCluster = cluster;
                     break;
                 }
@@ -276,30 +314,142 @@ class AIService {
         return clusters;
     }
 
+    /**
+     * 综合对比两篇报道的英文标题、中文译题与首段导语核心实体相似度
+     */
+    _calculateArticleSimilarity(a, b) {
+        if (!a || !b) return 0;
+        if (a.url && b.url && a.url === b.url) return 1;
+
+        const simEn = this._calculateSimilarity(a.title || '', b.title || '');
+        const hasZhA = a.translatedTitle && a.translatedTitle !== a.title && this.isChineseText(a.translatedTitle);
+        const hasZhB = b.translatedTitle && b.translatedTitle !== b.title && this.isChineseText(b.translatedTitle);
+        const simZh = (hasZhA && hasZhB) ? this._calculateSimilarity(a.translatedTitle, b.translatedTitle) : 0;
+
+        // 结合标题与前120字导语做交叉实体比对（防止一家媒体标题写人名、另一家把人名放在导语首句）
+        const leadA = `${a.title || ''} ${(a.description || '').slice(0, 120)}`;
+        const leadB = `${b.title || ''} ${(b.description || '').slice(0, 120)}`;
+        const simLead = this._calculateSimilarity(leadA, leadB) * 0.9;
+
+        return Math.max(simEn, simZh, simLead);
+    }
+
     _calculateSimilarity(str1, str2) {
         if (!str1 || !str2) return 0;
-        const stopWords = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'over', 'after', 'into', 'amid', 'says', 'new', 'how', 'why', 'what', 'who', 'are', 'was', 'were', 'has', 'have', 'had', 'will']);
-        const normalize = (s) => s.toLowerCase().replace(/[^\w\u4e00-\u9fa5\s]/g, ' ');
-        const s1 = normalize(str1);
-        const s2 = normalize(str2);
+
+        const stopWords = new Set([
+            'the', 'and', 'for', 'with', 'from', 'that', 'this', 'over', 'after', 'into', 'amid',
+            'says', 'said', 'say', 'new', 'how', 'why', 'what', 'who', 'are', 'was', 'were', 'has',
+            'have', 'had', 'will', 'would', 'could', 'should', 'about', 'more', 'than', 'most', 'some',
+            'out', 'off', 'near', 'under', 'between', 'during', 'before', 'since', 'while', 'where',
+            'when', 'been', 'being', 'their', 'there', 'they', 'them', 'his', 'her', 'its', 'our',
+            'news', 'report', 'reports', 'world', 'global', 'update', 'live', 'latest', 'watch', 'video'
+        ]);
+
+        const synonymMap = {
+            'kenyan': 'kenya', 'canadian': 'canada', 'american': 'us', 'usa': 'us', 'united': 'us',
+            'british': 'uk', 'britain': 'uk', 'england': 'uk', 'french': 'france', 'german': 'germany',
+            'japanese': 'japan', 'chinese': 'china', 'russian': 'russia', 'ukrainian': 'ukraine',
+            'israeli': 'israel', 'iranian': 'iran', 'palestinian': 'palestine', 'australian': 'australia',
+            'indian': 'india', 'korean': 'korea', 'mexican': 'mexico', 'brazilian': 'brazil',
+            'syrian': 'syria', 'lebanese': 'lebanon', 'egyptian': 'egypt', 'turkish': 'turkey',
+            'sentenced': 'jail', 'sentence': 'jail', 'jailed': 'jail', 'imprisoned': 'jail', 'prison': 'jail', 'convicted': 'jail',
+            'kills': 'death', 'killed': 'death', 'killing': 'death', 'dead': 'death', 'deaths': 'death',
+            'died': 'death', 'dies': 'death', 'murder': 'death', 'murdered': 'death', 'starvation': 'death', 'massacre': 'death',
+            'followers': 'victim', 'children': 'victim', 'victims': 'victim', 'disciples': 'victim',
+            'earthquake': 'quake', 'tremor': 'quake', 'seismic': 'quake', 'quakes': 'quake',
+            'strikes': 'attack', 'struck': 'attack', 'attacks': 'attack', 'attacked': 'attack', 'bombing': 'attack', 'raid': 'attack',
+            'negotiations': 'talks', 'summit': 'talks', 'ceasefire': 'talks', 'truce': 'talks',
+            'tariffs': 'tariff', 'duties': 'tariff', 'sanctions': 'sanction',
+            'plunges': 'drop', 'plunge': 'drop', 'drops': 'drop', 'falls': 'drop', 'slump': 'drop', 'tumbles': 'drop',
+            'surges': 'rise', 'surge': 'rise', 'soars': 'rise', 'jumps': 'rise', 'rallies': 'rise', 'gains': 'rise'
+        };
+
+        const stemWord = (w) => {
+            if (synonymMap[w]) return synonymMap[w];
+            let s = w;
+            if (s.length > 5 && s.endsWith('ing')) s = s.slice(0, -3);
+            else if (s.length > 5 && s.endsWith('ed')) s = s.slice(0, -2);
+            else if (s.length > 4 && s.endsWith('es') && !s.endsWith('ses')) s = s.slice(0, -2);
+            else if (s.length > 4 && s.endsWith('s') && !s.endsWith('ss') && !s.endsWith('us') && !s.endsWith('is')) s = s.slice(0, -1);
+            return synonymMap[s] || s;
+        };
+
+        const normalize = (s) => String(s)
+            .toLowerCase()
+            .replace(/u\.s\.a?\.?/g, ' us ')
+            .replace(/u\.k\.?/g, ' uk ')
+            .replace(/e\.u\.?/g, ' eu ')
+            .replace(/u\.n\.?/g, ' un ')
+            .replace(/['’]s\b/g, ' ')
+            .replace(/[^\w\u4e00-\u9fa5.\s]/g, ' ');
+
+        const s1 = normalize(str1).trim();
+        const s2 = normalize(str2).trim();
+        if (!s1 || !s2) return 0;
         if (s1 === s2) return 1;
 
-        const isZh = /[\u4e00-\u9fa5]/.test(s1) || /[\u4e00-\u9fa5]/.test(s2);
-        const tokenize = (s) => isZh
-            ? s.replace(/\s+/g, '').split('')
-            : s.split(/\s+/).filter(t => t.length > 2 && !stopWords.has(t));
+        const isZh = /[\u4e00-\u9fa5]/.test(s1) && /[\u4e00-\u9fa5]/.test(s2);
 
-        const t1 = tokenize(s1);
-        const t2 = tokenize(s2);
+        const tokenizeEn = (s) => {
+            const keepShort = new Set(['us', 'uk', 'eu', 'un', 'ai', 'ev']);
+            return s
+                .replace(/\.(?!\d)/g, ' ')
+                .split(/\s+/)
+                .map(t => t.trim())
+                .filter(t => (t.length > 2 || keepShort.has(t) || /^\d+(\.\d+)?$/.test(t)) && !stopWords.has(t))
+                .map(stemWord);
+        };
+
+        const tokenizeZh = (s) => {
+            const zhStopChars = /[的了在是被因与和及或将已对从向为以于由把让给但而并又更最很也还就都却正曾名个位次年日号月]/g;
+            const cleaned = s.replace(zhStopChars, ' ');
+            const tokens = [];
+            // 提取所有数字（如 200、190、6.1）
+            const nums = cleaned.match(/\d+(\.\d+)?/g) || [];
+            tokens.push(...nums);
+            // 提取中文双字词 (2-gram)
+            const zhChunks = cleaned.match(/[\u4e00-\u9fa5]+/g) || [];
+            for (const chunk of zhChunks) {
+                if (chunk.length === 1) {
+                    tokens.push(chunk);
+                } else {
+                    for (let i = 0; i < chunk.length - 1; i++) {
+                        tokens.push(chunk.slice(i, i + 2));
+                    }
+                }
+            }
+            return tokens;
+        };
+
+        const t1 = isZh ? tokenizeZh(s1) : tokenizeEn(s1);
+        const t2 = isZh ? tokenizeZh(s2) : tokenizeEn(s2);
         if (!t1.length || !t2.length) return 0;
 
         const set1 = new Set(t1);
         const set2 = new Set(t2);
         let inter = 0;
+        let sharedNumOrKey = 0;
         for (const x of set1) {
-            if (set2.has(x)) inter++;
+            if (set2.has(x)) {
+                inter++;
+                if (/^\d+(\.\d+)?$/.test(x) || x.length >= 6) {
+                    sharedNumOrKey++;
+                }
+            }
         }
-        return inter / (set1.size + set2.size - inter);
+        if (inter === 0) return 0;
+
+        const jaccard = inter / (set1.size + set2.size - inter);
+        const minSize = Math.min(set1.size, set2.size);
+        const overlap = minSize >= 3 ? inter / minSize : jaccard;
+
+        // 当两条新闻共享至少3个核心词（或2个核心词+关键数字/长专有名词）时，融合 Jaccard 与 Overlap 评分
+        let score = jaccard * 0.65 + overlap * 0.35;
+        if (inter >= 3 && sharedNumOrKey >= 1) {
+            score += 0.06;
+        }
+        return Math.min(1, score);
     }
 
     /**
@@ -365,30 +515,54 @@ class AIService {
     }
 
     determineNewsRegionSync(title = '', description = '', sourceName = '', fallbackRegion = null) {
-        const text = `${title} ${description}`.toLowerCase();
-        if (/\b(china|chinese|beijing|shanghai|shenzhen|hong kong|taiwan|taipei|scmp|xinhua)\b|中国|北京|上海|香港|台湾/.test(text)) return '中国';
-        if (/\b(u\.s\.|us|united states|america|washington|white house|biden|trump|pentagon|congress|senate|fed|wall street|california|new york)\b|美国|华盛顿|白宫|特朗普|拜登/.test(text)) return '美国';
-        if (/\b(europe|european|eu|uk|britain|british|london|france|french|paris|germany|german|berlin|ukraine|russia|russian|moscow|kyiv|nato|italy|spain)\b|欧洲|欧盟|英国|法国|德国|俄乌|俄罗斯|乌克兰/.test(text)) return '欧洲';
-        if (/\b(japan|japanese|tokyo|nhk|nikkei|yen|osaka)\b|日本|东京|日元/.test(text)) return '日本';
-        if (/\b(korea|korean|seoul|pyongyang|yonhap)\b|韩国|朝鲜|首尔/.test(text)) return '韩国';
-        if (/\b(israel|israeli|gaza|palestin|iran|iranian|tehran|middle east|saudi|syria|lebanon|hezbollah|hamas|yemen|red sea)\b|中东|以色列|加沙|伊朗|沙特|叙利亚|黎巴嫩/.test(text)) return '中东';
-        if (/\b(asean|singapore|vietnam|philippines|indonesia|malaysia|thailand|myanmar)\b|东南亚|新加坡|越南|菲律宾|印尼|泰国/.test(text)) return '东南亚';
-        if (/\b(australia|australian|sydney|canberra|new zealand)\b|澳洲|澳大利亚|新西兰/.test(text)) return '澳洲';
-        if (/\b(india|indian|new delhi|modi|pakistan|bangladesh)\b|印度|南亚|巴基斯坦/.test(text)) return '亚洲';
-        if (/\b(africa|african|nigeria|kenya|south africa|egypt|sudan)\b|非洲|埃及|南非/.test(text)) return '非洲';
-        if (/\b(brazil|mexico|argentina|latin america|colombia|chile|venezuela)\b|拉美|巴西|墨西哥|阿根廷/.test(text)) return '拉美';
+        const matchRegion = (t) => {
+            if (!t) return null;
+            const text = String(t).toLowerCase();
+            if (/\b(china|chinese|beijing|shanghai|shenzhen|hong kong|taiwan|taipei|xinhua)\b|中国|北京|上海|香港|台湾/.test(text)) return '中国';
+            if (/\b(japan|japanese|tokyo|nhk|nikkei|yen|osaka|hokkaido|fukushima)\b|日本|东京|大阪|日元/.test(text)) return '日本';
+            if (/\b(korea|korean|seoul|pyongyang|yonhap)\b|韩国|朝鲜|首尔|平壤/.test(text)) return '韩国';
+            if (/\b(israel|israeli|gaza|palestin|iran|iranian|tehran|middle east|saudi|syria|lebanon|hezbollah|hamas|yemen|red sea|iraq|qatar)\b|中东|以色列|加沙|巴勒斯坦|伊朗|沙特|叙利亚|黎巴嫩|也门/.test(text)) return '中东';
+            if (/\b(africa|african|nigeria|kenya|kenyan|south africa|egypt|sudan|ethiopia|congo)\b|非洲|肯尼亚|尼日利亚|埃及|南非|苏丹/.test(text)) return '非洲';
+            if (/\b(asean|singapore|vietnam|philippines|indonesia|malaysia|thailand|myanmar)\b|东南亚|新加坡|越南|菲律宾|印尼|马来西亚|泰国|缅甸/.test(text)) return '东南亚';
+            if (/\b(australia|australian|sydney|canberra|new zealand)\b|澳洲|澳大利亚|新西兰|悉尼/.test(text)) return '澳洲';
+            if (/\b(india|indian|new delhi|modi|pakistan|bangladesh|sri lanka)\b|印度|南亚|巴基斯坦|孟加拉/.test(text)) return '亚洲';
+            if (/\b(brazil|mexico|argentina|latin america|colombia|chile|venezuela|peru)\b|拉美|巴西|墨西哥|阿根廷|智利|委内瑞拉/.test(text)) return '拉美';
+            if (/\b(europe|european|eu|uk|britain|british|london|france|french|paris|germany|german|berlin|ukraine|ukrainian|russia|russian|moscow|kyiv|nato|italy|spain|vatican|pope)\b|欧洲|欧盟|英国|伦敦|法国|巴黎|德国|俄乌|俄罗斯|乌克兰|莫斯科|梵蒂冈|教皇/.test(text)) return '欧洲';
+            if (/\b(u\.s\.|us|united states|america|american|washington|white house|biden|trump|pentagon|congress|senate|fed|wall street|california|new york|texas|florida)\b|美国|华盛顿|白宫|特朗普|拜登|五角大楼|华尔街/.test(text)) return '美国';
+            return null;
+        };
+
+        // 优先从新闻标题判定核心发生地（避免摘要中提及"据美国地质调查局测定，日本东京发生地震"被误判为美国）
+        const titleRegion = matchRegion(title);
+        if (titleRegion) return titleRegion;
+
+        const descRegion = matchRegion(description);
+        if (descRegion) return descRegion;
+
         if (fallbackRegion && VALID_REGIONS.includes(fallbackRegion)) return fallbackRegion;
         return '国际';
     }
 
     determineNewsCategorySync(title = '', description = '', sourceCategory = '', fallbackCategory = null) {
-        const text = `${title} ${description}`.toLowerCase();
-        if (/\b(ai|artificial intelligence|openai|chip|semiconductor|nvidia|apple|google|microsoft|cyber|software|quantum|robot|space|nasa|spacex|tech)\b|人工智能|芯片|半导体|科技|大模型|算力/.test(text)) return '科技';
-        if (/\b(market|stock|bond|inflation|fed|central bank|interest rate|gdp|tariff|trade|economy|economic|bank|invest|earnings|wall street|currency|bitcoin|crypto)\b|财经|金融|股市|汇率|央行|降息|通胀|关税|贸易|经济/.test(text)) return '财经';
-        if (/\b(oil|gas|opec|energy|solar|wind|nuclear power|battery|ev|climate|carbon)\b|能源|石油|天然气|核能|光伏|气候/.test(text)) return '能源';
-        if (/\b(military|missile|army|navy|defense|weapon|strike|war|troops|drone|air force|nuclear|pentagon|nato)\b|军事|导弹|国防|战机|航母|武装|空袭/.test(text)) return '军事';
-        if (/\b(summit|diploma|treaty|embassy|foreign minister|un|united nations|sanction|bilateral|talks|ceasefire|negotiation)\b|外交|峰会|会谈|制裁|联合国|停火|谈判/.test(text)) return '外交';
-        if (/\b(election|parliament|president|prime minister|government|policy|law|court|supreme court|vote|senate|congress)\b|政经|大选|议会|总统|总理|法案|政府/.test(text)) return '政经';
+        const matchCat = (t) => {
+            if (!t) return null;
+            const text = String(t).toLowerCase();
+            if (/\b(ai|artificial intelligence|openai|chip|semiconductor|nvidia|apple|google|microsoft|cyber|software|quantum|robot|space|nasa|spacex|tech)\b|人工智能|芯片|半导体|科技|大模型|算力|航天/.test(text)) return '科技';
+            if (/\b(market|stock|bond|inflation|fed|central bank|interest rate|gdp|tariff|trade|economy|economic|bank|invest|earnings|wall street|currency|bitcoin|crypto)\b|财经|金融|股市|汇率|央行|降息|通胀|关税|贸易|经济/.test(text)) return '财经';
+            if (/\b(oil|gas|opec|energy|solar|wind|nuclear power|battery|ev|climate|carbon)\b|能源|石油|天然气|核能|光伏|气候|碳排放/.test(text)) return '能源';
+            if (/\b(military|missile|army|navy|defense|weapon|strike|war|troops|drone|air force|pentagon|nato)\b|军事|导弹|国防|战机|航母|武装|空袭|军队/.test(text)) return '军事';
+            if (/\b(summit|diploma|treaty|embassy|foreign minister|united nations|sanction|bilateral|talks|ceasefire|negotiation)\b|外交|峰会|会谈|制裁|联合国|停火|谈判/.test(text)) return '外交';
+            if (/\b(earthquake|quake|tsunami|typhoon|hurricane|flood|wildfire|cult|murder|jailed|sentenced|prison|police|crime|crash|disaster)\b|社会|地震|海啸|台风|洪水|邪教|谋杀|获刑|判处|监禁|警方|事故|灾难/.test(text)) return '社会';
+            if (/\b(election|parliament|president|prime minister|government|policy|law|court|supreme court|vote|senate|congress)\b|政经|大选|议会|总统|总理|法案|政府|最高法院/.test(text)) return '政经';
+            return null;
+        };
+
+        const titleCat = matchCat(title);
+        if (titleCat) return titleCat;
+
+        const descCat = matchCat(description);
+        if (descCat) return descCat;
+
         if (sourceCategory === 'tech') return '科技';
         if (sourceCategory === 'finance') return '财经';
         if (fallbackCategory && VALID_CATEGORIES.includes(fallbackCategory)) return fallbackCategory;
@@ -419,6 +593,43 @@ class AIService {
             logger.debug('AI', `快速中文翻译回退请求异常: ${err.message}`);
         }
         return trimmed;
+    }
+
+    /**
+     * 多段落长文并发中文精译（供“全文深读”在1秒内完成整篇外媒报道的中文分段翻译）
+     */
+    async translateParagraphsToChinese(text, maxChars = 3200) {
+        if (!text || typeof text !== 'string') return '';
+        const sliced = text.trim().slice(0, maxChars);
+        if (!sliced) return '';
+        if (this.isChineseText(sliced)) return sliced;
+
+        const rawParas = sliced
+            .split(/\n{2,}|\r\n{2,}|\n/)
+            .map(p => p.trim())
+            .filter(p => p.length >= 20);
+
+        if (rawParas.length === 0) {
+            return await this.translateTextToChinese(sliced);
+        }
+
+        // 将段落打包为 <= 950 字符的块并发请求 Google GTX
+        const chunks = [];
+        let currentChunk = '';
+        for (const p of rawParas) {
+            if ((currentChunk + '\n\n' + p).length > 950 && currentChunk) {
+                chunks.push(currentChunk);
+                currentChunk = p;
+            } else {
+                currentChunk = currentChunk ? `${currentChunk}\n\n${p}` : p;
+            }
+        }
+        if (currentChunk) chunks.push(currentChunk);
+
+        const translatedChunks = await Promise.all(
+            chunks.slice(0, 4).map(chunk => this.translateTextToChinese(chunk, 7000))
+        );
+        return translatedChunks.filter(Boolean).join('\n\n');
     }
 
     /**
@@ -549,12 +760,13 @@ class AIService {
 
             if (typeof onBatchCompiled === 'function') {
                 try {
-                    await onBatchCompiled(compiledBatch, i, enhancedList);
+                    const deduplicatedCurrent = this.mergeDuplicateArticlesSync(enhancedList);
+                    await onBatchCompiled(compiledBatch, i, deduplicatedCurrent);
                 } catch (_) {}
             }
         }
 
-        return enhancedList;
+        return this.mergeDuplicateArticlesSync(enhancedList);
     }
 
     async _compileBatchWithLLM(batch) {
