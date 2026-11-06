@@ -284,7 +284,7 @@ async function startServer() {
             app.locals.services = services;
             scheduleManager.start();
 
-            // 启动自愈：如果本地已缓存的新闻存在未翻译的英文条目或缺失配图，后台自动补全汉化、去重与标题图
+            // 启动自愈：如果本地已缓存的新闻存在未翻译条目、同事件异题重复或缺失配图，后台自动补全汉化、AI语义去重与标题图
             if (Array.isArray(finalNewsData) && finalNewsData.length > 0 && services.aiService && services.newsAgentService) {
                 const hasUntranslated = finalNewsData.some(item => !services.aiService.isChineseText(item.translatedTitle) || !services.aiService.isChineseText(item.summary));
                 const hasMissingImages = finalNewsData.some(item => !item.urlToImage);
@@ -294,6 +294,10 @@ async function startServer() {
                         if (hasUntranslated) {
                             logger.info('SYSTEM', '检测到本地缓存新闻包含未汉化条目，正在后台自动补全...');
                             updatedList = await services.aiService.ensureBatchInChinese(updatedList, 6);
+                        }
+                        if (services.aiService.getCurrentModelInfo().apiKeyConfigured && updatedList.length > 1) {
+                            updatedList = await services.aiService.deduplicateWithLLM(updatedList, { maxInspect: 40, timeout: 25000 });
+                        } else {
                             updatedList = services.aiService.mergeDuplicateArticlesSync(updatedList);
                         }
                         if (hasMissingImages) {

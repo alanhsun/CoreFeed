@@ -138,7 +138,7 @@ class NewsAgentService {
                 ? this.newsService.filterAndCleanArticles(rawHarvested)
                 : this._basicCleanArticles(rawHarvested);
 
-            const clusteredArticles = await this.aiService.removeDuplicateNewsWithAI(cleanedArticles);
+            const clusteredArticles = this.aiService.mergeDuplicateArticlesSync(cleanedArticles);
             const rankedCandidates = await this.aiService.selectTopQualityNews(clusteredArticles, maxCandidatePool);
 
             // 选取进入展示与编译池的候选集，并立即赋予规则预判的地区、分类与初始摘要
@@ -159,7 +159,7 @@ class NewsAgentService {
                 ...item,
                 urlToImage: item.urlToImage || topForImages[idx]?.urlToImage || null
             }));
-            // 二次中文语义聚类归并：将翻译为中文后显现出同题事件的多媒报道合并为一张卡片
+            // 规则二次归并：将翻译为中文后显现出同题事件的多媒报道先行合并
             candidatePool = this.aiService.mergeDuplicateArticlesSync(candidatePool);
 
             const preliminaryDisplay = candidatePool.slice(0, maxDisplayCount);
@@ -173,27 +173,46 @@ class NewsAgentService {
             this.emitAgentEvent(
                 'Curator 聚类总编',
                 'curate_done',
-                `已即时展示 ${preliminaryDisplay.length} 条中文精选新闻（含 ${withImagesCount} 张高清题图、${multiSourceEvents} 个多媒交叉热点），正在后台启动全文深读与 AI 精编...`,
+                `已即时展示 ${preliminaryDisplay.length} 条中文精选新闻（含 ${withImagesCount} 张高清题图、${multiSourceEvents} 个多媒交叉热点），正在启动 AI 语义深度去重与精编...`,
                 { progress: 48, clusteredCount: clusteredArticles.length, selectedCount: candidatePool.length }
             );
 
-            // ==================== STAGE 3: DEEP-READER & COMPILER (全文深读、配图补全与渐进式批量编译) ====================
+            // ==================== STAGE 3: AI 语义深度去重、全文抽取与渐进式批量编译 ====================
+            const hasAiKey = this.aiService.getCurrentModelInfo().apiKeyConfigured;
 
+            const stage3PrepTasks = [];
+            if (hasAiKey) {
+                this.emitAgentEvent(
+                    'Curator 聚类总编',
+                    'ai_dedup',
+                    `正在调用 AI 大模型对 ${candidatePool.length} 条中英双语标题执行同事件深度语义去重...`,
+                    { progress: 52 }
+                );
+                stage3PrepTasks.push(
+                    this.aiService.deduplicateWithLLM(candidatePool, { maxInspect: 42, timeout: 28000 }).then(deduped => {
+                        candidatePool = deduped;
+                    })
+                );
+            }
             if (deepReadCount > 0) {
                 this.emitAgentEvent(
                     'Deep-Reader 深读员',
                     'deep_read',
-                    `正在使用 Jina Reader 与智能正文抽取器提取前 ${deepReadCount} 条核心焦点报道全文...`,
+                    `正在并发提取前 ${deepReadCount} 条核心焦点报道全文...`,
                     { progress: 55 }
                 );
-                await this._enrichTopArticlesWithFullText(candidatePool, deepReadCount);
+                stage3PrepTasks.push(this._enrichTopArticlesWithFullText(candidatePool, deepReadCount));
+            }
+            if (stage3PrepTasks.length > 0) {
+                await Promise.all(stage3PrepTasks);
+                // AI 语义去重完成后立即刷新一次前端快照，让同事件卡片即时合并
+                await this._publishNewsSnapshot(candidatePool.slice(0, maxDisplayCount), candidatePool, sourceStats, new Date(), 'collected');
             }
 
             if (this.stateManager) {
                 this.stateManager.set('collectionPhase', 'compiling');
             }
 
-            const hasAiKey = this.aiService.getCurrentModelInfo().apiKeyConfigured;
             let enhancedArticles = candidatePool;
 
             if (hasAiKey) {

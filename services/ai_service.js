@@ -199,88 +199,216 @@ class AIService {
     }
 
     /**
-     * 跨信源事件聚类与去重 (Event Clustering & Cross-Source Verification)
-     * 支持英文词干/同义词归一化、中文双字词(Bigram)与实体数字重合度、以及翻译后二次归并
+     * 跨信源事件聚类与去重 (两级混合引擎：第一级高速词干/双字词预聚类 + 第二级 AI 大模型深度语义同事件归并)
      */
-    async removeDuplicateNewsWithAI(articles) {
-        return this.mergeDuplicateArticlesSync(articles);
+    async removeDuplicateNewsWithAI(articles, options = {}) {
+        const preClustered = this.mergeDuplicateArticlesSync(articles);
+        if (!preClustered || preClustered.length <= 1) return preClustered || [];
+
+        if (options.skipLLM) {
+            return preClustered;
+        }
+        return await this.deduplicateWithLLM(preClustered, options);
+    }
+
+    /**
+     * 将同一事件簇中的多篇外媒报道合并为单张主卡片，并保留所有交叉印证信源 (relatedSources)
+     */
+    _mergeArticleCluster(cluster) {
+        if (!Array.isArray(cluster) || cluster.length === 0) return null;
+        if (cluster.length === 1) {
+            const single = cluster[0];
+            const existingRelated = Array.isArray(single.relatedSources) ? single.relatedSources : [];
+            return {
+                ...single,
+                relatedSources: existingRelated,
+                sourceCount: 1 + existingRelated.length
+            };
+        }
+
+        const sorted = [...cluster].sort((a, b) => {
+            const imgBonusA = (a.urlToImage ? 18 : 0) + (a.url && !a.url.includes('news.google.com') ? 10 : 0);
+            const imgBonusB = (b.urlToImage ? 18 : 0) + (b.url && !b.url.includes('news.google.com') ? 10 : 0);
+            const scoreA = getSourceAuthorityScore(a.source?.name) * 2 + Math.min(50, (a.content || '').length / 20) + imgBonusA;
+            const scoreB = getSourceAuthorityScore(b.source?.name) * 2 + Math.min(50, (b.content || '').length / 20) + imgBonusB;
+            return scoreB - scoreA;
+        });
+
+        const primary = { ...sorted[0] };
+        const seenOutlets = new Set([primary.source?.name]);
+        const relatedSources = [];
+
+        if (Array.isArray(primary.relatedSources)) {
+            for (const rel of primary.relatedSources) {
+                if (rel && rel.name && !seenOutlets.has(rel.name)) {
+                    seenOutlets.add(rel.name);
+                    relatedSources.push(rel);
+                }
+            }
+        }
+
+        for (const other of sorted.slice(1)) {
+            const outlet = other.source?.name || '其他媒体';
+            if (!seenOutlets.has(outlet)) {
+                seenOutlets.add(outlet);
+                relatedSources.push({
+                    name: outlet,
+                    title: other.translatedTitle || other.title,
+                    url: other.url,
+                    publishedAt: other.publishedAt
+                });
+            }
+            if (Array.isArray(other.relatedSources)) {
+                for (const subRel of other.relatedSources) {
+                    if (subRel && subRel.name && !seenOutlets.has(subRel.name)) {
+                        seenOutlets.add(subRel.name);
+                        relatedSources.push(subRel);
+                    }
+                }
+            }
+            if (!primary.urlToImage && other.urlToImage) {
+                primary.urlToImage = other.urlToImage;
+            }
+            if ((!Array.isArray(primary.keyPoints) || primary.keyPoints.length === 0) && Array.isArray(other.keyPoints) && other.keyPoints.length > 0) {
+                primary.keyPoints = other.keyPoints;
+            }
+            if ((primary.content || '').length < 250 && (other.content || '').length > (primary.content || '').length) {
+                primary.content = `${primary.content}\n\n[${outlet} 补充报道]: ${other.content}`;
+            }
+        }
+
+        primary.relatedSources = relatedSources;
+        primary.sourceCount = 1 + relatedSources.length;
+        return primary;
     }
 
     mergeDuplicateArticlesSync(articles) {
         if (!articles || articles.length <= 1) return articles || [];
 
         const clusters = this._clusterArticlesBySimilarity(articles);
-        logger.info('AI', `跨信源事件聚类去重: ${articles.length} 篇报道聚合为 ${clusters.length} 个独立事件簇`);
+        logger.info('AI', `跨信源事件规则聚类: ${articles.length} 篇报道聚合为 ${clusters.length} 个独立事件簇`);
 
-        const curatedList = [];
+        return clusters.map(cluster => this._mergeArticleCluster(cluster)).filter(Boolean);
+    }
 
-        for (const cluster of clusters) {
-            if (cluster.length === 1) {
-                const single = cluster[0];
-                const existingRelated = Array.isArray(single.relatedSources) ? single.relatedSources : [];
-                curatedList.push({
-                    ...single,
-                    relatedSources: existingRelated,
-                    sourceCount: 1 + existingRelated.length
-                });
-            } else {
-                const sorted = [...cluster].sort((a, b) => {
-                    const imgBonusA = (a.urlToImage ? 18 : 0) + (a.url && !a.url.includes('news.google.com') ? 10 : 0);
-                    const imgBonusB = (b.urlToImage ? 18 : 0) + (b.url && !b.url.includes('news.google.com') ? 10 : 0);
-                    const scoreA = getSourceAuthorityScore(a.source?.name) * 2 + Math.min(50, (a.content || '').length / 20) + imgBonusA;
-                    const scoreB = getSourceAuthorityScore(b.source?.name) * 2 + Math.min(50, (b.content || '').length / 20) + imgBonusB;
-                    return scoreB - scoreA;
-                });
+    /**
+     * AI 大模型深度语义事件聚类去重 (识别不同外媒从不同切入点、不同措辞报道的同一底层新闻事件)
+     */
+    async deduplicateWithLLM(articles, options = {}) {
+        const baseList = this.mergeDuplicateArticlesSync(articles);
+        if (!baseList || baseList.length <= 1) return baseList || [];
 
-                const primary = { ...sorted[0] };
-                const seenOutlets = new Set([primary.source?.name]);
-                const relatedSources = [];
-
-                // 先保留主报道已有的 relatedSources
-                if (Array.isArray(primary.relatedSources)) {
-                    for (const rel of primary.relatedSources) {
-                        if (rel && rel.name && !seenOutlets.has(rel.name)) {
-                            seenOutlets.add(rel.name);
-                            relatedSources.push(rel);
-                        }
-                    }
-                }
-
-                for (const other of sorted.slice(1)) {
-                    const outlet = other.source?.name || '其他媒体';
-                    if (!seenOutlets.has(outlet)) {
-                        seenOutlets.add(outlet);
-                        relatedSources.push({
-                            name: outlet,
-                            title: other.translatedTitle || other.title,
-                            url: other.url,
-                            publishedAt: other.publishedAt
-                        });
-                    }
-                    // 合并被归并报道中已有的 relatedSources
-                    if (Array.isArray(other.relatedSources)) {
-                        for (const subRel of other.relatedSources) {
-                            if (subRel && subRel.name && !seenOutlets.has(subRel.name)) {
-                                seenOutlets.add(subRel.name);
-                                relatedSources.push(subRel);
-                            }
-                        }
-                    }
-                    if (!primary.urlToImage && other.urlToImage) {
-                        primary.urlToImage = other.urlToImage;
-                    }
-                    if ((primary.content || '').length < 250 && (other.content || '').length > (primary.content || '').length) {
-                        primary.content = `${primary.content}\n\n[${outlet} 补充报道]: ${other.content}`;
-                    }
-                }
-
-                primary.relatedSources = relatedSources;
-                primary.sourceCount = 1 + relatedSources.length;
-                curatedList.push(primary);
-            }
+        this.refreshConfig();
+        if (!this.modelConfig.apiKey) {
+            return baseList;
         }
 
-        return curatedList;
+        const maxInspect = Math.min(baseList.length, options.maxInspect || 45);
+        const head = baseList.slice(0, maxInspect);
+        const tail = baseList.slice(maxInspect);
+
+        const itemsLines = head.map((item, idx) => {
+            const zh = item.translatedTitle && item.translatedTitle !== item.title ? item.translatedTitle : '';
+            const en = item.title || '';
+            const titleText = zh && en ? `${zh} | ${en}` : (zh || en);
+            const snippet = truncateText(item.summary || item.description || '', 65);
+            return `[#${idx + 1}] [${item.source?.name || 'Media'}] ${titleText}${snippet ? ` — ${snippet}` : ''}`;
+        }).join('\n');
+
+        const prompt = `你是一位资深国际新闻总编，请对以下 ${head.length} 条全球新闻执行“AI 语义同事件去重聚类”。
+
+严格判定规则：
+1. 仔细比对每条新闻的核心事实（涉及的人物/机构、核心地点、突发事件或政策决定）。
+2. 只要两条或多条新闻报道的是【同一个具体新闻事件】（哪怕不同外媒标题切入角度不同、英文用词不同、或伤亡/判刑等数字存在细微出入，例如“肯尼亚邪教头目因谋杀190名儿童被判200年”与“肯尼亚末日邪教头目因谋杀191名信徒获刑200年”、“东京近海6.1级地震”与“日本本州东岸海域发生地震”），都必须判定为同一事件并归入同一个编号数组！
+3. 注意区分：“同一具体事件的各方反应/多媒报道”（应合并）与“同一国家的不同独立事件”（不可合并）。
+4. 只输出存在重复的编号组（每组包含 2 个或以上的编号，对应 [#1] 到 [#${head.length}] 的数字）。如果没有任何重复事件，输出 {"duplicateGroups": []}。
+5. 严格只输出纯 JSON 对象，格式如下，严禁包含任何解释文字或 <think> 标签：
+{"duplicateGroups": [[1, 5], [3, 8, 12]]}
+
+待去重新闻列表：
+${itemsLines}`;
+
+        try {
+            const rawResponse = await this._callAI(
+                [{ role: 'user', content: prompt }],
+                null,
+                {
+                    priority: 8,
+                    timeout: options.timeout || 28000,
+                    bypassRateLimiter: Boolean(options.bypassRateLimiter),
+                    maxRetries: 1
+                }
+            );
+
+            const parsed = this._extractJson(rawResponse);
+            const rawGroups = Array.isArray(parsed)
+                ? parsed
+                : (parsed?.duplicateGroups || parsed?.clusters || parsed?.groups || []);
+
+            if (!Array.isArray(rawGroups) || rawGroups.length === 0) {
+                logger.info('AI', `🤖 AI 语义深度去重校验完成: 当前前 ${head.length} 条均为独立事件`);
+                return baseList;
+            }
+
+            // 使用并查集 (Union-Find) 合并 AI 识别出的同事件组（支持传递闭包归并）
+            const parent = Array.from({ length: head.length }, (_, i) => i);
+            const find = (x) => {
+                while (parent[x] !== x) {
+                    parent[x] = parent[parent[x]];
+                    x = parent[x];
+                }
+                return x;
+            };
+            const union = (a, b) => {
+                const ra = find(a);
+                const rb = find(b);
+                if (ra !== rb) {
+                    // 保持靠前（高分）条目的索引作为根
+                    if (ra < rb) parent[rb] = ra;
+                    else parent[ra] = rb;
+                }
+            };
+
+            for (const grp of rawGroups) {
+                if (!Array.isArray(grp) || grp.length < 2 || grp.length > 8) continue;
+                const validIndices = grp
+                    .map(v => parseInt(String(v).replace(/\D+/g, ''), 10) - 1)
+                    .filter(idx => !isNaN(idx) && idx >= 0 && idx < head.length);
+
+                if (validIndices.length >= 2) {
+                    const first = validIndices[0];
+                    for (let k = 1; k < validIndices.length; k++) {
+                        union(first, validIndices[k]);
+                    }
+                }
+            }
+
+            const clusterMap = new Map();
+            for (let i = 0; i < head.length; i++) {
+                const root = find(i);
+                if (!clusterMap.has(root)) {
+                    clusterMap.set(root, []);
+                }
+                clusterMap.get(root).push(head[i]);
+            }
+
+            const mergedHead = [];
+            for (const group of clusterMap.values()) {
+                mergedHead.push(this._mergeArticleCluster(group));
+            }
+
+            const removedCount = head.length - mergedHead.length;
+            if (removedCount > 0) {
+                logger.success('AI', `🤖 AI 语义深度去重成功: 额外识别并合并了 ${removedCount} 条同事件异题报道 (${head.length} -> ${mergedHead.length} 条)`);
+            } else {
+                logger.info('AI', `🤖 AI 语义深度去重校验完成: 未发现额外重复事件`);
+            }
+
+            return [...mergedHead, ...tail];
+        } catch (err) {
+            logger.warn('AI', `AI 语义深度去重跳过，保留规则聚类结果: ${err.message}`);
+            return baseList;
+        }
     }
 
     _clusterArticlesBySimilarity(articles) {
@@ -766,7 +894,7 @@ class AIService {
             }
         }
 
-        return this.mergeDuplicateArticlesSync(enhancedList);
+        return await this.deduplicateWithLLM(enhancedList, { maxInspect: 42, timeout: 25000 });
     }
 
     async _compileBatchWithLLM(batch) {
