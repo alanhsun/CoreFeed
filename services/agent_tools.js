@@ -5,10 +5,10 @@ const crypto = require('crypto');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { stripHtml, truncateText, isValidUrl, SimpleCache } = require('../utils/helpers');
-const { getGlobalSourceMatrix, getSourceAuthorityScore } = require('../config/global_sources');
+const { getSourceAuthorityScore } = require('../config/global_sources');
 
 const parser = new Parser({
-    timeout: 15000,
+    timeout: 10000,
     customFields: {
         feed: ['language', 'copyright'],
         item: ['media:content', 'media:thumbnail', 'enclosure', 'content:encoded', 'source']
@@ -29,10 +29,9 @@ function createArticleId(url, title = '') {
 /**
  * 清理 Google News 或 RSS 标题末尾自带的 " - Source Name" 后缀
  */
-function cleanHeadlineSuffix(title = '', sourceName = '') {
+function cleanHeadlineSuffix(title = '') {
     if (!title) return '';
     let cleaned = title.trim();
-    // 移除末尾形如 " - Reuters" / " | BBC News" 的媒体名后缀
     cleaned = cleaned.replace(/\s+[-|—]\s+[A-Za-z0-9\s.&'()/\u4e00-\u9fa5]{2,35}$/, '').trim();
     return cleaned || title.trim();
 }
@@ -69,7 +68,7 @@ function extractImageFromItem(item) {
 /**
  * 解析单个 RSS URL（优先使用 axios 获取并清洗 XML，再交由 rss-parser 解析）
  */
-async function parseRssUrlRobust(rssUrl, timeout = 15000) {
+async function parseRssUrlRobust(rssUrl, timeout = 10000) {
     try {
         const response = await axios.get(rssUrl, {
             timeout,
@@ -82,7 +81,6 @@ async function parseRssUrlRobust(rssUrl, timeout = 15000) {
         const cleanXml = sanitizeXmlString(response.data);
         return await parser.parseString(cleanXml);
     } catch (firstErr) {
-        // 回退到 rss-parser 原生 parseURL
         return await parser.parseURL(rssUrl);
     }
 }
@@ -107,11 +105,11 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
 
     try {
         if (source.rssUrl) {
-            feed = await parseRssUrlRobust(source.rssUrl, 16000);
+            feed = await parseRssUrlRobust(source.rssUrl, 10000);
         } else if (source.domain) {
             usedStrategy = 'gnews_proxy';
             const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '2d');
-            feed = await parseRssUrlRobust(proxyUrl, 16000);
+            feed = await parseRssUrlRobust(proxyUrl, 10000);
         }
     } catch (rssError) {
         // 如果直接 RSS 失败且配置了 domain，自动降级到 Google News Domain Proxy
@@ -120,7 +118,7 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
                 usedStrategy = 'gnews_proxy_fallback';
                 const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '2d');
                 logger.debug('AGENT_TOOL', `${sourceName} 直接RSS受阻，自动切换 Google News 站点代理: site:${source.domain}`);
-                feed = await parseRssUrlRobust(proxyUrl, 16000);
+                feed = await parseRssUrlRobust(proxyUrl, 10000);
             } catch (fallbackErr) {
                 logger.warn('AGENT_TOOL', `${sourceName} 代理采集亦失败: ${fallbackErr.message}`);
             }
@@ -143,8 +141,7 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
             let cleanDesc = stripHtml(rawDesc);
             let cleanContent = stripHtml(rawContent);
 
-            // Google News RSS 的 description 往往只有与标题重复的一句话，清理掉冗余
-            const cleanTitle = cleanHeadlineSuffix(item.title, sourceName);
+            const cleanTitle = cleanHeadlineSuffix(item.title);
             if (cleanDesc && cleanDesc.startsWith(cleanTitle)) {
                 cleanDesc = cleanDesc.substring(cleanTitle.length).replace(/^[\s\-|—:]+/, '').trim();
             }
@@ -179,7 +176,6 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
     // 如果没有 RSS 且开启了 Jina Reader，尝试通过 Jina 抓取列表页
     if (source.url && config.agent.jinaReaderEnabled) {
         try {
-            usedStrategy = 'jina_scrape';
             return await scrapeSourceListViaJina(source, maxItems);
         } catch (jinaErr) {
             logger.warn('AGENT_TOOL', `${sourceName} Jina列表采集失败: ${jinaErr.message}`);
@@ -202,11 +198,10 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
         headers['Authorization'] = `Bearer ${config.agent.jinaApiKey}`;
     }
 
-    const response = await axios.get(jinaUrl, { timeout: 20000, headers });
+    const response = await axios.get(jinaUrl, { timeout: 15000, headers });
     const markdown = String(response.data || '');
     if (!markdown) return [];
 
-    // 从 Markdown 中提取形如 [Headline](https://...) 的新闻链接
     const linkRegex = /\[([^\]]{18,160})\]\((https?:\/\/[^\s)]+)\)/g;
     const seenUrls = new Set();
     const articles = [];
@@ -216,7 +211,6 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
         const rawTitle = match[1].replace(/\s+/g, ' ').trim();
         const link = match[2].trim();
 
-        // 过滤非新闻路径
         if (
             seenUrls.has(link) ||
             /\/(login|signup|subscribe|privacy|terms|about|contact|author|tag|topic)\b/i.test(link) ||
@@ -228,7 +222,7 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
 
         articles.push({
             id: createArticleId(link, rawTitle),
-            title: cleanHeadlineSuffix(rawTitle, source.name),
+            title: cleanHeadlineSuffix(rawTitle),
             description: rawTitle,
             content: rawTitle,
             url: link,
@@ -266,7 +260,6 @@ async function extractFullArticleContent(url, options = {}) {
         return { ...cached, fromCache: true };
     }
 
-    // Google News 跳转链接不直接交给 Jina（因为 Google News 重定向页依赖 JS 跳转），优先尝试 Jina，若短则回退
     const isGoogleNewsRedirect = url.includes('news.google.com/rss/articles/');
 
     // 策略 A: 使用 Jina Reader (r.jina.ai) 获取干净的 Markdown 正文
@@ -282,7 +275,7 @@ async function extractFullArticleContent(url, options = {}) {
             }
 
             const response = await axios.get(jinaUrl, {
-                timeout: options.timeout || 18000,
+                timeout: options.timeout || 15000,
                 headers
             });
 
@@ -300,7 +293,6 @@ async function extractFullArticleContent(url, options = {}) {
                 if (titleMatch) title = titleMatch[1].trim();
             }
 
-            // 清理 Markdown 中的图片、导航链接噪音
             const cleanedContent = cleanExtractedMarkdown(content);
 
             if (cleanedContent && cleanedContent.length >= 150) {
@@ -324,7 +316,7 @@ async function extractFullArticleContent(url, options = {}) {
     // 策略 B: 本地 HTTP + Cheerio Readability 正文抽取
     try {
         const response = await axios.get(url, {
-            timeout: options.timeout || 15000,
+            timeout: options.timeout || 12000,
             maxRedirects: 5,
             headers: {
                 'User-Agent': config.webScraping.userAgent,
@@ -340,7 +332,6 @@ async function extractFullArticleContent(url, options = {}) {
 
         const $ = cheerio.load(html);
 
-        // 移除脚本、样式、导航、页脚、广告等无关节点
         $('script, style, noscript, iframe, nav, footer, header, aside, form, .ad, .advertisement, .social-share, .related-articles, .newsletter').remove();
 
         const pageTitle =
@@ -353,7 +344,6 @@ async function extractFullArticleContent(url, options = {}) {
             $('meta[name="description"]').attr('content') ||
             '';
 
-        // 按优先级寻找正文容器
         const selectors = [
             'article [itemprop="articleBody"] p',
             '[itemprop="articleBody"] p',
@@ -382,7 +372,6 @@ async function extractFullArticleContent(url, options = {}) {
             }
         }
 
-        // 如果仍未提取到足够段落，回退扫描所有 <p>
         if (paragraphs.length === 0) {
             $('p').each((_, el) => {
                 const txt = $(el).text().replace(/\s+/g, ' ').trim();
@@ -427,252 +416,11 @@ function cleanExtractedMarkdown(md = '') {
         .replace(/^Title:.*$/gm, '')
         .replace(/^URL Source:.*$/gm, '')
         .replace(/^Markdown Content:.*$/gm, '')
-        .replace(/!\[[^\]]*\]\([^)]+\)/g, '') // 移除图片标记
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // 保留链接锚文本，去掉URL噪音
-        .replace(/^[*\-+]\s+.{1,25}$/gm, '') // 移除短菜单项
+        .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/^[*\-+]\s+.{1,25}$/gm, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
-}
-
-/**
- * 工具 3: 按主题/关键词主动搜索全球知名媒体报道
- * @param {string} query - 搜索主题或关键词（支持中英文）
- * @param {Object} options - { maxResults, timeRange, authoritativeOnly, language }
- */
-async function searchGlobalNewsByTopic(query, options = {}) {
-    const {
-        maxResults = 15,
-        timeRange = '2d',
-        authoritativeOnly = false,
-        language = 'en'
-    } = options;
-
-    if (!query || !query.trim()) return [];
-
-    const results = [];
-    const isChineseQuery = /[\u4e00-\u9fa5]/.test(query);
-
-    // 1. Google News RSS 搜索（支持中英文与权威站点限定）
-    try {
-        let searchQuery = query.trim();
-        if (authoritativeOnly && !isChineseQuery) {
-            searchQuery += ' (site:reuters.com OR site:apnews.com OR site:bbc.com OR site:nytimes.com OR site:bloomberg.com OR site:theguardian.com OR site:scmp.com OR site:aljazeera.com OR site:ft.com OR site:cnbc.com)';
-        }
-        if (timeRange) {
-            searchQuery += ` when:${timeRange}`;
-        }
-
-        const hl = isChineseQuery ? 'zh-CN' : (language === 'zh' ? 'zh-CN' : 'en-US');
-        const gl = isChineseQuery ? 'CN' : 'US';
-        const ceid = isChineseQuery ? 'CN:zh-Hans' : 'US:en';
-
-        const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(searchQuery)}&hl=${hl}&gl=${gl}&ceid=${ceid}`;
-        const feed = await parseRssUrlRobust(rssUrl, 15000);
-
-        if (feed && Array.isArray(feed.items)) {
-            for (const item of feed.items.slice(0, maxResults)) {
-                // 提取 Google News 条目的真实来源名称
-                let outletName = 'Global Media';
-                if (item.source && typeof item.source === 'string') {
-                    outletName = item.source;
-                } else if (item.source && item.source._) {
-                    outletName = item.source._;
-                } else {
-                    const suffixMatch = (item.title || '').match(/\s+[-|—]\s+([A-Za-z0-9\s.&'()/\u4e00-\u9fa5]{2,35})$/);
-                    if (suffixMatch) outletName = suffixMatch[1].trim();
-                }
-
-                const cleanTitle = cleanHeadlineSuffix(item.title, outletName);
-                const desc = stripHtml(item.contentSnippet || item.description || cleanTitle);
-
-                results.push({
-                    id: createArticleId(item.link, cleanTitle),
-                    title: cleanTitle,
-                    description: truncateText(desc, 400),
-                    content: truncateText(desc, 1500),
-                    url: item.link,
-                    urlToImage: null,
-                    publishedAt: item.isoDate || item.pubDate || new Date().toISOString(),
-                    source: {
-                        id: 'gnews-search',
-                        name: outletName,
-                        authority: getSourceAuthorityScore(outletName),
-                        strategy: 'agent_search'
-                    },
-                    region: null
-                });
-            }
-        }
-    } catch (err) {
-        logger.warn('AGENT_TOOL', `Google News 主题检索失败 (${query}): ${err.message}`);
-    }
-
-    // 2. 如果配置了 NewsAPI，并行补充检索
-    if (config.news.newsApiEnabled && config.news.apiKey && results.length < maxResults) {
-        try {
-            const response = await axios.get('https://newsapi.org/v2/everything', {
-                params: {
-                    q: query,
-                    sortBy: 'publishedAt',
-                    pageSize: Math.min(10, maxResults),
-                    apiKey: config.news.apiKey
-                },
-                timeout: 12000
-            });
-            const apiArticles = response.data?.articles || [];
-            for (const a of apiArticles) {
-                if (!a.title || a.title.includes('[Removed]')) continue;
-                results.push({
-                    id: createArticleId(a.url, a.title),
-                    title: a.title,
-                    description: stripHtml(a.description || a.title),
-                    content: stripHtml(a.content || a.description || a.title),
-                    url: a.url,
-                    urlToImage: a.urlToImage,
-                    publishedAt: a.publishedAt || new Date().toISOString(),
-                    source: {
-                        id: a.source?.id || 'newsapi',
-                        name: a.source?.name || 'NewsAPI',
-                        authority: getSourceAuthorityScore(a.source?.name),
-                        strategy: 'newsapi_search'
-                    },
-                    region: null
-                });
-            }
-        } catch (err) {
-            logger.debug('AGENT_TOOL', `NewsAPI 补充检索跳过: ${err.message}`);
-        }
-    }
-
-    // 按权威度与时间综合排序并去重
-    const seen = new Set();
-    return results.filter(item => {
-        const key = item.title.toLowerCase().substring(0, 45);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    }).slice(0, maxResults);
-}
-
-/**
- * 供大模型 Tool-Use (Function Calling) 调用的标准工具定义
- */
-const AGENT_TOOL_DEFINITIONS = [
-    {
-        type: 'function',
-        function: {
-            name: 'search_global_news',
-            description: '在全球知名新闻媒体（Reuters、AP、BBC、NYT、Bloomberg、SCMP、Al Jazeera等）中按主题或关键词搜索最新报道',
-            parameters: {
-                type: 'object',
-                properties: {
-                    query: {
-                        type: 'string',
-                        description: '搜索关键词或主题（建议使用英文关键词以覆盖更多国际大报，或使用中文搜索华语媒体）'
-                    },
-                    authoritativeOnly: {
-                        type: 'boolean',
-                        description: '是否仅限定在路透、美联、BBC、纽时、彭博等顶级外媒域名内检索'
-                    },
-                    maxResults: {
-                        type: 'integer',
-                        description: '返回的最大新闻条数（默认10）'
-                    }
-                },
-                required: ['query']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'read_article_fulltext',
-            description: '通过 Jina Reader 和智能正文抽取工具读取指定新闻 URL 的完整正文内容，以便深入核实细节',
-            parameters: {
-                type: 'object',
-                properties: {
-                    url: {
-                        type: 'string',
-                        description: '需要深读的新闻原文 URL'
-                    }
-                },
-                required: ['url']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'patrol_source_category',
-            description: '巡检指定类别的全球知名信源矩阵（wire=国际通讯社, western=欧美主流大报, asiapacific=亚太名媒, finance=全球财经, tech=前沿科技）',
-            parameters: {
-                type: 'object',
-                properties: {
-                    category: {
-                        type: 'string',
-                        enum: ['wire', 'western', 'asiapacific', 'finance', 'tech', 'all'],
-                        description: '要巡检的信源类别'
-                    }
-                },
-                required: ['category']
-            }
-        }
-    }
-];
-
-/**
- * 执行大模型发起的 Tool Call
- */
-async function executeAgentToolCall(toolName, args = {}) {
-    switch (toolName) {
-        case 'search_global_news': {
-            const articles = await searchGlobalNewsByTopic(args.query, {
-                authoritativeOnly: Boolean(args.authoritativeOnly),
-                maxResults: args.maxResults || 10
-            });
-            return {
-                query: args.query,
-                count: articles.length,
-                articles: articles.map(a => ({
-                    title: a.title,
-                    source: a.source?.name,
-                    publishedAt: a.publishedAt,
-                    description: a.description,
-                    url: a.url
-                }))
-            };
-        }
-        case 'read_article_fulltext': {
-            const res = await extractFullArticleContent(args.url, { maxLength: 3500 });
-            return res;
-        }
-        case 'patrol_source_category': {
-            const matrix = getGlobalSourceMatrix().filter(s => s.enabled);
-            const targetSources = args.category && args.category !== 'all'
-                ? matrix.filter(s => s.category === args.category)
-                : matrix.slice(0, 8);
-
-            const harvested = [];
-            for (const src of targetSources.slice(0, 6)) {
-                const items = await fetchFromGlobalSource(src, 4);
-                harvested.push(...items);
-            }
-            return {
-                category: args.category,
-                sourcesPatrolled: targetSources.map(s => s.name),
-                count: harvested.length,
-                articles: harvested.map(a => ({
-                    title: a.title,
-                    source: a.source?.name,
-                    publishedAt: a.publishedAt,
-                    description: a.description,
-                    url: a.url
-                }))
-            };
-        }
-        default:
-            return { error: `未知工具: ${toolName}` };
-    }
 }
 
 module.exports = {
@@ -681,9 +429,5 @@ module.exports = {
     parseRssUrlRobust,
     buildGoogleNewsDomainRssUrl,
     fetchFromGlobalSource,
-    extractFullArticleContent,
-    searchGlobalNewsByTopic,
-    AGENT_TOOL_DEFINITIONS,
-    executeAgentToolCall
+    extractFullArticleContent
 };
-

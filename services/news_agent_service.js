@@ -1,21 +1,18 @@
 const config = require('../config');
 const logger = require('../utils/logger');
-const { writeJsonFile, readJsonFile, stripHtml, truncateText } = require('../utils/helpers');
+const { writeJsonFile, stripHtml } = require('../utils/helpers');
 const { getGlobalSourceMatrix, getSourceAuthorityScore } = require('../config/global_sources');
 const {
     fetchFromGlobalSource,
     extractFullArticleContent,
-    searchGlobalNewsByTopic,
     createArticleId
 } = require('./agent_tools');
 
 /**
- * 聚核多 Agent 协同引擎 (NewsAgentService)
- * 负责统筹：
- * 1. Scout Agent (全球知名信源矩阵巡检)
- * 2. Curator Agent (跨信源事件聚类、交叉验证与价值排序)
- * 3. Deep-Reader & Compiler Agent (Jina Reader 全文深读 + 批量中文情报编译)
- * 4. Chief Editor & Investigator Agent (全局深度综述、播客脚本与按需专题深挖)
+ * 聚核多 Agent 新闻搜集与渐进式编译引擎 (NewsAgentService)
+ * 采用两阶段渐进式架构：
+ * - 第一阶段（秒级采集与即时展示）：并发采集全球名媒 -> 跨信源事件聚类 -> 规则预分类 -> 立即推送前端展示
+ * - 第二阶段（后台渐进深读与编译）：Jina/Cheerio 全文提取 -> 分批 AI 中文编译并实时增量刷新卡片 -> 生成今日要闻综述
  */
 class NewsAgentService {
     constructor(io = null, stateManager = null, aiService = null, newsService = null) {
@@ -83,12 +80,12 @@ class NewsAgentService {
     }
 
     /**
-     * 核心流水线 1：执行全球知名信源巡检与多 Agent 整合
+     * 核心流水线：两阶段渐进式全球新闻采集、即时展示与后台 AI 编译
      * @param {Object} options - { maxDisplayCount, deepReadCount, generateSummary, categoryFilter }
      */
     async runGlobalPatrolPipeline(options = {}) {
         if (this.isRunningPatrol) {
-            throw new Error('Agent 全球巡检任务正在进行中，请稍候');
+            throw new Error('全球新闻采集与编译任务正在进行中，请稍候');
         }
 
         this.isRunningPatrol = true;
@@ -101,16 +98,17 @@ class NewsAgentService {
 
         try {
             if (this.stateManager) {
+                this.stateManager.set('collectionPhase', 'collecting');
                 this.stateManager.setUpdateStatus(true, {
                     stage: 'scout',
                     current: 5,
                     total: 100,
-                    message: 'Scout Agent 启动全球知名信源巡检...'
+                    message: 'Scout Agent 启动全球知名信源并发采集...'
                 });
             }
 
-            // ==================== STAGE 1: SCOUT AGENT (全球信源巡检) ====================
-            this.emitAgentEvent('Scout Agent (信源巡检员)', 'scout', '正在并发巡检全球知名媒体矩阵 (Reuters, AP, BBC, NYT, Bloomberg, SCMP, NHK 等)...', {
+            // ==================== STAGE 1: SCOUT AGENT (全球信源并发巡检) ====================
+            this.emitAgentEvent('Scout 巡检员', 'scout', '正在并发巡检全球知名媒体矩阵 (Reuters, AP, BBC, NYT, Bloomberg, SCMP, NHK 等)...', {
                 progress: 8
             });
 
@@ -123,99 +121,105 @@ class NewsAgentService {
 
             const activeSourceCount = sourceStats.filter(s => s.status === 'ok').length;
             this.emitAgentEvent(
-                'Scout Agent (信源巡检员)',
+                'Scout 巡检员',
                 'scout_done',
-                `巡检完成：成功从 ${activeSourceCount}/${sourceStats.length} 个全球信源采集到 ${rawHarvested.length} 篇原始报道`,
-                { progress: 28, rawCount: rawHarvested.length, activeSources: activeSourceCount }
+                `信源采集完成：成功从 ${activeSourceCount}/${sourceStats.length} 个全球信源捕获 ${rawHarvested.length} 篇最新报道`,
+                { progress: 30, rawCount: rawHarvested.length, activeSources: activeSourceCount }
             );
 
-            // ==================== STAGE 2: CURATOR AGENT (清洗、跨源聚类与价值甄选) ====================
-            this.emitAgentEvent('Curator Agent (聚类甄选总编)', 'curate', '正在进行时效性过滤、跨信源事件聚类与多媒交叉验证...', {
-                progress: 35
+            // ==================== STAGE 2: CURATOR AGENT (跨源聚类、打分与即时展示) ====================
+            this.emitAgentEvent('Curator 聚类总编', 'curate', '正在进行时效过滤、跨信源事件合并与权威度排序...', {
+                progress: 38
             });
 
             const cleanedArticles = this.newsService
                 ? this.newsService.filterAndCleanArticles(rawHarvested)
                 : this._basicCleanArticles(rawHarvested);
 
-            // 跨信源事件聚类与合并关联报道
             const clusteredArticles = await this.aiService.removeDuplicateNewsWithAI(cleanedArticles);
-
-            // 权威度 + 时效 + 多信源热度排序，保留前 maxCandidatePool 条进入编译池
             const rankedCandidates = await this.aiService.selectTopQualityNews(clusteredArticles, maxCandidatePool);
 
-            const multiSourceEvents = rankedCandidates.filter(a => (a.sourceCount || 1) > 1).length;
-            this.emitAgentEvent(
-                'Curator Agent (聚类甄选总编)',
-                'curate_done',
-                `聚类甄选完成：合并为 ${clusteredArticles.length} 个独立事件（其中 ${multiSourceEvents} 个热点获多家权威外媒交叉报道），精选 Top ${rankedCandidates.length} 进入编译池`,
-                { progress: 45, clusteredCount: clusteredArticles.length, selectedCount: rankedCandidates.length }
-            );
+            // 选取进入展示与编译池的候选集，并立即赋予规则预判的地区、分类与初始摘要
+            const candidatePool = rankedCandidates
+                .slice(0, Math.max(maxDisplayCount + 10, 40))
+                .map(item => this.aiService.applyPreliminaryMetadata(item));
 
-            // ==================== STAGE 3: DEEP-READER & COMPILER AGENT (全文深读与中文编译) ====================
-            const toCompile = rankedCandidates.slice(0, Math.max(maxDisplayCount + 10, 40));
-
-            if (deepReadCount > 0) {
-                this.emitAgentEvent(
-                    'Deep-Reader Agent (全文深读员)',
-                    'deep_read',
-                    `正在使用 Jina Reader 与智能正文抽取器深读前 ${deepReadCount} 条核心焦点报道全文...`,
-                    { progress: 52 }
-                );
-                await this._enrichTopArticlesWithFullText(toCompile, deepReadCount);
-            }
-
-            this.emitAgentEvent(
-                'Compiler Agent (编译分析员)',
-                'compile',
-                `正在批量编译 ${toCompile.length} 条全球新闻（生成中文标题、百字深度摘要、地域与领域标签）...`,
-                { progress: 62 }
-            );
-
-            const enhancedArticles = await this.aiService.enhanceNewsArticles(toCompile, ({ current, total }) => {
-                const pct = 62 + Math.round((current / Math.max(1, total)) * 22);
-                this.emitAgentEvent(
-                    'Compiler Agent (编译分析员)',
-                    'compile_progress',
-                    `正在编译全球情报卡片 (${current}/${total})...`,
-                    { progress: pct, current, total }
-                );
-            });
-
-            const finalDisplayArticles = enhancedArticles.slice(0, maxDisplayCount);
+            const preliminaryDisplay = candidatePool.slice(0, maxDisplayCount);
+            const multiSourceEvents = candidatePool.filter(a => (a.sourceCount || 1) > 1).length;
             const now = new Date();
 
-            // 同步更新到 NewsService 和 StateManager 并落盘
-            if (this.newsService) {
-                this.newsService.setNewsData(finalDisplayArticles);
-                this.newsService.setLastUpdated(now);
-                await this.newsService.saveLocalData(finalDisplayArticles);
+            // 【阶段一即时发布】无需等待漫长的 AI 编译，先把去重聚类后的最新全球新闻推送到前端展示！
+            await this._publishNewsSnapshot(preliminaryDisplay, candidatePool, sourceStats, now, 'collected');
+
+            this.emitAgentEvent(
+                'Curator 聚类总编',
+                'curate_done',
+                `已即时展示 ${preliminaryDisplay.length} 条全球精选新闻（含 ${multiSourceEvents} 个多媒交叉验证热点），正在后台启动全文深读与中文编译...`,
+                { progress: 48, clusteredCount: clusteredArticles.length, selectedCount: candidatePool.length }
+            );
+
+            // ==================== STAGE 3: DEEP-READER & COMPILER (全文深读与渐进式批量编译) ====================
+            if (deepReadCount > 0) {
+                this.emitAgentEvent(
+                    'Deep-Reader 深读员',
+                    'deep_read',
+                    `正在使用 Jina Reader 与智能正文抽取器提取前 ${deepReadCount} 条核心焦点报道全文...`,
+                    { progress: 55 }
+                );
+                await this._enrichTopArticlesWithFullText(candidatePool, deepReadCount);
             }
 
             if (this.stateManager) {
-                this.stateManager.updateNewsData(finalDisplayArticles, enhancedArticles);
-                this.stateManager.set('sourceStats', sourceStats);
+                this.stateManager.set('collectionPhase', 'compiling');
             }
 
-            if (this.io) {
-                this.io.emit('news-updated', {
-                    success: true,
-                    total: finalDisplayArticles.length,
-                    totalPool: enhancedArticles.length,
-                    lastUpdated: now.toISOString(),
-                    sourceStats
-                });
+            const hasAiKey = this.aiService.getCurrentModelInfo().apiKeyConfigured;
+            let enhancedArticles = candidatePool;
+
+            if (hasAiKey) {
+                this.emitAgentEvent(
+                    'Compiler 编译员',
+                    'compile',
+                    `正在分批执行 AI 中文编译 (${candidatePool.length} 条)，每完成一批将实时刷新页面卡片...`,
+                    { progress: 62 }
+                );
+
+                enhancedArticles = await this.aiService.enhanceNewsArticles(
+                    candidatePool,
+                    ({ current, total, batchIndex, totalBatches }) => {
+                        const pct = 62 + Math.round((current / Math.max(1, total)) * 24);
+                        this.emitAgentEvent(
+                            'Compiler 编译员',
+                            'compile_progress',
+                            `正在编译第 ${batchIndex}/${totalBatches} 批新闻卡片 (${current}/${total})...`,
+                            { progress: pct, current, total }
+                        );
+                    },
+                    async (_compiledBatch, _startIndex, currentFullList) => {
+                        // 每完成一批编译，立即更新 StateManager 并通知前端增量刷新卡片！
+                        const currentDisplay = currentFullList.slice(0, maxDisplayCount);
+                        await this._publishNewsSnapshot(currentDisplay, currentFullList, sourceStats, new Date(), 'compiling');
+                    }
+                );
+            } else {
+                // 未配置 AI Key 时，同步 Jina 提取后的最新摘要并发布
+                enhancedArticles = candidatePool.map(item => this.aiService.applyPreliminaryMetadata(item));
+                await this._publishNewsSnapshot(enhancedArticles.slice(0, maxDisplayCount), enhancedArticles, sourceStats, new Date(), 'completed');
             }
 
-            // ==================== STAGE 4: CHIEF EDITOR AGENT (生成全球深度综述) ====================
+            const finalDisplayArticles = enhancedArticles.slice(0, maxDisplayCount);
+            const finalTime = new Date();
+            await this._publishNewsSnapshot(finalDisplayArticles, enhancedArticles, sourceStats, finalTime, 'completed');
+
+            // ==================== STAGE 4: CHIEF EDITOR AGENT (生成今日要闻综述) ====================
             let summaryArticle = null;
-            if (shouldGenerateSummary && this.aiService.getCurrentModelInfo().apiKeyConfigured) {
+            if (shouldGenerateSummary && hasAiKey) {
                 try {
                     this.emitAgentEvent(
-                        'Chief Editor Agent (主编综述员)',
+                        'Chief Editor 主编',
                         'summary',
-                        `正在统筹 ${finalDisplayArticles.length} 条要闻撰写今日《全球新闻深度综述》...`,
-                        { progress: 88 }
+                        `正在统筹 ${finalDisplayArticles.length} 条要闻撰写今日《全球要闻深度综述》...`,
+                        { progress: 90 }
                     );
 
                     summaryArticle = await this.aiService.generateNewsSummaryArticle(finalDisplayArticles);
@@ -243,9 +247,9 @@ class NewsAgentService {
 
             const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
             this.emitAgentEvent(
-                'Orchestrator (聚核中枢)',
+                'CoreFeed 中枢',
                 'completed',
-                `全球知名信源搜集与整合完成！共输出 ${finalDisplayArticles.length} 条精选情报（耗时 ${elapsedSeconds}s）`,
+                `全球新闻采集与编译全部完成！共展示 ${finalDisplayArticles.length} 条精选新闻（总耗时 ${elapsedSeconds}s）`,
                 { progress: 100, elapsedSeconds }
             );
 
@@ -257,14 +261,43 @@ class NewsAgentService {
                 sourceStats,
                 news: finalDisplayArticles,
                 summaryArticle,
-                lastUpdated: now.toISOString(),
+                lastUpdated: finalTime.toISOString(),
                 elapsedSeconds: Number(elapsedSeconds)
             };
         } finally {
             this.isRunningPatrol = false;
             if (this.stateManager) {
+                this.stateManager.set('collectionPhase', 'idle');
                 this.stateManager.setUpdateStatus(false);
             }
+        }
+    }
+
+    /**
+     * 同步更新内存状态、本地磁盘缓存并向前端推送 Socket.IO 实时刷新事件
+     */
+    async _publishNewsSnapshot(displayList, fullPool, sourceStats, timestamp, phase = 'collected') {
+        if (this.newsService) {
+            this.newsService.setNewsData(displayList);
+            this.newsService.setLastUpdated(timestamp);
+            await this.newsService.saveLocalData(displayList);
+        }
+
+        if (this.stateManager) {
+            this.stateManager.set('collectionPhase', phase, false);
+            this.stateManager.set('sourceStats', sourceStats, false);
+            this.stateManager.updateNewsData(displayList, fullPool);
+        }
+
+        if (this.io) {
+            this.io.emit('news-updated', {
+                success: true,
+                phase,
+                total: displayList.length,
+                totalPool: fullPool.length,
+                lastUpdated: timestamp.toISOString(),
+                sourceStats
+            });
         }
     }
 
@@ -275,13 +308,11 @@ class NewsAgentService {
         const matrix = getGlobalSourceMatrix();
         const disabledSet = new Set((config.news.disabledSources || []).map(s => s.trim()));
 
-        // 1. 筛选启用的预置与自定义矩阵信源
         let enabledMatrixSources = matrix.filter(s => s.enabled && !disabledSet.has(s.name) && !disabledSet.has(s.id));
         if (categoryFilter && categoryFilter !== 'all') {
             enabledMatrixSources = enabledMatrixSources.filter(s => s.category === categoryFilter);
         }
 
-        // 2. 合并用户在 .env RSS_SOURCES 中额外配置的非重复源
         const envRssList = this.newsService ? this.newsService.parseRSSSources(config.news.rssSources) : [];
         const existingUrls = new Set(enabledMatrixSources.map(s => s.rssUrl).filter(Boolean));
         const existingNames = new Set(enabledMatrixSources.map(s => s.name.toLowerCase()));
@@ -308,9 +339,8 @@ class NewsAgentService {
 
         const allArticles = [];
         const sourceStats = [];
-        const concurrency = config.agent.sourceConcurrency || 6;
+        const concurrency = config.agent.sourceConcurrency || 8;
 
-        // 分批并发巡检信源矩阵
         for (let i = 0; i < enabledMatrixSources.length; i += concurrency) {
             const batch = enabledMatrixSources.slice(i, i + concurrency);
             const batchResults = await Promise.all(
@@ -348,16 +378,15 @@ class NewsAgentService {
                 allArticles.push(...items);
             }
 
-            const progress = 8 + Math.round(((i + batch.length) / Math.max(1, enabledMatrixSources.length)) * 18);
+            const progress = 8 + Math.round(((i + batch.length) / Math.max(1, enabledMatrixSources.length)) * 20);
             this.emitAgentEvent(
-                'Scout Agent (信源巡检员)',
+                'Scout 巡检员',
                 'scout_batch',
                 `已巡检 ${Math.min(i + batch.length, enabledMatrixSources.length)}/${enabledMatrixSources.length} 个信源，累计捕获 ${allArticles.length} 篇报道`,
                 { progress }
             );
         }
 
-        // 3. 并行补充 NewsAPI 与 GNews（若启用且无特定分类过滤）
         if (!categoryFilter || categoryFilter === 'all') {
             if (this.newsService && config.news.newsApiEnabled && config.news.apiKey) {
                 try {
@@ -413,7 +442,7 @@ class NewsAgentService {
             await Promise.all(
                 batch.map(async (article) => {
                     try {
-                        const extracted = await extractFullArticleContent(article.url, { timeout: 12000, maxLength: 2500 });
+                        const extracted = await extractFullArticleContent(article.url, { timeout: 10000, maxLength: 2500 });
                         if (extracted && extracted.success && extracted.content) {
                             article.fullTextContent = extracted.content;
                             article.content = extracted.content;
@@ -438,174 +467,14 @@ class NewsAgentService {
     }
 
     /**
-     * 核心流水线 2：按需专题调查 Agent (Interactive Topic Research Agent)
-     * 用户输入任意全球热点主题，Agent 自动规划中英文检索词、跨源搜集名媒报道、深读原文并生成对比分析报告
-     * @param {string} topic - 专题或问题（如“中东局势”、“美联储降息”、“台积电与AI芯片”）
-     * @param {Object} options - { authoritativeOnly, maxArticles }
-     */
-    async runTopicResearchPipeline(topic, options = {}) {
-        if (!topic || !topic.trim()) {
-            throw new Error('请输入要搜集整合的新闻主题或关键词');
-        }
-
-        const cleanTopic = topic.trim();
-        const authoritativeOnly = options.authoritativeOnly !== undefined ? Boolean(options.authoritativeOnly) : false;
-        const maxArticles = options.maxArticles || 12;
-
-        this.emitAgentEvent(
-            'Research Agent (专题调查员)',
-            'research_start',
-            `收到专题指令：「${cleanTopic}」，正在规划全球多语种检索策略...`,
-            { progress: 10 }
-        );
-
-        // 1. 让 AI 生成最佳英文国际媒体检索词 + 中文检索词
-        let englishQuery = cleanTopic;
-        if (this.aiService.getCurrentModelInfo().apiKeyConfigured && /[\u4e00-\u9fa5]/.test(cleanTopic)) {
-            try {
-                const qPrompt = `请将以下中文新闻搜索主题转换为最适合在 Reuters、BBC、NYT、Bloomberg 等英文国际媒体上检索的精炼英文关键词（2-5个词，不要带引号或多余解释）：\n${cleanTopic}`;
-                const translatedQ = await this.aiService._callAI([{ role: 'user', content: qPrompt }]);
-                if (translatedQ && translatedQ.length < 80) {
-                    englishQuery = translatedQ.replace(/["'。]/g, '').trim();
-                }
-            } catch (_) {}
-        }
-
-        this.emitAgentEvent(
-            'Research Agent (专题调查员)',
-            'research_search',
-            `正在检索全球知名媒体：英文检索词 [${englishQuery}] / 原始主题 [${cleanTopic}]...`,
-            { progress: 30 }
-        );
-
-        // 2. 并行执行国际英文名媒检索 + 原始词检索
-        const [enResults, rawResults] = await Promise.all([
-            searchGlobalNewsByTopic(englishQuery, {
-                maxResults: maxArticles,
-                authoritativeOnly,
-                timeRange: options.timeRange || '7d',
-                language: 'en'
-            }),
-            englishQuery !== cleanTopic
-                ? searchGlobalNewsByTopic(cleanTopic, {
-                    maxResults: Math.ceil(maxArticles / 2),
-                    authoritativeOnly: false,
-                    timeRange: options.timeRange || '7d'
-                })
-                : Promise.resolve([])
-        ]);
-
-        const combined = [...enResults, ...rawResults];
-        const deduped = await this.aiService.removeDuplicateNewsWithAI(combined);
-        const topSelected = await this.aiService.selectTopQualityNews(deduped, maxArticles);
-
-        if (topSelected.length === 0) {
-            return {
-                success: false,
-                topic: cleanTopic,
-                englishQuery,
-                message: `未能在近期全球主流信源中检索到关于「${cleanTopic}」的报道，请尝试更换关键词。`,
-                articles: [],
-                reportHtml: ''
-            };
-        }
-
-        // 3. 对前 4 篇核心报道执行 Jina Reader 全文深读
-        this.emitAgentEvent(
-            'Deep-Reader Agent (全文深读员)',
-            'research_deep_read',
-            `已捕获 ${topSelected.length} 篇外媒报道，正在深读前 4 篇权威原文提取核心事实...`,
-            { progress: 55 }
-        );
-        await this._enrichTopArticlesWithFullText(topSelected, 4);
-
-        // 4. 批量编译检索到的文章卡片
-        this.emitAgentEvent(
-            'Compiler Agent (编译分析员)',
-            'research_compile',
-            `正在编译 ${topSelected.length} 篇专题情报卡片...`,
-            { progress: 72 }
-        );
-        const compiledArticles = await this.aiService.enhanceNewsArticles(topSelected);
-
-        // 5. 生成跨信源深度对比分析报告
-        let reportMarkdown = '';
-        let reportHtml = '';
-
-        if (this.aiService.getCurrentModelInfo().apiKeyConfigured) {
-            this.emitAgentEvent(
-                'Chief Analyst Agent (首席分析员)',
-                'research_synthesize',
-                `正在交叉比对各方信源立场，撰写《「${cleanTopic}」全球多信源深度整合报告》...`,
-                { progress: 88 }
-            );
-
-            const dossierInput = compiledArticles.map((a, idx) => {
-                const body = truncateText(a.fullTextContent || a.summary || a.description || '', 500);
-                return `[#${idx + 1}] 媒体: ${a.source?.name || '外媒'} | 标题: ${a.translatedTitle || a.title}\n摘要与正文要点: ${body}`;
-            }).join('\n\n');
-
-            const reportPrompt = `你是“聚核 (CoreFeed)”首席国际情报分析 Agent。用户请求围绕专题「${cleanTopic}」搜集整合全球知名信源的报道。
-以下是我们刚刚从全球媒体实时检索并深读的 ${compiledArticles.length} 篇报道：
-
-${dossierInput}
-
-请撰写一份结构清晰、客观专业的《「${cleanTopic}」全球信源深度整合报告》，包含以下四个部分（使用 ### 作为小标题）：
-### 一、 核心态势综述
-（150-250字，直击事件最新进展与核心焦点，在引述处标注 [NEWS_1]、[NEWS_2] 等）
-### 二、 关键事实与数据脉络
-（列出3-5条经多方核实的核心事实或关键表态，标注 [NEWS_X]）
-### 三、 全球知名媒体视角对比
-（对比分析不同国际媒体——如欧美主流媒体、通讯社、亚太媒体等——在报道该议题时的侧重点或观点差异）
-### 四、 后续演进与关注点
-（简明总结接下来值得跟踪的关键节点）
-
-请直接输出报告正文，不要包含任何 <think> 思考过程。`;
-
-            reportMarkdown = await this.aiService._callAI([{ role: 'user', content: reportPrompt }]);
-            reportHtml = this.aiService.convertSummaryToRichHtml(reportMarkdown, compiledArticles);
-        } else {
-            reportMarkdown = compiledArticles.map((a, idx) => `${idx + 1}. **${a.translatedTitle || a.title}** (${a.source?.name})\n${a.summary}`).join('\n\n');
-            reportHtml = this.aiService.convertSummaryToRichHtml(reportMarkdown, compiledArticles);
-        }
-
-        const researchResult = {
-            success: true,
-            topic: cleanTopic,
-            englishQuery,
-            generatedAt: new Date().toISOString(),
-            articleCount: compiledArticles.length,
-            sourcesCovered: [...new Set(compiledArticles.map(a => a.source?.name).filter(Boolean))],
-            reportMarkdown,
-            reportHtml,
-            articles: compiledArticles
-        };
-
-        await writeJsonFile(config.storage.researchFile, researchResult);
-
-        this.emitAgentEvent(
-            'Research Agent (专题调查员)',
-            'research_completed',
-            `专题「${cleanTopic}」全球信源整合报告已生成！涵盖 ${researchResult.sourcesCovered.length} 家权威媒体共 ${compiledArticles.length} 篇报道`,
-            { progress: 100 }
-        );
-
-        if (this.io) {
-            this.io.emit('agent-research-completed', researchResult);
-        }
-
-        return researchResult;
-    }
-
-    /**
-     * 核心流水线 3：单篇外媒报道即时全文深读与深度解读
+     * 单篇外媒报道即时全文深读与深度解读
      */
     async deepReadSingleArticle({ url, title = '', sourceName = '', existingSummary = '' }) {
         if (!url) {
             throw new Error('缺少新闻原文 URL');
         }
 
-        const extracted = await extractFullArticleContent(url, { timeout: 18000, maxLength: 4500 });
+        const extracted = await extractFullArticleContent(url, { timeout: 15000, maxLength: 4500 });
         const rawBody = (extracted && extracted.success && extracted.content)
             ? extracted.content
             : existingSummary || title;
@@ -618,7 +487,7 @@ ${dossierInput}
                 sourceName,
                 extractionMethod: extracted?.method || 'fallback',
                 fullText: rawBody,
-                analysisHtml: `<p>${stripHtml(rawBody).replace(/\n+/g, '</p><p>')}</p>`
+                analysisHtml: `<p class="summary-paragraph">${stripHtml(rawBody).replace(/\n+/g, '</p><p class="summary-paragraph">')}</p>`
             };
         }
 
@@ -652,18 +521,6 @@ ${rawBody}
             analysisHtml
         };
     }
-
-    /**
-     * 加载最近一次保存的专题研究报告
-     */
-    async getLastResearchReport() {
-        try {
-            return await readJsonFile(config.storage.researchFile, null);
-        } catch (_) {
-            return null;
-        }
-    }
 }
 
 module.exports = NewsAgentService;
-

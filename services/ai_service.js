@@ -1,16 +1,15 @@
 const config = require('../config');
-const { delay, stripHtml, truncateText } = require('../utils/helpers');
+const { delay, truncateText } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const RateLimiter = require('../utils/rate_limiter');
 const { getSourceAuthorityScore } = require('../config/global_sources');
-const { AGENT_TOOL_DEFINITIONS, executeAgentToolCall } = require('./agent_tools');
 
 const VALID_REGIONS = ['中国', '美国', '欧洲', '日本', '韩国', '东南亚', '中东', '非洲', '拉美', '澳洲', '亚洲', '国际'];
 const VALID_CATEGORIES = ['政经', '外交', '科技', '财经', '军事', '社会', '能源', '国际'];
 
 /**
- * AI 与 Agent 推理服务类 (CoreFeed v2.0)
- * 支持 MiniMax / OpenAI 兼容接口、批量结构化编译、跨信源聚类裁决以及多轮 Tool-Use Agent 循环
+ * AI 编译与事件聚类推理服务 (CoreFeed v2.0)
+ * 专注于：跨信源事件聚类、质量评分、规则预分类、结构化批量中文编译与每日要闻综述生成
  */
 class AIService {
     constructor(io = null, stateManager = null) {
@@ -81,10 +80,10 @@ class AIService {
     }
 
     /**
-     * 底层大模型调用（支持普通对话与原生 Function Calling）
+     * 底层大模型调用
      */
     async _callAI(messages, model = null, options = {}) {
-        const { priority = 5, timeout = 120000, tools = null, returnRawMessage = false } = options;
+        const { priority = 5, timeout = 90000 } = options;
 
         this.refreshConfig();
 
@@ -105,11 +104,6 @@ class AIService {
                 messages,
                 reasoning_split: true
             };
-
-            if (tools && Array.isArray(tools) && tools.length > 0) {
-                requestBody.tools = tools;
-                requestBody.tool_choice = 'auto';
-            }
 
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -137,10 +131,6 @@ class AIService {
                 throw new Error('AI 响应内容为空');
             }
 
-            if (returnRawMessage) {
-                return msg;
-            }
-
             return this._cleanAIResponse(msg.content || '');
         }, { priority, maxRetries: 2 });
     }
@@ -165,7 +155,6 @@ class AIService {
         try {
             return JSON.parse(cleaned);
         } catch (_) {
-            // 尝试寻找最外层的 [ ... ] 或 { ... }
             const arrStart = cleaned.indexOf('[');
             const arrEnd = cleaned.lastIndexOf(']');
             const objStart = cleaned.indexOf('{');
@@ -185,108 +174,9 @@ class AIService {
         return null;
     }
 
-    async retryWithFallback(aiFunction, args = [], maxRetries = 2) {
-        let lastError;
-        for (let i = 0; i <= maxRetries; i++) {
-            try {
-                return await aiFunction.apply(this, [this.getCurrentModelName(), ...args]);
-            } catch (error) {
-                lastError = error;
-                if (i < maxRetries) {
-                    await delay(1500 * (i + 1));
-                }
-            }
-        }
-        throw lastError;
-    }
-
-    /**
-     * 运行具备自主工具调用能力的 Agent 循环 (Multi-Turn Tool Use + Fallback Planning)
-     * @param {string} systemPrompt - Agent 角色设定
-     * @param {string} userGoal - 用户任务目标
-     * @param {Function} onStep - 步骤回调 (用于向前端推送实时进度)
-     * @param {number} maxIterations - 最大工具迭代轮数
-     */
-    async runAgentLoop(systemPrompt, userGoal, onStep = null, maxIterations = 4) {
-        const emitStep = (stepInfo) => {
-            if (typeof onStep === 'function') onStep(stepInfo);
-            if (this.io) {
-                this.io.emit('agent-step', {
-                    timestamp: new Date().toISOString(),
-                    ...stepInfo
-                });
-            }
-        };
-
-        const messages = [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userGoal }
-        ];
-
-        for (let turn = 1; turn <= maxIterations; turn++) {
-            try {
-                emitStep({
-                    turn,
-                    stage: 'thinking',
-                    message: `Agent 正在进行第 ${turn} 轮分析与规划...`
-                });
-
-                const msg = await this._callAI(messages, null, {
-                    tools: AGENT_TOOL_DEFINITIONS,
-                    returnRawMessage: true,
-                    timeout: 120000
-                });
-
-                // 如果大模型触发了原生 tool_calls
-                if (msg.tool_calls && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
-                    messages.push(msg);
-
-                    for (const toolCall of msg.tool_calls) {
-                        const fnName = toolCall.function?.name;
-                        let fnArgs = {};
-                        try {
-                            fnArgs = JSON.parse(toolCall.function?.arguments || '{}');
-                        } catch (_) {}
-
-                        emitStep({
-                            turn,
-                            stage: 'tool_call',
-                            tool: fnName,
-                            args: fnArgs,
-                            message: `调用工具 [${fnName}]: ${JSON.stringify(fnArgs)}`
-                        });
-
-                        const toolResult = await executeAgentToolCall(fnName, fnArgs);
-
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: toolCall.id,
-                            name: fnName,
-                            content: JSON.stringify(toolResult)
-                        });
-                    }
-                    continue;
-                }
-
-                // 如果没有 tool_calls，返回最终内容
-                return this._cleanAIResponse(msg.content || '');
-            } catch (err) {
-                logger.warn('AI_AGENT', `原生 Tool-Use 第 ${turn} 轮降级为直接推理: ${err.message}`);
-                break;
-            }
-        }
-
-        // 汇总生成最终答复
-        messages.push({
-            role: 'user',
-            content: '请基于以上所有检索与深读到的信息，直接输出最终的完整分析结果，不要再调用工具。'
-        });
-        return await this._callAI(messages);
-    }
-
     /**
      * 跨信源事件聚类与去重 (Event Clustering & Cross-Source Verification)
-     * 不仅去除重复新闻，还将同一事件来自不同名媒（如路透、BBC、NYT）的报道合并为 relatedSources！
+     * 将同一事件来自不同名媒（如路透、BBC、NYT）的报道合并为 relatedSources
      */
     async removeDuplicateNewsWithAI(articles) {
         if (!articles || articles.length <= 1) return articles || [];
@@ -304,7 +194,6 @@ class AIService {
                     sourceCount: 1
                 });
             } else {
-                // 按权威度和内容长度选出主报道，其余作为交叉验证关联信源
                 const sorted = [...cluster].sort((a, b) => {
                     const scoreA = getSourceAuthorityScore(a.source?.name) * 2 + Math.min(50, (a.content || '').length / 20);
                     const scoreB = getSourceAuthorityScore(b.source?.name) * 2 + Math.min(50, (b.content || '').length / 20);
@@ -326,11 +215,9 @@ class AIService {
                             publishedAt: other.publishedAt
                         });
                     }
-                    // 如果主报道缺图片而次报道有图片，互补
                     if (!primary.urlToImage && other.urlToImage) {
                         primary.urlToImage = other.urlToImage;
                     }
-                    // 如果主报道正文很短而次报道正文较长，补充上下文
                     if ((primary.content || '').length < 250 && (other.content || '').length > (primary.content || '').length) {
                         primary.content = `${primary.content}\n\n[${outlet} 补充报道]: ${other.content}`;
                     }
@@ -434,58 +321,110 @@ class AIService {
     }
 
     /**
-     * 高效结构化批量编译 (将标题翻译、80-120字中文深度摘要、地域分类、领域分类合并为单次 JSON 批处理)
-     * 相比旧版逐条调用，API 请求次数减少 85%，速度提升 5 倍以上
+     * 快速基于规则预判文章地区与领域（用于第一阶段秒级展示及无 AI Key 场景）
      */
-    async enhanceNewsArticles(articles, onProgress = null) {
+    applyPreliminaryMetadata(article) {
+        const title = article.title || '';
+        const desc = article.description || article.content || '';
+        const sourceName = article.source?.name || '';
+        const sourceCat = article.source?.category || '';
+
+        const region = this.determineNewsRegionSync(title, desc, sourceName, article.region);
+        const category = this.determineNewsCategorySync(title, desc, sourceCat, article.category);
+        const cleanSummary = truncateText(article.description || article.content || article.title, 180);
+
+        return {
+            ...article,
+            translatedTitle: article.translatedTitle || article.title,
+            summary: article.summary || cleanSummary,
+            region,
+            category,
+            aiCompiled: Boolean(article.aiCompiled)
+        };
+    }
+
+    determineNewsRegionSync(title = '', description = '', sourceName = '', fallbackRegion = null) {
+        const text = `${title} ${description}`.toLowerCase();
+        if (/\b(china|chinese|beijing|shanghai|shenzhen|hong kong|taiwan|taipei|scmp|xinhua)\b|中国|北京|上海|香港|台湾/.test(text)) return '中国';
+        if (/\b(u\.s\.|us|united states|america|washington|white house|biden|trump|pentagon|congress|senate|fed|wall street|california|new york)\b|美国|华盛顿|白宫|特朗普|拜登/.test(text)) return '美国';
+        if (/\b(europe|european|eu|uk|britain|british|london|france|french|paris|germany|german|berlin|ukraine|russia|russian|moscow|kyiv|nato|italy|spain)\b|欧洲|欧盟|英国|法国|德国|俄乌|俄罗斯|乌克兰/.test(text)) return '欧洲';
+        if (/\b(japan|japanese|tokyo|nhk|nikkei|yen|osaka)\b|日本|东京|日元/.test(text)) return '日本';
+        if (/\b(korea|korean|seoul|pyongyang|yonhap)\b|韩国|朝鲜|首尔/.test(text)) return '韩国';
+        if (/\b(israel|israeli|gaza|palestin|iran|iranian|tehran|middle east|saudi|syria|lebanon|hezbollah|hamas|yemen|red sea)\b|中东|以色列|加沙|伊朗|沙特|叙利亚|黎巴嫩/.test(text)) return '中东';
+        if (/\b(asean|singapore|vietnam|philippines|indonesia|malaysia|thailand|myanmar)\b|东南亚|新加坡|越南|菲律宾|印尼|泰国/.test(text)) return '东南亚';
+        if (/\b(australia|australian|sydney|canberra|new zealand)\b|澳洲|澳大利亚|新西兰/.test(text)) return '澳洲';
+        if (/\b(india|indian|new delhi|modi|pakistan|bangladesh)\b|印度|南亚|巴基斯坦/.test(text)) return '亚洲';
+        if (/\b(africa|african|nigeria|kenya|south africa|egypt|sudan)\b|非洲|埃及|南非/.test(text)) return '非洲';
+        if (/\b(brazil|mexico|argentina|latin america|colombia|chile|venezuela)\b|拉美|巴西|墨西哥|阿根廷/.test(text)) return '拉美';
+        if (fallbackRegion && VALID_REGIONS.includes(fallbackRegion)) return fallbackRegion;
+        return '国际';
+    }
+
+    determineNewsCategorySync(title = '', description = '', sourceCategory = '', fallbackCategory = null) {
+        const text = `${title} ${description}`.toLowerCase();
+        if (/\b(ai|artificial intelligence|openai|chip|semiconductor|nvidia|apple|google|microsoft|cyber|software|quantum|robot|space|nasa|spacex|tech)\b|人工智能|芯片|半导体|科技|大模型|算力/.test(text)) return '科技';
+        if (/\b(market|stock|bond|inflation|fed|central bank|interest rate|gdp|tariff|trade|economy|economic|bank|invest|earnings|wall street|currency|bitcoin|crypto)\b|财经|金融|股市|汇率|央行|降息|通胀|关税|贸易|经济/.test(text)) return '财经';
+        if (/\b(oil|gas|opec|energy|solar|wind|nuclear power|battery|ev|climate|carbon)\b|能源|石油|天然气|核能|光伏|气候/.test(text)) return '能源';
+        if (/\b(military|missile|army|navy|defense|weapon|strike|war|troops|drone|air force|nuclear|pentagon|nato)\b|军事|导弹|国防|战机|航母|武装|空袭/.test(text)) return '军事';
+        if (/\b(summit|diploma|treaty|embassy|foreign minister|un|united nations|sanction|bilateral|talks|ceasefire|negotiation)\b|外交|峰会|会谈|制裁|联合国|停火|谈判/.test(text)) return '外交';
+        if (/\b(election|parliament|president|prime minister|government|policy|law|court|supreme court|vote|senate|congress)\b|政经|大选|议会|总统|总理|法案|政府/.test(text)) return '政经';
+        if (sourceCategory === 'tech') return '科技';
+        if (sourceCategory === 'finance') return '财经';
+        if (fallbackCategory && VALID_CATEGORIES.includes(fallbackCategory)) return fallbackCategory;
+        return '国际';
+    }
+
+    /**
+     * 高效结构化批量编译 (支持分批增量回调 onBatchCompiled，用于前端渐进式实时更新)
+     */
+    async enhanceNewsArticles(articles, onProgress = null, onBatchCompiled = null) {
         if (!articles || articles.length === 0) return [];
         this.refreshConfig();
 
+        const initialized = articles.map(a => this.applyPreliminaryMetadata(a));
+
         if (!this.modelConfig.apiKey) {
-            logger.warn('AI', '未配置 AI_API_KEY，跳过AI编译增强');
-            return articles.map(a => ({
-                ...a,
-                translatedTitle: a.title,
-                summary: a.description || a.title,
-                region: a.region || '国际',
-                category: '国际'
-            }));
+            logger.warn('AI', '未配置 AI_API_KEY，使用规则预分类与原文摘要直接展示');
+            return initialized;
         }
 
-        logger.info('AI', `启动 Agent 批量深度编译，共 ${articles.length} 条全球新闻`);
+        logger.info('AI', `启动 Agent 批量深度编译，共 ${initialized.length} 条全球新闻`);
         const batchSize = config.ai.batchSize || 8;
-        const enhancedList = [];
+        const enhancedList = [...initialized];
 
-        for (let i = 0; i < articles.length; i += batchSize) {
-            const batch = articles.slice(i, i + batchSize);
+        for (let i = 0; i < initialized.length; i += batchSize) {
+            const batch = initialized.slice(i, i + batchSize);
             const batchIndex = Math.floor(i / batchSize) + 1;
-            const totalBatches = Math.ceil(articles.length / batchSize);
+            const totalBatches = Math.ceil(initialized.length / batchSize);
 
             if (typeof onProgress === 'function') {
                 onProgress({
-                    current: Math.min(i + batch.length, articles.length),
-                    total: articles.length,
+                    current: Math.min(i + batch.length, initialized.length),
+                    total: initialized.length,
                     batchIndex,
                     totalBatches
                 });
             }
 
+            let compiledBatch;
             try {
-                const compiledBatch = await this._compileBatchWithLLM(batch);
-                enhancedList.push(...compiledBatch);
+                compiledBatch = await this._compileBatchWithLLM(batch);
             } catch (err) {
                 logger.warn('AI', `批次 ${batchIndex} 批量编译降级: ${err.message}`);
-                // 降级为规则填充
-                for (const item of batch) {
-                    enhancedList.push({
-                        ...item,
-                        translatedTitle: item.translatedTitle || item.title,
-                        summary: item.summary || item.description || item.title,
-                        region: item.region || '国际',
-                        category: item.category || '国际',
-                        processedAt: new Date().toISOString()
-                    });
-                }
+                compiledBatch = batch.map(item => ({
+                    ...item,
+                    processedAt: new Date().toISOString()
+                }));
+            }
+
+            for (let j = 0; j < compiledBatch.length; j++) {
+                enhancedList[i + j] = compiledBatch[j];
+            }
+
+            if (typeof onBatchCompiled === 'function') {
+                try {
+                    await onBatchCompiled(compiledBatch, i, enhancedList);
+                } catch (_) {}
             }
         }
 
@@ -539,89 +478,24 @@ ${itemsText}`;
         return batch.map((article, idx) => {
             const compiled = resultMap.get(idx) || {};
             const region = VALID_REGIONS.find(r => (compiled.region || '').includes(r)) || article.region || '国际';
-            const category = VALID_CATEGORIES.find(c => (compiled.category || '').includes(c)) || '国际';
+            const category = VALID_CATEGORIES.find(c => (compiled.category || '').includes(c)) || article.category || '国际';
 
             return {
                 ...article,
                 translatedTitle: (compiled.translatedTitle || article.translatedTitle || article.title).trim(),
-                translatedDescription: (compiled.summary || article.description || article.title).trim(),
-                summary: (compiled.summary || article.description || article.title).trim(),
+                translatedDescription: (compiled.summary || article.summary || article.description || article.title).trim(),
+                summary: (compiled.summary || article.summary || article.description || article.title).trim(),
                 region,
                 category,
                 keyPoints: Array.isArray(compiled.keyPoints) ? compiled.keyPoints.slice(0, 3) : [],
+                aiCompiled: Boolean(compiled.translatedTitle || compiled.summary),
                 processedAt: new Date().toISOString()
             };
         });
     }
 
     /**
-     * 单条新闻增强（向后兼容接口）
-     */
-    async enhanceNewsArticle(article) {
-        const res = await this.enhanceNewsArticles([article]);
-        return res[0] || article;
-    }
-
-    async translateText(text, targetLanguage = '中文') {
-        if (!this.modelConfig.apiKey || !text || !text.trim()) return text;
-        if (this.isChineseText(text) && targetLanguage.includes('中')) return text;
-
-        try {
-            const prompt = `请将以下内容准确流畅地翻译成${targetLanguage}，只输出译文，不要包含任何解释：\n\n${text}`;
-            return await this._callAI([{ role: 'user', content: prompt }]);
-        } catch (err) {
-            logger.error('AI', '翻译文本失败', err.message);
-            return text;
-        }
-    }
-
-    async translateTitle(title, targetLanguage = '中文', sourceLanguage = null, maxLength = 32) {
-        if (!this.modelConfig.apiKey || !title || !title.trim()) return title;
-        if (this.isChineseText(title) && targetLanguage.includes('中')) return title;
-
-        try {
-            const prompt = `请将以下新闻标题编译为简洁专业的${targetLanguage}新闻标题（不超过${maxLength}字），只输出译文，不带引号：\n${title}`;
-            const res = await this._callAI([{ role: 'user', content: prompt }]);
-            return res.substring(0, maxLength + 6);
-        } catch (err) {
-            return title;
-        }
-    }
-
-    async batchDetermineNewsRegions(articles) {
-        const map = new Map();
-        if (!articles || !articles.length) return map;
-        articles.forEach((a, idx) => {
-            if (a.region) map.set(idx, a.region);
-        });
-        return map;
-    }
-
-    async determineNewsRegion(title, description, sourceName) {
-        const text = `${title} ${description} ${sourceName}`.toLowerCase();
-        if (/china|beijing|shanghai|hong kong|taiwan|scmp|xinhua|中国|北京|香港|台湾/.test(text)) return '中国';
-        if (/u\.s\.|united states|washington|biden|trump|pentagon|wall street|美国|华盛顿/.test(text)) return '美国';
-        if (/europe|eu|uk|britain|london|france|germany|ukraine|russia|nato|欧洲|英国|法国|德国|俄乌/.test(text)) return '欧洲';
-        if (/japan|tokyo|nhk|nikkei|yen|日本|东京/.test(text)) return '日本';
-        if (/korea|seoul|pyongyang|yonhap|韩国|朝鲜|首尔/.test(text)) return '韩国';
-        if (/israel|gaza|iran|middle east|saudi|syria|lebanon|al jazeera|中东|以色列|伊朗/.test(text)) return '中东';
-        if (/asean|singapore|vietnam|philippines|indonesia|malaysia|thailand|东南亚|新加坡/.test(text)) return '东南亚';
-        return '国际';
-    }
-
-    async generateNewsSummary(title, description, content) {
-        if (!this.modelConfig.apiKey) return description || title;
-        const full = [title, description, content].filter(Boolean).join('\n').substring(0, 1200);
-        const prompt = `请为以下新闻撰写客观简明的中文摘要（80-120字），只输出摘要正文：\n\n${full}`;
-        try {
-            return await this._callAI([{ role: 'user', content: prompt }]);
-        } catch (err) {
-            return description || title;
-        }
-    }
-
-    /**
-     * 主编 Agent：生成结构化《全球新闻深度综述文章》 (支持 HTML 与 EPUB/Kindle 排版)
+     * 主编 Agent：生成结构化《全球新闻深度综述文章》
      */
     async generateNewsSummaryArticle(newsData) {
         if (!this.modelConfig.apiKey) {
@@ -695,7 +569,6 @@ ${newsContent}`;
     }
 
     convertSummaryToRichHtml(text, newsData) {
-        // 将 [NEWS_X] 替换为可点击的信源原文链接标签
         const withLinks = text.replace(/\[NEWS_(\d+)\]/g, (match, numStr) => {
             const idx = parseInt(numStr, 10) - 1;
             const item = newsData[idx];
@@ -719,50 +592,6 @@ ${newsContent}`;
                 .replace(/\n/g, '<br>');
             return `<p class="summary-paragraph">${formatted}</p>`;
         }).join('\n');
-    }
-
-    /**
-     * 播客编导 Agent：生成双人对话播报脚本 ([A] / [B])
-     */
-    async generatePodcastScript(newsData) {
-        if (!this.modelConfig.apiKey) {
-            throw new Error('AI服务未配置密钥，无法生成播客脚本');
-        }
-
-        const stripSourceSuffix = (t) => (t || '').replace(/\s*[-|—]\s*[A-Za-z0-9 .,&()]+$/g, '').trim();
-        const newsSummaries = newsData.slice(0, 25).map((news, index) => {
-            const src = news.source?.name || '国际媒体';
-            return `${index + 1}. [${src}] ${stripSourceSuffix(news.translatedTitle || news.title)}\n要点：${news.summary || news.description || '无'}`;
-        }).join('\n\n');
-
-        const dateStr = new Date().toLocaleDateString('zh-CN', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            weekday: 'long',
-            timeZone: 'Asia/Shanghai'
-        });
-        const beijingHour = new Date(new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' })).getHours();
-        const greeting = beijingHour < 12 ? '早上好' : (beijingHour < 18 ? '下午好' : '晚上好');
-
-        const prompt = `请为两位专业新闻主播（A和B）编写一份全球知名媒体新闻联播对谈脚本。
-严格格式要求：
-1. 每一行必须严格以“[A] ”或“[B] ”开头，后跟单段播报台词。
-2. 禁止出现任何序号、Markdown符号、空泛寒暄或 <think> 思考标签。
-3. A与B交替播报，自然提及消息来源（如“据路透社报道”、“彭博社消息显示”、“英国卫报关注到”等），每条控制在 45-80 字，信息密度高、口语自然流畅。
-4. 第一行为 [A] 开场问候（包含今天是${dateStr}），最后一行为 [B] 结束语。
-
-今日新闻素材：
-${newsSummaries}`;
-
-        let script = await this._callAI([{ role: 'user', content: prompt }]);
-        script = script
-            .split('\n')
-            .map(l => l.trim())
-            .filter(line => /^\[[AB]\]/.test(line))
-            .join('\n');
-
-        return script;
     }
 
     isChineseText(text) {

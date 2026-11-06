@@ -18,7 +18,6 @@ const {
 
 const NewsService = require('./services/news_service');
 const AIService = require('./services/ai_service');
-const AudioService = require('./services/audio_service');
 const NewsAgentService = require('./services/news_agent_service');
 const ScheduleManager = require('./utils/schedule_manager');
 const initializeApiRoutes = require('./routes/api');
@@ -89,19 +88,8 @@ app.use('/api', (req, res, next) => {
 // 初始化核心服务与多 Agent 引擎
 const newsService = new NewsService(io, stateManager);
 const aiService = new AIService(io, stateManager);
-const audioService = new AudioService(io, stateManager);
 const newsAgentService = new NewsAgentService(io, stateManager, aiService, newsService);
-const scheduleManager = new ScheduleManager(newsService, io, stateManager, newsAgentService, aiService, audioService);
-
-// 异步验证 TTS 服务
-(async () => {
-    try {
-        await audioService.initializeTTS();
-        logger.success('SERVER', 'TTS 语音服务连接就绪');
-    } catch (error) {
-        logger.warn('SERVER', `TTS 服务暂未连接 (${error.message})，按需合成时将重试`);
-    }
-})();
+const scheduleManager = new ScheduleManager(newsService, io, stateManager, newsAgentService, aiService);
 
 app.locals.stateManager = stateManager;
 
@@ -109,6 +97,7 @@ app.locals.stateManager = stateManager;
 stateManager.on('newsData-changed', ({ value }) => {
     io.emit('news-updated', {
         success: true,
+        phase: stateManager.get('collectionPhase') || 'idle',
         total: value?.length || 0,
         lastUpdated: stateManager.get('lastUpdated')
     });
@@ -123,15 +112,6 @@ stateManager.on('summaryArticle-changed', ({ value }) => {
     }
 });
 
-stateManager.on('podcastInfo-changed', ({ value }) => {
-    if (value) {
-        io.emit('podcast-completed', {
-            success: true,
-            info: value
-        });
-    }
-});
-
 stateManager.on('updateProgress-changed', ({ value }) => {
     io.emit('update-progress', value);
 });
@@ -139,7 +119,6 @@ stateManager.on('updateProgress-changed', ({ value }) => {
 const services = {
     newsService,
     aiService,
-    audioService,
     newsAgentService,
     scheduleManager
 };
@@ -150,7 +129,7 @@ app.get('/api/health', (req, res) => {
     res.status(200).json({
         status: 'healthy',
         version: '2.0.0',
-        engine: 'CoreFeed Multi-Agent v2.0',
+        engine: 'CoreFeed Global News Collector v2.0',
         timestamp: new Date().toISOString(),
         uptime: Math.floor(process.uptime()),
         memory: {
@@ -177,11 +156,10 @@ app.get('/', (req, res) => {
     const newsData = stateManager.get('newsData') || [];
     const allEnhanced = stateManager.get('allEnhancedNews') || newsData;
     const summaryArticle = stateManager.get('summaryArticle') || null;
-    const podcastInfo = stateManager.get('podcastInfo') || null;
     const lastUpdated = stateManager.get('lastUpdated');
     const sourceMatrix = getGlobalSourceMatrix();
 
-    const displayNews = newsData.slice(0, 30);
+    const displayNews = newsData.slice(0, config.agent.maxCuratedArticles || 30);
 
     res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.render('index', {
@@ -189,14 +167,13 @@ app.get('/', (req, res) => {
         totalNews: allEnhanced.length || displayNews.length,
         displayedNews: displayNews.length,
         summaryArticle,
-        podcastInfo,
         lastUpdated,
         sourceMatrix,
         appVersion: '2.0.0',
         config: {
-            siteName: '聚核 CoreFeed · 全球知名信源 Agent 情报中心',
-            enableAudio: true,
+            siteName: '聚核 CoreFeed · 全球知名信源实时聚合与深读平台',
             aiModel: config.minimax.model || 'MiniMax-M2.5',
+            aiConfigured: Boolean(config.minimax.apiKey),
             jinaReaderEnabled: config.agent.jinaReaderEnabled
         }
     });
@@ -223,6 +200,7 @@ io.on('connection', (socket) => {
         id: socket.id,
         version: '2.0.0',
         isUpdating: stateManager.get('isUpdating'),
+        collectionPhase: stateManager.get('collectionPhase') || 'idle',
         progress: stateManager.get('updateProgress'),
         recentLogs: newsAgentService.getRecentAgentLogs(),
         timestamp: new Date().toISOString()
@@ -236,8 +214,8 @@ io.on('connection', (socket) => {
 async function startServer() {
     try {
         await stateManager.loadFromFile();
-        // 清理可能因为上次异常退出遗留的 updating 锁
         stateManager.set('isUpdating', false, false);
+        stateManager.set('collectionPhase', 'idle', false);
 
         await newsService.loadLocalData();
 
@@ -256,7 +234,7 @@ async function startServer() {
         }
 
         const finalNewsData = stateManager.get('newsData');
-        logger.info('SYSTEM', '本地情报库加载完成', {
+        logger.info('SYSTEM', '本地新闻库加载完成', {
             count: finalNewsData?.length || 0
         });
 
@@ -277,7 +255,7 @@ async function startServer() {
 
             logger.startup(config.server.port, networkHost);
             const matrixCount = getGlobalSourceMatrix().filter(s => s.enabled).length;
-            console.log(chalk.cyan(`   - Agent 引擎:   CoreFeed Multi-Agent v2.0 (${config.minimax.model})`));
+            console.log(chalk.cyan(`   - 核心引擎:     CoreFeed v2.0 两阶段渐进式采集与编译 (${config.minimax.model})`));
             console.log(chalk.cyan(`   - 全球信源矩阵: 已启用 ${matrixCount} 个国际权威信源 + Jina 全文深读`));
 
             app.locals.services = services;

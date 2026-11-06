@@ -1,5 +1,5 @@
 /**
- * 聚核 CoreFeed v2.0 · Kami (紙) Editorial Design System 前端控制器
+ * 聚核 CoreFeed v2.0 · 全球知名信源实时聚合与深读前端控制器
  */
 class CoreFeedApp {
     constructor() {
@@ -8,9 +8,9 @@ class CoreFeedApp {
         this.totalNews = init.totalNews || this.news.length;
         this.lastUpdated = init.lastUpdated || null;
         this.summaryArticle = init.summaryArticle || null;
-        this.podcastInfo = init.podcastInfo || null;
         this.sourceMatrix = Array.isArray(init.sourceMatrix) ? init.sourceMatrix : [];
         this.customSourcesDraft = [];
+        this.collectionPhase = 'idle';
 
         this.selectedRegion = '全部';
         this.selectedCategory = '全部';
@@ -21,7 +21,6 @@ class CoreFeedApp {
         this.initSocket();
         this.renderFilters();
         this.renderNewsGrid();
-        this.loadLatestResearchIfAny();
     }
 
     // ==================== 1. 主题与通知 ====================
@@ -81,7 +80,7 @@ class CoreFeedApp {
             .replace(/'/g, '&#39;');
     }
 
-    // ==================== 2. WebSocket 实时遥测 ====================
+    // ==================== 2. WebSocket 实时渐进式同步 ====================
     initSocket() {
         if (typeof io === 'undefined') return;
         this.socket = io();
@@ -97,6 +96,9 @@ class CoreFeedApp {
         });
 
         this.socket.on('connected', (data) => {
+            if (data.collectionPhase) {
+                this.collectionPhase = data.collectionPhase;
+            }
             if (Array.isArray(data.recentLogs)) {
                 data.recentLogs.forEach(log => this.appendAgentLog(log));
             }
@@ -113,7 +115,11 @@ class CoreFeedApp {
             this.updatePipelineUI(progress);
         });
 
-        this.socket.on('news-updated', () => {
+        // 两阶段渐进式核心：当第一阶段去重完成或每批 AI 编译完成时，实时拉取最新快照刷新卡片
+        this.socket.on('news-updated', (payload) => {
+            if (payload && payload.phase) {
+                this.collectionPhase = payload.phase;
+            }
             this.fetchLatestNews();
         });
 
@@ -121,25 +127,6 @@ class CoreFeedApp {
             if (payload && payload.article) {
                 this.summaryArticle = payload.article;
                 this.renderSummaryArticle(payload.article);
-            }
-        });
-
-        this.socket.on('podcast-completed', (payload) => {
-            const info = payload.podcast || payload.info;
-            if (info) {
-                this.podcastInfo = info;
-                this.renderPodcastInfo(info);
-                this.toast('AI 双主播播客音频已合成完成！', 'success');
-            }
-        });
-
-        this.socket.on('podcast-progress', (data) => {
-            if (data && data.message) {
-                this.updatePipelineUI({
-                    stage: 'podcast',
-                    message: data.message,
-                    percentage: data.progress || 50
-                });
             }
         });
     }
@@ -171,17 +158,16 @@ class CoreFeedApp {
         if (container && bar && text && pctLabel) {
             container.classList.remove('hidden');
             bar.style.width = `${pct}%`;
-            text.textContent = progress.message || 'Agent 正在执行任务...';
+            text.textContent = progress.message || '正在执行采集与编译任务...';
             pctLabel.textContent = `${pct}%`;
 
-            if (pct >= 100 || stage === 'completed' || stage === 'research_completed') {
+            if (pct >= 100 || stage === 'completed') {
                 setTimeout(() => {
                     container.classList.add('hidden');
                 }, 3500);
             }
         }
 
-        // 高亮流水线节点
         const nodes = {
             scout: document.getElementById('node-scout'),
             curate: document.getElementById('node-curate'),
@@ -212,10 +198,10 @@ class CoreFeedApp {
         }
     }
 
-    // ==================== 3. 选项卡与筛选 ====================
+    // ==================== 3. 选项卡与多维筛选 ====================
     switchTab(tabName) {
         this.activeTab = tabName;
-        const tabs = ['feed', 'summary', 'research', 'podcast'];
+        const tabs = ['feed', 'summary'];
         tabs.forEach(t => {
             const btn = document.getElementById(`tabBtn-${t}`);
             const panel = document.getElementById(`tabPanel-${t}`);
@@ -236,35 +222,59 @@ class CoreFeedApp {
     renderFilters() {
         const regionBar = document.getElementById('regionFilterBar');
         const categoryBar = document.getElementById('categoryFilterBar');
+        const sourceSelect = document.getElementById('sourceFilterSelect');
         if (!regionBar || !categoryBar) return;
 
-        // 统计可用地区与分类
         const regionCounts = { '全部': this.news.length };
         const categoryCounts = { '全部': this.news.length };
+        const sourceCounts = {};
+        let multiSourceCount = 0;
 
         this.news.forEach(item => {
             const r = item.region || '国际';
             const c = item.category || '国际';
+            const s = item.source?.name || 'Global Media';
             regionCounts[r] = (regionCounts[r] || 0) + 1;
             categoryCounts[c] = (categoryCounts[c] || 0) + 1;
+            sourceCounts[s] = (sourceCounts[s] || 0) + 1;
+            if ((item.sourceCount || 1) > 1 || (Array.isArray(item.relatedSources) && item.relatedSources.length > 0)) {
+                multiSourceCount++;
+            }
         });
+
+        const multiLabel = document.getElementById('multiSourceCountLabel');
+        if (multiLabel) {
+            multiLabel.textContent = multiSourceCount;
+        }
+
+        // 如果当前选中的筛选值在新数据中不存在，自动回退到“全部”
+        if (this.selectedRegion !== '全部' && !regionCounts[this.selectedRegion]) {
+            this.selectedRegion = '全部';
+        }
+        if (this.selectedCategory !== '全部' && !categoryCounts[this.selectedCategory]) {
+            this.selectedCategory = '全部';
+        }
 
         const regions = Object.keys(regionCounts);
         regionBar.innerHTML = `<span class="text-xs mr-1" style="color: var(--stone);">地域：</span>` +
             regions.map(r => {
                 const active = this.selectedRegion === r;
-                return `<button onclick="app.setRegionFilter('${r}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(r)} <span style="opacity: 0.72;">${regionCounts[r]}</span></button>`;
+                return `<button onclick="app.setRegionFilter('${this.escapeHtml(r)}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(r)} <span style="opacity: 0.72;">${regionCounts[r]}</span></button>`;
             }).join('');
 
         const categories = Object.keys(categoryCounts);
-        if (categories.length > 2) {
-            categoryBar.innerHTML = `<span class="text-xs mr-1" style="color: var(--stone);">版面：</span>` +
-                categories.map(c => {
-                    const active = this.selectedCategory === c;
-                    return `<button onclick="app.setCategoryFilter('${c}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(c)}</button>`;
-                }).join('');
-        } else {
-            categoryBar.innerHTML = '';
+        categoryBar.innerHTML = `<span class="text-xs mr-1" style="color: var(--stone);">版面：</span>` +
+            categories.map(c => {
+                const active = this.selectedCategory === c;
+                return `<button onclick="app.setCategoryFilter('${this.escapeHtml(c)}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(c)} <span style="opacity: 0.72;">${categoryCounts[c]}</span></button>`;
+            }).join('');
+
+        // 更新媒体来源下拉筛选框
+        if (sourceSelect) {
+            const currentVal = sourceSelect.value || '全部';
+            const sortedSources = Object.keys(sourceCounts).sort((a, b) => sourceCounts[b] - sourceCounts[a]);
+            sourceSelect.innerHTML = `<option value="全部">全部媒体来源 (${this.news.length})</option>` +
+                sortedSources.map(s => `<option value="${this.escapeHtml(s)}" ${currentVal === s ? 'selected' : ''}>${this.escapeHtml(s)} (${sourceCounts[s]})</option>`).join('');
         }
     }
 
@@ -284,18 +294,22 @@ class CoreFeedApp {
         this.renderNewsGrid();
     }
 
-    // ==================== 4. 渲染全球情报卡片网格 ====================
+    // ==================== 4. 渲染全球新闻卡片网格 ====================
     renderNewsGrid() {
         const grid = document.getElementById('newsGrid');
         if (!grid) return;
 
         const keyword = (document.getElementById('localFilterInput')?.value || '').trim().toLowerCase();
+        const selectedSource = document.getElementById('sourceFilterSelect')?.value || '全部';
 
         const filtered = this.news.filter(item => {
             if (this.selectedRegion !== '全部' && (item.region || '国际') !== this.selectedRegion) {
                 return false;
             }
             if (this.selectedCategory !== '全部' && (item.category || '国际') !== this.selectedCategory) {
+                return false;
+            }
+            if (selectedSource !== '全部' && (item.source?.name || 'Global Media') !== selectedSource) {
                 return false;
             }
             if (keyword) {
@@ -316,9 +330,9 @@ class CoreFeedApp {
         if (filtered.length === 0) {
             grid.innerHTML = `
                 <div class="col-span-full kami-card py-14 text-center space-y-3">
-                    <div class="kami-tag mx-auto">NO DISPATCHES · 暂无情报</div>
-                    <h3 class="text-lg" style="color: var(--near-black);">当前筛选条件下暂无新闻情报</h3>
-                    <p class="text-xs max-w-md mx-auto" style="color: var(--stone);">点击右上角「Agent 全球巡检」按钮，派遣多 Agent 并发采集路透社、BBC、纽约时报、彭博社、南华早报等全球权威信源。</p>
+                    <div class="kami-tag mx-auto">NO DISPATCHES · 暂无新闻</div>
+                    <h3 class="text-lg" style="color: var(--near-black);">当前筛选条件下暂无新闻条目</h3>
+                    <p class="text-xs max-w-md mx-auto" style="color: var(--stone);">点击右上角「立即采集全球新闻」按钮，并发采集路透社、BBC、纽约时报、彭博社、南华早报等全球知名媒体。</p>
                 </div>
             `;
             return;
@@ -339,47 +353,56 @@ class CoreFeedApp {
         const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
         const hasMultiSources = relatedSources.length > 0;
         const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
+        const isCompiling = (this.collectionPhase === 'collected' || this.collectionPhase === 'compiling') && !item.aiCompiled;
 
         const encodedUrl = encodeURIComponent(item.url || '');
         const encodedTitle = encodeURIComponent(title);
         const encodedSource = encodeURIComponent(sourceName);
         const encodedSummary = encodeURIComponent(summary);
 
+        const relatedLinksHtml = relatedSources.map(r => {
+            if (r.url) {
+                return `<a href="${this.escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" class="hover:underline" title="${this.escapeHtml(r.title || r.name)}">${this.escapeHtml(r.name)}</a>`;
+            }
+            return `<span>${this.escapeHtml(r.name)}</span>`;
+        }).join('、');
+
         return `
             <article class="news-card flex flex-col justify-between space-y-4">
                 <div class="space-y-3">
-                    <!-- 顶部元信息：媒体名称 + 地区/分类 + 时间 -->
+                    <!-- 顶部元信息：媒体名称 + 地区/分类 + 编译状态 + 时间 -->
                     <div class="flex items-center justify-between gap-2 text-xs">
                         <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-                            <span class="kami-tag truncate max-w-[165px]">
+                            <span class="kami-tag truncate max-w-[165px]" title="${this.escapeHtml(sourceName)}">
                                 ${this.escapeHtml(sourceName)}
                             </span>
                             <span class="kami-tag-neutral">
                                 ${this.escapeHtml(region)}
                             </span>
                             ${category && category !== region ? `<span class="kami-tag-neutral">${this.escapeHtml(category)}</span>` : ''}
+                            ${isCompiling ? `<span class="kami-tag-neutral" style="color: var(--brand);">编译中...</span>` : ''}
                         </div>
                         <span class="text-xs whitespace-nowrap" style="color: var(--stone); font-variant-numeric: tabular-nums;">${this.escapeHtml(timeStr)}</span>
                     </div>
 
-                    <!-- 多信源交叉验证标识 -->
+                    <!-- 多信源交叉验证标识（支持点击跳转各家关联外媒报道） -->
                     ${hasMultiSources ? `
-                        <div class="kami-callout flex items-center justify-between gap-2" style="font-variant-numeric: tabular-nums;">
-                            <span><strong>${relatedSources.length + 1} 家权威外媒交叉印证</strong></span>
-                            <span class="truncate max-w-[165px]" style="color: var(--olive);">+ ${this.escapeHtml(relatedSources.map(r => r.name).join('、'))}</span>
+                        <div class="kami-callout flex flex-col gap-0.5" style="font-variant-numeric: tabular-nums;">
+                            <div><strong>${relatedSources.length + 1} 家权威外媒交叉印证</strong></div>
+                            <div class="truncate text-[11px]" style="color: var(--olive);">同题报道：${relatedLinksHtml}</div>
                         </div>
                     ` : ''}
 
-                    <!-- 中文编译主标题与外媒原标题 -->
+                    <!-- 主标题与外媒原标题 -->
                     <div>
-                        <h3 class="text-[17px] leading-[1.32]" style="color: var(--near-black); margin: 0;">
+                        <h3 class="text-[17px] leading-[1.35]" style="color: var(--near-black); margin: 0;">
                             <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer" style="color: inherit;" onmouseover="this.style.color='var(--brand)'" onmouseout="this.style.color='inherit'">${this.escapeHtml(title)}</a>
                         </h3>
                         ${originalTitle ? `<p class="text-xs mt-1 line-clamp-1" style="color: var(--stone);" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
                     </div>
 
-                    <!-- 深度中文摘要 -->
-                    <p class="text-[14px] leading-[1.55] line-clamp-4" style="color: var(--olive); margin: 0;">
+                    <!-- 新闻摘要 -->
+                    <p class="text-[14px] leading-[1.58] line-clamp-4" style="color: var(--olive); margin: 0;">
                         ${this.escapeHtml(summary)}
                     </p>
 
@@ -391,12 +414,12 @@ class CoreFeedApp {
                     ` : ''}
                 </div>
 
-                <!-- 卡片底部操作栏：Agent 全文深读 & 原文跳转 -->
+                <!-- 卡片底部操作栏：全文深读 & 源站原文跳转 -->
                 <div class="pt-3 flex items-center justify-between gap-2 text-xs" style="border-top: 1px solid var(--border-soft);">
                     <button onclick="app.openDeepRead('${encodedUrl}', '${encodedTitle}', '${encodedSource}', '${encodedSummary}')"
                         class="inline-flex items-center gap-1.5 py-1 font-medium hover:underline cursor-pointer" style="color: var(--brand);">
                         <i class="fa-solid fa-book-open-reader text-[11px]"></i>
-                        <span>Agent 全文深读</span>
+                        <span>全文深读</span>
                     </button>
                     <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
                         class="inline-flex items-center gap-1 hover:underline" style="color: var(--stone);">
@@ -423,35 +446,41 @@ class CoreFeedApp {
         }
     }
 
-    // ==================== 5. Agent 核心交互动作 ====================
+    // ==================== 5. 全球新闻采集、加载与全文深读 ====================
 
     /**
-     * 触发多 Agent 全球知名信源巡检
+     * 触发两阶段渐进式全球知名信源巡检
      */
     async triggerAgentPatrol() {
         const btn = document.getElementById('btnRunPatrol');
         const icon = document.getElementById('patrolBtnIcon');
         const text = document.getElementById('patrolBtnText');
+        const categoryFilter = document.getElementById('patrolCategorySelect')?.value || 'all';
 
         if (btn) btn.disabled = true;
         if (icon) icon.className = 'fa-solid fa-spinner fa-spin text-xs';
-        if (text) text.textContent = 'Agent 巡检整合中...';
+        if (text) text.textContent = '采集与编译中...';
 
-        this.toast('已启动多 Agent 全球知名信源巡检，请留意实时流水线进度...', 'info');
-        this.updatePipelineUI({ stage: 'scout', percentage: 5, message: 'Scout Agent 正在连接全球知名媒体矩阵...' });
+        this.collectionPhase = 'collecting';
+        this.toast('已启动两阶段渐进式采集：几秒内将先行展示最新外媒报道，随后后台自动执行全文深读与中文编译...', 'info');
+        this.updatePipelineUI({ stage: 'scout', percentage: 5, message: '正在并发连接全球知名媒体矩阵...' });
 
         try {
             const res = await fetch('/api/agent/patrol', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ generateSummary: true })
+                body: JSON.stringify({
+                    categoryFilter,
+                    generateSummary: true
+                })
             });
             const data = await res.json();
 
             if (!res.ok || !data.success) {
-                throw new Error(data.message || '巡检请求失败');
+                throw new Error(data.message || '采集请求失败');
             }
 
+            this.collectionPhase = 'completed';
             this.news = data.news || [];
             this.totalNews = data.totalEnhancedCount || this.news.length;
             this.lastUpdated = data.lastUpdated;
@@ -466,13 +495,14 @@ class CoreFeedApp {
 
             this.renderFilters();
             this.renderNewsGrid();
-            this.toast(`全球巡检完成！成功编译整合 ${this.news.length} 条权威情报（耗时 ${data.elapsedSeconds || ''}s）`, 'success');
+            this.toast(`全球新闻采集与编译全部完成！共展示 ${this.news.length} 条精选新闻（耗时 ${data.elapsedSeconds || ''}s）`, 'success');
         } catch (err) {
-            this.toast(`Agent 巡检提示: ${err.message}`, 'error');
+            this.collectionPhase = 'idle';
+            this.toast(`采集提示: ${err.message}`, 'error');
         } finally {
             if (btn) btn.disabled = false;
             if (icon) icon.className = 'fa-solid fa-satellite-dish text-xs';
-            if (text) text.textContent = 'Agent 全球巡检';
+            if (text) text.textContent = '立即采集全球新闻';
         }
     }
 
@@ -483,6 +513,9 @@ class CoreFeedApp {
             if (data && data.success && Array.isArray(data.news)) {
                 this.news = data.news;
                 this.totalNews = data.total || this.news.length;
+                if (data.collectionPhase) {
+                    this.collectionPhase = data.collectionPhase;
+                }
                 if (data.lastUpdated) {
                     this.lastUpdated = data.lastUpdated;
                     document.getElementById('lastUpdatedLabel').textContent = new Date(data.lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
@@ -512,132 +545,7 @@ class CoreFeedApp {
     }
 
     /**
-     * 快速填充专题并触发 Agent 专题调查
-     */
-    quickTopic(topicText) {
-        const input = document.getElementById('topicResearchInput');
-        if (input) {
-            input.value = topicText;
-            this.runTopicResearch();
-        }
-    }
-
-    /**
-     * 派遣 Research Agent 围绕特定主题搜集全球信源并生成对比报告
-     */
-    async runTopicResearch() {
-        const input = document.getElementById('topicResearchInput');
-        const btn = document.getElementById('btnTopicResearch');
-        const authoritativeOnly = document.getElementById('chkAuthoritativeOnly')?.checked || false;
-
-        const topic = (input?.value || '').trim();
-        if (!topic) {
-            this.toast('请先输入您想让 Agent 搜集整合的全球新闻主题或关键词', 'warning');
-            input?.focus();
-            return;
-        }
-
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-xs"></i><span>Agent 正在跨源检索深读...</span>`;
-        }
-
-        this.switchTab('research');
-        const container = document.getElementById('researchReportContainer');
-        if (container) {
-            container.innerHTML = `
-                <div class="py-12 space-y-3">
-                    <div class="kami-tag">AGENT RESEARCH IN PROGRESS · 正在深读</div>
-                    <h3 class="text-xl" style="color: var(--near-black);">Research Agent 正在全球权威信源中搜集「${this.escapeHtml(topic)}」...</h3>
-                    <p class="text-xs" style="color: var(--stone);">正在执行：多语种检索词规划 → 全球名媒检索 → Jina Reader 全文深读 → 跨信源观点比对合成</p>
-                </div>
-            `;
-        }
-
-        try {
-            const res = await fetch('/api/agent/research', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ topic, authoritativeOnly, maxArticles: 12 })
-            });
-            const data = await res.json();
-
-            if (!res.ok || !data.success) {
-                throw new Error(data.message || '专题搜集未找到结果');
-            }
-
-            this.renderResearchReport(data);
-            this.toast(`专题「${topic}」多信源深度整合报告已生成！`, 'success');
-        } catch (err) {
-            if (container) {
-                container.innerHTML = `
-                    <div class="py-10 space-y-2" style="color: var(--dark-warm);">
-                        <div class="kami-tag-neutral">NOTICE</div>
-                        <p class="font-medium">${this.escapeHtml(err.message)}</p>
-                    </div>
-                `;
-            }
-            this.toast(err.message, 'error');
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = `<i class="fa-solid fa-compass-drafting text-xs"></i><span>派遣 Agent 搜集整合</span>`;
-            }
-        }
-    }
-
-    async loadLatestResearchIfAny() {
-        try {
-            const res = await fetch('/api/agent/research/latest');
-            const data = await res.json();
-            if (data && data.success && data.report && data.report.topic) {
-                this.renderResearchReport(data.report);
-            }
-        } catch (_) {}
-    }
-
-    renderResearchReport(report) {
-        const container = document.getElementById('researchReportContainer');
-        if (!container || !report) return;
-
-        const sources = Array.isArray(report.sourcesCovered) ? report.sourcesCovered : [];
-        const articles = Array.isArray(report.articles) ? report.articles : [];
-
-        container.innerHTML = `
-            <div class="space-y-8">
-                <div class="pb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-3" style="border-bottom: 1px solid var(--border);">
-                    <div>
-                        <div class="flex flex-wrap items-center gap-2.5 mb-2">
-                            <span class="kami-tag">Agent 全球多信源专题卷宗</span>
-                            <span class="text-xs" style="color: var(--stone);">英文检索式：${this.escapeHtml(report.englishQuery || report.topic)}</span>
-                        </div>
-                        <h2 class="text-2xl sm:text-3xl" style="color: var(--near-black); margin: 0;">「${this.escapeHtml(report.topic)}」全球知名信源整合报告</h2>
-                        <p class="text-xs mt-2" style="color: var(--stone); font-variant-numeric: tabular-nums;">
-                            生成时间：${new Date(report.generatedAt || Date.now()).toLocaleString('zh-CN')} · 覆盖 ${sources.length} 家国际媒体 (${this.escapeHtml(sources.slice(0, 8).join('、'))})
-                        </p>
-                    </div>
-                </div>
-
-                <!-- 深度对比报告正文 (740px 最佳阅读行宽) -->
-                <div class="summary-content">
-                    ${report.reportHtml || ''}
-                </div>
-
-                <!-- 支撑该专题报告的外媒情报卡片 -->
-                <div class="pt-8 space-y-4" style="border-top: 1px solid var(--border);">
-                    <h3 class="text-base" style="color: var(--near-black); margin: 0;">
-                        本次专题采集的全球知名信源报道 (${articles.length} 篇)
-                    </h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                        ${articles.map((a, idx) => this.renderSingleCardHtml(a, idx)).join('')}
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-
-    /**
-     * 打开单篇外媒报道的 Jina Reader + Agent 全文深读弹窗
+     * 打开单篇外媒报道的 Jina Reader + 全文深读弹窗
      */
     async openDeepRead(encodedUrl, encodedTitle, encodedSource, encodedSummary) {
         const url = decodeURIComponent(encodedUrl || '');
@@ -661,8 +569,8 @@ class CoreFeedApp {
         bodyEl.innerHTML = `
             <div class="py-12 space-y-3">
                 <div class="kami-tag">JINA READER EXTRACTION</div>
-                <div class="text-base font-medium" style="color: var(--near-black);">Deep-Reader Agent 正在通过 Jina Reader 提取 [${this.escapeHtml(sourceName)}] 原文并精译...</div>
-                <p class="text-xs" style="color: var(--stone);">正在穿透页面排版，提取核心段落、数据与背景脉络</p>
+                <div class="text-base font-medium" style="color: var(--near-black);">正在通过 Jina Reader / Readability 穿透提取 [${this.escapeHtml(sourceName)}] 原文并精译...</div>
+                <p class="text-xs" style="color: var(--stone);">正在提取核心段落、关键数据与背景脉络</p>
             </div>
         `;
 
@@ -697,7 +605,7 @@ class CoreFeedApp {
         document.getElementById('deepReadModal')?.classList.add('hidden');
     }
 
-    // ==================== 6. 主编综述、EPUB 与 Kindle ====================
+    // ==================== 6. 今日要闻深度综述 ====================
 
     renderSummaryArticle(article) {
         if (!article) return;
@@ -733,82 +641,7 @@ class CoreFeedApp {
         }
     }
 
-    async exportEpub() {
-        try {
-            this.toast('正在生成 Kami 纸感排版 EPUB 电子书...', 'info');
-            const res = await fetch('/api/generate-epub', { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok || !data.success) throw new Error(data.message || '生成 EPUB 失败');
-
-            window.location.href = data.downloadUrl;
-            this.toast(`EPUB 电子书 (${data.epub.filename}) 已开始下载`, 'success');
-        } catch (err) {
-            this.toast(err.message, 'error');
-        }
-    }
-
-    async sendToKindle() {
-        try {
-            this.toast('正在打包 EPUB 简报并发送至 Kindle / 默认邮箱...', 'info');
-            const res = await fetch('/api/send-email', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({})
-            });
-            const data = await res.json();
-            if (!res.ok || !data.success) throw new Error(data.message || '发送邮件失败');
-            this.toast(data.message || '成功推送至 Kindle！', 'success');
-        } catch (err) {
-            this.toast(err.message, 'error');
-        }
-    }
-
-    // ==================== 7. AI 播客合成 ====================
-
-    async generatePodcast(isDemo = false) {
-        const btn = document.getElementById('btnGenPodcast');
-        if (btn) btn.disabled = true;
-        this.toast(isDemo ? '正在执行 TTS 语音快速测试...' : '正在编写双主播脚本并合成 MP3 音频...', 'info');
-
-        try {
-            const res = await fetch(`/api/generate-podcast${isDemo ? '?demo=1' : ''}`, { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok || !data.success) throw new Error(data.message || '合成播客失败');
-
-            const info = data.podcast || data.info;
-            this.renderPodcastInfo(info);
-            this.toast('播客音频合成完毕！', 'success');
-        } catch (err) {
-            this.toast(err.message, 'error');
-        } finally {
-            if (btn) btn.disabled = false;
-        }
-    }
-
-    renderPodcastInfo(info) {
-        if (!info) return;
-        const titleEl = document.getElementById('podcastTitleLabel');
-        const metaEl = document.getElementById('podcastMetaLabel');
-        const player = document.getElementById('podcastAudioPlayer');
-        const scriptBox = document.getElementById('podcastScriptBox');
-        const scriptWrapper = document.getElementById('podcastScriptWrapper');
-
-        if (titleEl) titleEl.textContent = info.title || 'AI 全球新闻联播';
-        if (metaEl) {
-            const ftpStatus = info.ftp?.uploaded ? ' · 已同步上传至 FTP' : '';
-            metaEl.textContent = `预估时长：${info.duration || 0} 秒 · 片段数：${info.stats?.totalSegments || 0}${ftpStatus}`;
-        }
-        if (player) {
-            player.src = `/api/podcast/complete?t=${Date.now()}`;
-            player.load();
-        }
-        if (scriptBox && info.script) {
-            scriptBox.textContent = info.script;
-            scriptWrapper?.classList.remove('hidden');
-        }
-    }
-
-    // ==================== 8. 全球知名信源矩阵管理 ====================
+    // ==================== 7. 全球知名信源矩阵管理 ====================
 
     async openSourceMatrixModal() {
         const modal = document.getElementById('sourceMatrixModal');
@@ -948,7 +781,7 @@ class CoreFeedApp {
         }
     }
 
-    // ==================== 9. 系统与 AI 设置弹窗 ====================
+    // ==================== 8. 系统与 AI 设置弹窗 ====================
 
     async openSettingsModal() {
         const modal = document.getElementById('settingsModal');
@@ -959,14 +792,13 @@ class CoreFeedApp {
             const res = await fetch('/api/config');
             const data = await res.json();
             if (data && data.success && data.config) {
-                const { ai, agent, smtp, schedule } = data.config;
+                const { ai, agent, schedule } = data.config;
                 document.getElementById('cfgAiBaseUrl').value = ai?.baseUrl || '';
                 document.getElementById('cfgAiModel').value = ai?.model || '';
                 document.getElementById('cfgMaxCurated').value = agent?.maxCuratedArticles || 30;
                 document.getElementById('cfgDeepReadCount').value = agent?.deepReadTopCount ?? 8;
                 document.getElementById('cfgFreshnessHours').value = agent?.freshnessHours || 48;
                 document.getElementById('cfgUpdateTimes').value = (schedule?.updateTimes || []).join(',');
-                document.getElementById('cfgRecipientEmail').value = smtp?.defaultRecipient || '';
             }
         } catch (_) {}
     }
@@ -983,7 +815,6 @@ class CoreFeedApp {
         const deepReadCount = parseInt(document.getElementById('cfgDeepReadCount')?.value, 10) || 8;
         const freshnessHours = parseInt(document.getElementById('cfgFreshnessHours')?.value, 10) || 48;
         const updateTimes = document.getElementById('cfgUpdateTimes')?.value.trim();
-        const recipient = document.getElementById('cfgRecipientEmail')?.value.trim();
 
         const payload = {
             AI_BASE_URL: baseUrl,
@@ -991,8 +822,7 @@ class CoreFeedApp {
             AGENT_MAX_CURATED_ARTICLES: maxCurated,
             AGENT_DEEP_READ_COUNT: deepReadCount,
             AGENT_FRESHNESS_HOURS: freshnessHours,
-            UPDATE_TIMES: updateTimes,
-            DEFAULT_RECIPIENT_EMAIL: recipient
+            UPDATE_TIMES: updateTimes
         };
         if (apiKey && !apiKey.startsWith('***')) {
             payload.AI_API_KEY = apiKey;
@@ -1012,7 +842,7 @@ class CoreFeedApp {
                 if (badge) badge.textContent = model;
             }
             this.closeSettingsModal();
-            this.toast('系统与 Agent 配置已保存并立即生效！', 'success');
+            this.toast('系统与采集配置已保存并立即生效！', 'success');
         } catch (err) {
             this.toast(err.message, 'error');
         }

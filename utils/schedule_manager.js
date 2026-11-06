@@ -4,24 +4,22 @@ const logger = require('./logger');
 
 /**
  * 定时任务管理器 (CoreFeed v2.0)
- * 定时触发多 Agent 全球知名信源巡检、深度综述生成及 TTS 播客合成
+ * 定时触发全球知名信源巡检、渐进式编译及今日要闻综述生成
  */
 class ScheduleManager {
-    constructor(newsService, io, stateManager = null, newsAgentService = null, aiService = null, audioService = null) {
+    constructor(newsService, io, stateManager = null, newsAgentService = null, aiService = null) {
         this.newsService = newsService;
         this.io = io;
         this.stateManager = stateManager;
         this.newsAgentService = newsAgentService;
         this.aiService = aiService;
-        this.audioService = audioService;
         this.currentTasks = [];
         this.isRunning = false;
     }
 
-    setServices({ newsAgentService, aiService, audioService }) {
+    setServices({ newsAgentService, aiService }) {
         if (newsAgentService) this.newsAgentService = newsAgentService;
         if (aiService) this.aiService = aiService;
-        if (audioService) this.audioService = audioService;
     }
 
     /**
@@ -42,11 +40,11 @@ class ScheduleManager {
             return;
         }
 
-        let timesToSchedule = Array.isArray(updateTimes) && updateTimes.length > 0
+        const timesToSchedule = Array.isArray(updateTimes) && updateTimes.length > 0
             ? updateTimes
             : [config.news.updateTime || '08:00'];
 
-        logger.info('SCHEDULE', `定时 Agent 巡检任务计划时间: ${timesToSchedule.join(', ')}`);
+        logger.info('SCHEDULE', `定时全球新闻采集计划时间: ${timesToSchedule.join(', ')}`);
 
         for (const time of timesToSchedule) {
             const cronExpression = this.parseTimeToDaily(time);
@@ -110,10 +108,10 @@ class ScheduleManager {
     }
 
     /**
-     * 执行完整定时更新流程 (Agent 巡检 -> 编译 -> 深度综述 -> 播客合成与 FTP 上传)
+     * 执行完整定时更新流程 (信源采集 -> 聚类即时展示 -> 正文深读与中文编译 -> 今日要闻综述)
      */
     async executeUpdate() {
-        logger.info('SCHEDULE', '开始执行定时 Agent 全球新闻巡检与整合流程...');
+        logger.info('SCHEDULE', '开始执行定时全球新闻采集与编译流程...');
 
         try {
             if (this.io) {
@@ -124,42 +122,17 @@ class ScheduleManager {
             }
 
             const AIService = require('../services/ai_service');
-            const AudioService = require('../services/audio_service');
             const NewsAgentService = require('../services/news_agent_service');
 
             const aiService = this.aiService || new AIService(this.io, this.stateManager);
-            const audioService = this.audioService || new AudioService(this.io, this.stateManager);
             const agentService = this.newsAgentService || new NewsAgentService(this.io, this.stateManager, aiService, this.newsService);
 
-            // 1-4: 执行多 Agent 巡检、聚类、深读、编译与深度综述生成
             const patrolResult = await agentService.runGlobalPatrolPipeline({
                 generateSummary: true
             });
 
             const finalArticles = patrolResult.news || [];
             const summaryArticle = patrolResult.summaryArticle || null;
-            let podcastResult = null;
-
-            // 5: 独立生成 TTS 播客并上传 FTP
-            if (finalArticles.length > 0) {
-                try {
-                    const script = await aiService.generatePodcastScript(finalArticles);
-                    await audioService.initializeTTS();
-                    podcastResult = await audioService.generatePodcastAudio(script);
-
-                    if (this.stateManager) {
-                        this.stateManager.set('podcastInfo', podcastResult);
-                    }
-                    if (this.io) {
-                        this.io.emit('podcast-completed', {
-                            success: true,
-                            podcast: podcastResult
-                        });
-                    }
-                } catch (audioErr) {
-                    logger.warn('SCHEDULE', `定时播客合成跳过: ${audioErr.message}`);
-                }
-            }
 
             if (this.io) {
                 this.io.emit('news-update-completed', {
@@ -168,8 +141,7 @@ class ScheduleManager {
                     success: finalArticles.length > 0,
                     stats: {
                         newsCount: finalArticles.length,
-                        hasSummary: Boolean(summaryArticle),
-                        hasPodcast: Boolean(podcastResult)
+                        hasSummary: Boolean(summaryArticle)
                     }
                 });
             }

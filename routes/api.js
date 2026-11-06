@@ -1,65 +1,56 @@
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
 const config = require('../config');
-const { writeJsonFile, readJsonFile, formatFileSize } = require('../utils/helpers');
+const { writeJsonFile, readJsonFile } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const { getGlobalSourceMatrix, saveGlobalSourceMatrixUpdate } = require('../config/global_sources');
-const EpubEmailService = require('../services/epub_email_service');
 
 /**
- * 初始化 API 路由 (CoreFeed v2.0 - Agent 驱动版)
+ * 初始化 API 路由 (CoreFeed v2.0 - 专注全球新闻采集、渐进编译与展示)
  */
 function initializeApiRoutes(services, io, stateManager) {
     const router = express.Router();
-    const { newsService, aiService, audioService, scheduleManager, newsAgentService } = services;
-    const epubEmailService = new EpubEmailService(stateManager);
+    const { newsService, aiService, scheduleManager, newsAgentService } = services;
 
-    // 启动时加载持久化的新闻、摘要与专题报告数据
+    // 启动时加载持久化的今日综述数据
     (async () => {
         try {
             const summaryData = await readJsonFile(config.storage.summaryFile);
             if (summaryData && summaryData.article) {
-                stateManager.set('summaryArticle', summaryData.article);
-            }
-            const podcastInfo = await audioService.getPodcastInfo();
-            if (podcastInfo) {
-                stateManager.set('podcastInfo', podcastInfo);
+                stateManager.set('summaryArticle', summaryData.article, false);
             }
         } catch (err) {
-            logger.debug('API', '加载初始缓存数据跳过', err.message);
+            logger.debug('API', '加载初始综述缓存跳过', err.message);
         }
     })();
 
-    // ==================== 1. Agent 专属接口 (CoreFeed v2.0) ====================
+    // ==================== 1. Agent 采集与深读接口 ====================
 
     /**
      * 获取 Agent 引擎状态、实时日志与信源巡检统计
      */
-    router.get('/agent/status', async (req, res) => {
-        const lastResearch = await newsAgentService.getLastResearchReport();
+    router.get('/agent/status', (req, res) => {
         res.json({
             success: true,
             isRunningPatrol: newsAgentService.isRunningPatrol,
             isUpdating: stateManager.get('isUpdating'),
+            collectionPhase: stateManager.get('collectionPhase') || 'idle',
             progress: stateManager.get('updateProgress'),
             aiModel: aiService.getCurrentModelInfo(),
             jinaReaderEnabled: config.agent.jinaReaderEnabled,
             sourceStats: stateManager.get('sourceStats') || newsAgentService.getLastSourceStats() || [],
-            recentLogs: newsAgentService.getRecentAgentLogs(),
-            lastResearchTopic: lastResearch?.topic || null
+            recentLogs: newsAgentService.getRecentAgentLogs()
         });
     });
 
     /**
-     * 触发多 Agent 全球知名信源巡检与整合流水线
+     * 触发两阶段渐进式全球知名信源巡检与编译流水线
      */
     router.post('/agent/patrol', async (req, res) => {
         try {
             if (newsAgentService.isRunningPatrol || stateManager.get('isUpdating')) {
                 return res.status(409).json({
                     success: false,
-                    message: 'Agent 全球巡检任务正在运行中，请稍候'
+                    message: '全球新闻采集任务正在运行中，请稍候'
                 });
             }
 
@@ -67,8 +58,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 categoryFilter = 'all',
                 maxDisplayCount = config.agent.maxCuratedArticles || 30,
                 deepReadCount = config.agent.deepReadTopCount || 8,
-                generateSummary = true,
-                generatePodcast = false
+                generateSummary = true
             } = req.body || {};
 
             const result = await newsAgentService.runGlobalPatrolPipeline({
@@ -78,23 +68,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 generateSummary: Boolean(generateSummary)
             });
 
-            // 如果同时请求生成播客音频
-            let podcastInfo = null;
-            if (generatePodcast && result.news && result.news.length > 0) {
-                try {
-                    const script = await aiService.generatePodcastScript(result.news);
-                    await audioService.initializeTTS();
-                    podcastInfo = await audioService.generatePodcastAudio(script);
-                    stateManager.set('podcastInfo', podcastInfo);
-                } catch (podErr) {
-                    logger.warn('API', `播客顺带生成失败: ${podErr.message}`);
-                }
-            }
-
-            res.json({
-                ...result,
-                podcastInfo
-            });
+            res.json(result);
         } catch (error) {
             logger.error('API', 'Agent 巡检执行失败', error.message);
             res.status(500).json({
@@ -105,47 +79,7 @@ function initializeApiRoutes(services, io, stateManager) {
     });
 
     /**
-     * 触发按需专题调查 Agent (搜索全球权威外媒 + Jina 全文深读 + 跨信源对比报告)
-     */
-    router.post('/agent/research', async (req, res) => {
-        try {
-            const { topic, authoritativeOnly = false, timeRange = '7d', maxArticles = 12 } = req.body || {};
-            if (!topic || !String(topic).trim()) {
-                return res.status(400).json({
-                    success: false,
-                    message: '请输入要研究的新闻主题或关键词'
-                });
-            }
-
-            const report = await newsAgentService.runTopicResearchPipeline(String(topic).trim(), {
-                authoritativeOnly: Boolean(authoritativeOnly),
-                timeRange,
-                maxArticles: Number(maxArticles) || 12
-            });
-
-            res.json(report);
-        } catch (error) {
-            logger.error('API', 'Agent 专题调查失败', error.message);
-            res.status(500).json({
-                success: false,
-                message: error.message
-            });
-        }
-    });
-
-    /**
-     * 获取最近一次专题调查报告
-     */
-    router.get('/agent/research/latest', async (req, res) => {
-        const report = await newsAgentService.getLastResearchReport();
-        res.json({
-            success: true,
-            report
-        });
-    });
-
-    /**
-     * 单篇外媒报道即时全文深读 (Jina Reader + AI 中文精译解读)
+     * 单篇外媒报道即时全文深读 (Jina Reader + Cheerio + AI 中文精译解读)
      */
     router.post('/agent/deep-read', async (req, res) => {
         try {
@@ -213,15 +147,17 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    // ==================== 3. 新闻数据与刷新接口 (向后兼容) ====================
+    // ==================== 3. 新闻流查询、过滤与分页接口 ====================
 
     router.get('/news', (req, res) => {
         const newsData = stateManager.get('newsData') || newsService.getNewsData() || [];
         const allEnhanced = stateManager.get('allEnhancedNews') || newsData;
         const lastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
+        const collectionPhase = stateManager.get('collectionPhase') || 'idle';
 
         const region = req.query.region;
         const category = req.query.category;
+        const source = req.query.source;
         const keyword = (req.query.q || '').trim().toLowerCase();
 
         let filtered = [...newsData];
@@ -230,6 +166,9 @@ function initializeApiRoutes(services, io, stateManager) {
         }
         if (category && category !== 'all' && category !== '全部') {
             filtered = filtered.filter(n => n.category === category);
+        }
+        if (source && source !== 'all' && source !== '全部') {
+            filtered = filtered.filter(n => (n.source?.name || '') === source);
         }
         if (keyword) {
             filtered = filtered.filter(n =>
@@ -246,6 +185,7 @@ function initializeApiRoutes(services, io, stateManager) {
             total: allEnhanced.length,
             displayed: filtered.length,
             hasMore: allEnhanced.length > newsData.length,
+            collectionPhase,
             lastUpdated
         });
     });
@@ -273,7 +213,7 @@ function initializeApiRoutes(services, io, stateManager) {
     });
 
     /**
-     * 手动刷新新闻（默认直接调用多 Agent 巡检与整合流水线）
+     * 手动刷新新闻
      */
     router.post('/refresh', async (req, res) => {
         try {
@@ -307,7 +247,7 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    // ==================== 4. 深度综述、EPUB 与 Kindle 邮件接口 ====================
+    // ==================== 4. 今日要闻深度综述接口 ====================
 
     router.get('/summary', async (req, res) => {
         let article = stateManager.get('summaryArticle');
@@ -315,7 +255,7 @@ function initializeApiRoutes(services, io, stateManager) {
             const loaded = await readJsonFile(config.storage.summaryFile);
             if (loaded && loaded.article) {
                 article = loaded.article;
-                stateManager.set('summaryArticle', article);
+                stateManager.set('summaryArticle', article, false);
             }
         }
         res.json({
@@ -330,7 +270,7 @@ function initializeApiRoutes(services, io, stateManager) {
             if (!newsData.length) {
                 return res.status(400).json({
                     success: false,
-                    message: '当前没有新闻数据，请先执行 Agent 全球巡检'
+                    message: '当前没有新闻数据，请先执行全球新闻采集'
                 });
             }
 
@@ -356,149 +296,11 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    router.post('/generate-epub', async (req, res) => {
-        try {
-            const summaryArticle = stateManager.get('summaryArticle');
-            const newsData = stateManager.get('newsData') || [];
-            if (!summaryArticle) {
-                return res.status(400).json({
-                    success: false,
-                    message: '请先生成全球新闻深度综述后再导出 EPUB'
-                });
-            }
+    // ==================== 5. 系统配置、AI 配置与定时调度接口 ====================
 
-            const epubInfo = await epubEmailService.generateEpubFile(summaryArticle, newsData);
-            res.json({
-                success: true,
-                epub: epubInfo,
-                downloadUrl: `/api/epub/download/${encodeURIComponent(epubInfo.filename)}`
-            });
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                message: '生成 EPUB 失败: ' + error.message
-            });
-        }
-    });
-
-    router.get('/epub/download/:filename', (req, res) => {
-        const filename = path.basename(req.params.filename);
-        const filePath = path.join(config.storage.epubDir, filename);
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ success: false, message: 'EPUB 文件不存在' });
-        }
-        res.download(filePath, filename);
-    });
-
-    router.post('/send-email', async (req, res) => {
-        try {
-            const { email } = req.body || {};
-            const recipientEmail = email || config.smtp.defaultRecipient;
-            let summaryArticle = stateManager.get('summaryArticle');
-            const newsData = stateManager.get('newsData') || [];
-
-            if (!summaryArticle) {
-                if (newsData.length > 0) {
-                    summaryArticle = await aiService.generateNewsSummaryArticle(newsData);
-                    stateManager.updateSummaryArticle(summaryArticle);
-                } else {
-                    return res.status(400).json({
-                        success: false,
-                        message: '没有可发送的综述内容，请先采集并生成综述'
-                    });
-                }
-            }
-
-            const epubInfo = await epubEmailService.generateEpubFile(summaryArticle, newsData);
-            const mailResult = await epubEmailService.sendEmailWithEpub(recipientEmail, summaryArticle, epubInfo.path);
-
-            res.json({
-                success: true,
-                message: `EPUB 简报已发送至 ${mailResult.recipient}`,
-                ...mailResult
-            });
-        } catch (error) {
-            logger.error('API', '发送 Kindle 邮件失败', error.message);
-            res.status(500).json({
-                success: false,
-                message: '发送邮件失败: ' + error.message
-            });
-        }
-    });
-
-    // ==================== 5. AI 播客合成与 FTP 上传接口 ====================
-
-    router.post('/generate-podcast', async (req, res) => {
-        try {
-            const isDemo = req.query.demo === '1' || req.body?.demo === true;
-            const newsData = stateManager.get('newsData') || newsService.getNewsData() || [];
-
-            let script = '';
-            if (isDemo) {
-                script = `[A] 大家好，欢迎收听聚核全球知名信源AI播客测试。\n[B] 本节目由多Agent智能采集路透社、BBC、纽约时报等权威报道并自动合成语音。`;
-            } else {
-                if (!newsData.length) {
-                    return res.status(400).json({
-                        success: false,
-                        message: '当前没有新闻数据，请先执行 Agent 巡检'
-                    });
-                }
-                script = await aiService.generatePodcastScript(newsData);
-            }
-
-            await audioService.initializeTTS();
-            const podcastInfo = await audioService.generatePodcastAudio(script);
-            stateManager.updatePodcastInfo(podcastInfo);
-
-            res.json({
-                success: true,
-                podcast: podcastInfo,
-                info: podcastInfo
-            });
-        } catch (error) {
-            logger.error('API', '生成播客失败', error.message);
-            res.status(500).json({
-                success: false,
-                message: '生成播客失败: ' + error.message
-            });
-        }
-    });
-
-    router.get('/podcast/info', async (req, res) => {
-        let info = stateManager.get('podcastInfo') || await audioService.getPodcastInfo();
-        res.json({
-            success: true,
-            podcast: info || null
-        });
-    });
-
-    router.get('/podcast/complete', async (req, res) => {
-        const filePath = path.join(config.storage.podcastDir, 'podcast_complete.mp3');
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ success: false, message: '播客音频文件尚未生成' });
-        }
-        res.setHeader('Content-Type', 'audio/mpeg');
-        fs.createReadStream(filePath).pipe(res);
-    });
-
-    router.get('/ftp/config', (req, res) => {
-        res.json({
-            success: true,
-            config: audioService.getFtpConfig()
-        });
-    });
-
-    router.post('/ftp/test', async (req, res) => {
-        const result = await audioService.testFtpConnection();
-        res.json(result);
-    });
-
-    // ==================== 6. 系统配置、AI 配置与定时任务接口 ====================
-
-    router.get('/status', async (req, res) => {
+    router.get('/status', (req, res) => {
         const newsData = stateManager.get('newsData') || [];
         const summaryArticle = stateManager.get('summaryArticle');
-        const podcastInfo = stateManager.get('podcastInfo') || await audioService.getPodcastInfo();
 
         res.json({
             success: true,
@@ -506,12 +308,10 @@ function initializeApiRoutes(services, io, stateManager) {
             version: '2.0.0',
             newsCount: newsData.length,
             lastUpdated: stateManager.get('lastUpdated'),
+            collectionPhase: stateManager.get('collectionPhase') || 'idle',
             hasSummary: Boolean(summaryArticle),
-            hasPodcast: Boolean(podcastInfo),
             aiConfigured: Boolean(config.minimax.apiKey),
             aiModel: aiService.getCurrentModelInfo(),
-            ttsConfigured: Boolean(config.tts.baseUrl),
-            ttsReady: audioService.ttsReady,
             schedule: scheduleManager ? scheduleManager.getStatus() : null
         });
     });
@@ -532,18 +332,6 @@ function initializeApiRoutes(services, io, stateManager) {
                     apiKeyConfigured: Boolean(config.minimax.apiKey),
                     rateLimitRpm: config.minimax.rateLimitRpm
                 },
-                tts: {
-                    baseUrl: config.tts.baseUrl,
-                    hostVoice: config.tts.hostVoice,
-                    guestVoice: config.tts.guestVoice
-                },
-                smtp: {
-                    host: config.smtp.host,
-                    port: config.smtp.port,
-                    user: config.smtp.user,
-                    defaultRecipient: config.smtp.defaultRecipient
-                },
-                ftp: audioService.getFtpConfig(),
                 schedule: scheduleManager ? scheduleManager.getStatus() : {}
             }
         });
@@ -646,20 +434,19 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    // ==================== 7. 第三方聚合数据接口 (/api/latest-data) ====================
+    // ==================== 6. 第三方聚合数据接口 (/api/latest-data) ====================
 
-    router.get('/latest-data', async (req, res) => {
+    router.get('/latest-data', (req, res) => {
         try {
             const currentNewsData = stateManager.get('newsData') || newsService.getNewsData() || [];
             const currentLastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
             const currentSummary = stateManager.get('summaryArticle');
-            const currentPodcast = stateManager.get('podcastInfo') || await audioService.getPodcastInfo();
 
             const responseData = {
                 meta: {
                     timestamp: new Date().toISOString(),
                     version: '2.0.0',
-                    engine: 'CoreFeed Multi-Agent Intelligence',
+                    engine: 'CoreFeed Global News Collector',
                     serverTime: new Date().toISOString()
                 },
                 news: {
@@ -676,6 +463,7 @@ function initializeApiRoutes(services, io, stateManager) {
                         source: item.source?.name,
                         relatedSources: item.relatedSources || [],
                         sourceCount: item.sourceCount || 1,
+                        aiCompiled: Boolean(item.aiCompiled),
                         publishedAt: item.publishedAt,
                         url: item.url
                     }))
@@ -687,13 +475,6 @@ function initializeApiRoutes(services, io, stateManager) {
                     content: currentSummary.htmlContent,
                     wordCount: currentSummary.wordCount,
                     regions: currentSummary.regions
-                } : { available: false },
-                podcast: currentPodcast ? {
-                    available: true,
-                    duration: currentPodcast.duration,
-                    size: currentPodcast.sizeFormatted || formatFileSize(currentPodcast.ftp?.fileSize || 0),
-                    createdAt: currentPodcast.createdAt,
-                    downloadUrl: '/api/podcast/complete'
                 } : { available: false }
             };
 

@@ -124,7 +124,7 @@ function buildConfig() {
             maxCuratedArticles: getNumberConfig('AGENT_MAX_CURATED_ARTICLES', 30),
             maxCandidatePool: getNumberConfig('AGENT_MAX_CANDIDATE_POOL', 80),
             deepReadTopCount: getNumberConfig('AGENT_DEEP_READ_COUNT', 10),
-            sourceConcurrency: getNumberConfig('AGENT_SOURCE_CONCURRENCY', 6),
+            sourceConcurrency: getNumberConfig('AGENT_SOURCE_CONCURRENCY', 8),
             enableGoogleNewsFallback: getBooleanConfig('AGENT_GNEWS_PROXY_FALLBACK', true),
             freshnessHours: getNumberConfig('AGENT_FRESHNESS_HOURS', 48)
         },
@@ -170,41 +170,12 @@ function buildConfig() {
             filterSource: getBooleanConfig('FILTER_SOURCE', false)
         },
 
-        google: {
-            ttsApiKey: getConfig('GOOGLE_TTS_API_KEY', '')
-        },
-
-        // TTS服务配置（OpenAI-Edge-TTS）
-        tts: {
-            baseUrl: getConfig('TTS_BASE_URL', 'http://10.10.10.80:5050/v1/audio/speech'),
-            model: getConfig('TTS_MODEL', 'tts-1'),
-            format: getConfig('TTS_FORMAT', 'mp3'),
-            hostVoice: getConfig('TTS_HOST_VOICE', 'zh-CN-XiaoxiaoNeural'),
-            guestVoice: getConfig('TTS_GUEST_VOICE', 'zh-CN-YunyangNeural'),
-            apiKey: getConfig('TTS_API_KEY', '')
-        },
-
-        // SMTP邮件配置
-        smtp: {
-            host: getConfig('SMTP_HOST', ''),
-            port: getNumberConfig('SMTP_PORT', 465),
-            secure: getBooleanConfig('SMTP_SECURE', true),
-            user: getConfig('SMTP_USER', ''),
-            pass: getConfig('SMTP_PASS', ''),
-            fromName: getConfig('SMTP_FROM_NAME', '聚核 (CoreFeed)'),
-            fromEmail: getConfig('SMTP_FROM_EMAIL', ''),
-            defaultRecipient: getConfig('DEFAULT_RECIPIENT_EMAIL', '')
-        },
-
         // 数据存储配置
         storage: {
             dataDir: path.join(__dirname, '..', 'data'),
             newsFile: path.join(__dirname, '..', 'data', 'news.json'),
             stateFile: path.join(__dirname, '..', 'data', 'state.json'),
-            podcastDir: path.join(__dirname, '..', 'data', 'podcast'),
-            epubDir: path.join(__dirname, '..', 'data', 'epub'),
             summaryFile: path.join(__dirname, '..', 'data', 'summary.json'),
-            researchFile: path.join(__dirname, '..', 'data', 'agent_research.json'),
             sourcesFile: path.join(__dirname, '..', 'config', 'sources.json'),
             settingsFile: SETTINGS_FILE_PATH,
             newsDataPath: 'data/news.json'
@@ -224,29 +195,6 @@ function buildConfig() {
             model: getConfig('AI_MODEL', 'MiniMax-M2.5'),
             rateLimitRpm: getNumberConfig('AI_RATE_LIMIT_RPM', 30),
             rateLimitBurst: getNumberConfig('AI_RATE_LIMIT_BURST', 5)
-        },
-
-        // FTP服务器配置
-        ftp: {
-            host: getConfig('FTP_HOST', '80.251.219.189'),
-            username: getConfig('FTP_USERNAME', 'audio'),
-            password: getConfig('FTP_PASSWORD', ''),
-            filename: getConfig('FTP_FILENAME', 'news_global_today.mp3'),
-            port: getNumberConfig('FTP_PORT', 21),
-            secure: getBooleanConfig('FTP_SECURE', false),
-            enabled: getBooleanConfig('FTP_ENABLED', true)
-        },
-
-        // 音频配置
-        audio: {
-            enabled: true,
-            voice: getConfig('TTS_VOICE', 'zh-CN-XiaoxiaoNeural'),
-            speed: getConfig('TTS_SPEED', '1.0'),
-            format: getConfig('TTS_FORMAT', 'mp3'),
-            quality: getConfig('TTS_QUALITY', 'high'),
-            useFFmpeg: getBooleanConfig('USE_FFMPEG', true),
-            ffmpegPath: getConfig('FFMPEG_PATH', 'ffmpeg'),
-            synthesisDelay: 150
         },
 
         // 缓存配置

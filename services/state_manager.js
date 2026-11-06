@@ -14,11 +14,10 @@ class StateManager extends EventEmitter {
             newsData: [],
             allEnhancedNews: [],
             summaryArticle: null,
-            podcastScript: null,
-            podcastInfo: null,
             sourceStats: [],
             lastUpdated: null,
             isUpdating: false,
+            collectionPhase: 'idle', // idle | collecting | collected | compiling | completed
             updateProgress: {
                 stage: '',
                 current: 0,
@@ -119,15 +118,6 @@ class StateManager extends EventEmitter {
     }
 
     /**
-     * 更新播客信息
-     * @param {Object} podcastInfo - 播客信息
-     */
-    updatePodcastInfo(podcastInfo) {
-        this.set('podcastInfo', podcastInfo);
-        logger.info('STATE', '播客信息更新完成');
-    }
-
-    /**
      * 更新AI配置
      * @param {Object} aiConfig - AI配置信息
      */
@@ -191,9 +181,10 @@ class StateManager extends EventEmitter {
                 newsData: [],
                 allEnhancedNews: [],
                 summaryArticle: null,
-                podcastInfo: null,
+                sourceStats: [],
                 lastUpdated: null,
                 isUpdating: false,
+                collectionPhase: 'idle',
                 updateProgress: {
                     stage: '',
                     current: 0,
@@ -283,9 +274,9 @@ class StateManager extends EventEmitter {
             newsCount: this.state.newsData?.length || 0,
             allEnhancedCount: this.state.allEnhancedNews?.length || 0,
             hasSummary: !!this.state.summaryArticle,
-            hasPodcast: !!this.state.podcastInfo,
             lastUpdated: this.state.lastUpdated,
             isUpdating: this.state.isUpdating,
+            collectionPhase: this.state.collectionPhase,
             progress: this.state.updateProgress
         };
     }
