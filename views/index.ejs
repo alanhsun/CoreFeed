@@ -12,15 +12,15 @@
             theme: {
                 extend: {
                     colors: {
-                        parchment: '#f5f4ed',
-                        ivory: '#faf9f5',
-                        sand: '#e8e6dc',
-                        brand: '#1B365D',
-                        brandLight: '#2D5A8A',
-                        ink: '#141413',
-                        warm: '#3d3d3a',
-                        olive: '#504e49',
-                        stone: '#6b6a64'
+                        parchment: '#f1f5f9',
+                        ivory: '#ffffff',
+                        sand: '#e2e8f0',
+                        brand: '#2563eb',
+                        brandLight: '#1d4ed8',
+                        ink: '#0f172a',
+                        warm: '#1e293b',
+                        olive: '#334155',
+                        stone: '#64748b'
                     }
                 }
             }
@@ -31,13 +31,13 @@
 </head>
 <body class="antialiased">
     <div class="kami-page">
-        <!-- ==================== KAMI EDITORIAL MASTHEAD (報頭) ==================== -->
+        <!-- ==================== 现代高可读性顶部导航头 ==================== -->
         <header class="kami-masthead">
-            <!-- 顶部卷标栏 (Eyebrow) -->
+            <!-- 顶部状态与快捷工具栏 -->
             <div class="kami-eyebrow">
                 <div class="flex flex-wrap items-center gap-3">
-                    <span class="kami-tag">紙 · KAMI EDITION</span>
-                    <span>COREFEED v2.0</span>
+                    <span class="kami-tag"><i class="fa-solid fa-satellite-dish"></i> 全球实时情报聚合</span>
+                    <span class="font-semibold">CoreFeed v2.0</span>
                     <span>·</span>
                     <span><%= new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long', timeZone: 'Asia/Shanghai' }) %></span>
                 </div>
@@ -45,40 +45,40 @@
                 <!-- 遥测状态与系统工具 -->
                 <div class="flex flex-wrap items-center gap-3">
                     <div class="flex items-center gap-2">
-                        <span id="socketStatusDot" class="inline-block w-2 h-2 rounded-full" style="background: var(--brand);"></span>
-                        <span id="aiModelBadge"><%= config.aiModel || 'MiniMax-M2.5' %></span>
+                        <span id="socketStatusDot" class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                        <span id="aiModelBadge" class="font-medium"><%= config.aiModel || 'ag/gemini-4-argon-high' %></span>
                         <span>·</span>
                         <span>已启用 <strong id="enabledSourcesCount" style="color: var(--brand); font-variant-numeric: tabular-nums;"><%= (sourceMatrix || []).filter(s => s.enabled).length %></strong> 家全球名媒</span>
                     </div>
                     <span>·</span>
-                    <button onclick="app.openSourceMatrixModal()" class="hover:underline cursor-pointer" style="color: var(--dark-warm);" title="管理全球知名信源矩阵">
+                    <button onclick="app.openSourceMatrixModal()" class="hover:underline cursor-pointer font-medium" style="color: var(--dark-warm);" title="管理全球知名信源矩阵">
                         信源矩阵
                     </button>
                     <span>·</span>
-                    <button onclick="app.openSettingsModal()" class="hover:underline cursor-pointer" style="color: var(--dark-warm);" title="系统与采集配置">
+                    <button onclick="app.openSettingsModal()" class="hover:underline cursor-pointer font-medium" style="color: var(--dark-warm);" title="系统与采集配置">
                         系统设置
                     </button>
                     <span>·</span>
-                    <button onclick="app.toggleTheme()" class="hover:underline cursor-pointer inline-flex items-center gap-1" style="color: var(--dark-warm);" title="切换宣纸/墨夜模式">
+                    <button onclick="app.toggleTheme()" class="hover:underline cursor-pointer inline-flex items-center gap-1 font-medium" style="color: var(--dark-warm);" title="切换浅色/深色护眼模式">
                         <i id="themeIcon" class="fa-solid fa-moon text-xs"></i>
-                        <span>纸色</span>
+                        <span>深浅模式</span>
                     </button>
                 </div>
             </div>
 
-            <!-- 报头主标题与行动区 -->
+            <!-- 主标题与行动区 -->
             <div class="kami-masthead-main">
                 <div>
                     <h1 class="kami-display-title">聚核 · CoreFeed</h1>
                     <p class="kami-subtitle">
-                        全球知名信源实时聚合 · 多媒交叉印证 · Jina 全文深读与渐进式中文编译
+                        全球 30 大权威信源实时聚合 · 多媒交叉印证 · 全文深读与中文精编
                     </p>
                 </div>
 
                 <!-- 核心采集操作栏 -->
                 <div class="flex flex-wrap items-center gap-2.5">
-                    <select id="patrolCategorySelect" class="kami-input text-xs py-2 px-3 cursor-pointer" title="选择要采集的信源范围">
-                        <option value="all">全部启用信源</option>
+                    <select id="patrolCategorySelect" class="kami-input text-sm py-2.5 px-3.5 cursor-pointer" title="选择要采集的信源范围">
+                        <option value="all">全部启用信源 (30家)</option>
                         <option value="wire">国际顶级通讯社 (Reuters/AP/BBC)</option>
                         <option value="western">欧美权威大报 (NYT/Guardian/Spiegel)</option>
                         <option value="asiapacific">亚太与大中华名媒 (SCMP/NHK/CNA)</option>
@@ -86,11 +86,11 @@
                         <option value="tech">前沿科技媒体 (TechCrunch/Ars)</option>
                     </select>
                     <button onclick="app.openSourceMatrixModal()" class="btn-ghost">
-                        <i class="fa-solid fa-globe text-xs" style="color: var(--brand);"></i>
+                        <i class="fa-solid fa-globe text-sm" style="color: var(--brand);"></i>
                         <span>信源管理</span>
                     </button>
                     <button id="btnRunPatrol" onclick="app.triggerAgentPatrol()" class="btn-primary">
-                        <i id="patrolBtnIcon" class="fa-solid fa-satellite-dish text-xs"></i>
+                        <i id="patrolBtnIcon" class="fa-solid fa-satellite-dish text-sm"></i>
                         <span id="patrolBtnText">立即采集全球新闻</span>
                     </button>
                 </div>
@@ -107,28 +107,28 @@
                         <div id="node-scout" class="agent-node flex items-baseline gap-3">
                             <span class="node-num">01</span>
                             <div class="min-w-0">
-                                <div class="text-sm font-medium truncate" style="color: var(--near-black);">并发信源采集</div>
+                                <div class="text-sm font-bold truncate" style="color: var(--near-black);">并发信源采集</div>
                                 <div class="text-xs truncate" style="color: var(--stone);">RSS / GoogleNews 代理 / Jina</div>
                             </div>
                         </div>
                         <div id="node-curate" class="agent-node flex items-baseline gap-3">
                             <span class="node-num">02</span>
                             <div class="min-w-0">
-                                <div class="text-sm font-medium truncate" style="color: var(--near-black);">跨源聚类 & 即时展示</div>
-                                <div class="text-xs truncate" style="color: var(--stone);">秒级去重合并、打分与首屏直出</div>
+                                <div class="text-sm font-bold truncate" style="color: var(--near-black);">多源聚类 & 秒级汉化</div>
+                                <div class="text-xs truncate" style="color: var(--stone);">去重合并、首屏中文与配图直出</div>
                             </div>
                         </div>
                         <div id="node-compile" class="agent-node flex items-baseline gap-3">
                             <span class="node-num">03</span>
                             <div class="min-w-0">
-                                <div class="text-sm font-medium truncate" style="color: var(--near-black);">全文提取 & 渐进编译</div>
-                                <div class="text-xs truncate" style="color: var(--stone);">Jina 深读 + 分批实时中文精编</div>
+                                <div class="text-sm font-bold truncate" style="color: var(--near-black);">全文深读 & 深度精编</div>
+                                <div class="text-xs truncate" style="color: var(--stone);">Jina 深读 + 分批 AI 深度提炼</div>
                             </div>
                         </div>
                         <div id="node-summary" class="agent-node flex items-baseline gap-3">
                             <span class="node-num">04</span>
                             <div class="min-w-0">
-                                <div class="text-sm font-medium truncate" style="color: var(--near-black);">今日要闻综述</div>
+                                <div class="text-sm font-bold truncate" style="color: var(--near-black);">今日要闻综述</div>
                                 <div class="text-xs truncate" style="color: var(--stone);">跨信源串联综述与原文引注</div>
                             </div>
                         </div>
@@ -136,30 +136,30 @@
 
                     <!-- 进度条与实时状态文字 -->
                     <div id="liveProgressContainer" class="mt-3.5 hidden">
-                        <div class="flex items-center justify-between text-xs mb-1.5">
-                            <span id="liveProgressText" style="color: var(--brand); font-weight: 500;">正在初始化采集任务...</span>
-                            <span id="liveProgressPercent" style="color: var(--brand); font-weight: 500; font-variant-numeric: tabular-nums;">0%</span>
+                        <div class="flex items-center justify-between text-sm mb-1.5">
+                            <span id="liveProgressText" style="color: var(--brand); font-weight: 600;">正在初始化采集任务...</span>
+                            <span id="liveProgressPercent" style="color: var(--brand); font-weight: 700; font-variant-numeric: tabular-nums;">0%</span>
                         </div>
-                        <div class="w-full h-1.5 rounded-full overflow-hidden" style="background: var(--warm-sand);">
+                        <div class="w-full h-2 rounded-full overflow-hidden" style="background: var(--warm-sand);">
                             <div id="liveProgressBar" class="h-full transition-all duration-300" style="width: 0%; background: var(--brand);"></div>
                         </div>
                     </div>
 
                     <!-- 底部概览栏与展开实时日志按钮 -->
-                    <div class="mt-3.5 pt-3 flex flex-wrap items-center justify-between gap-2 text-xs" style="border-top: 1px solid var(--border-soft); color: var(--stone); font-variant-numeric: tabular-nums;">
+                    <div class="mt-3.5 pt-3 flex flex-wrap items-center justify-between gap-2 text-sm" style="border-top: 1px solid var(--border); color: var(--stone); font-variant-numeric: tabular-nums;">
                         <div class="flex flex-wrap items-center gap-5">
                             <span>最后更新：<strong id="lastUpdatedLabel" style="color: var(--dark-warm);"><%= lastUpdated ? new Date(lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未采集' %></strong></span>
                             <span>当前展示：<strong id="displayedCountLabel" style="color: var(--brand);"><%= displayedNews %></strong> / <strong id="totalPoolCountLabel" style="color: var(--dark-warm);"><%= totalNews %></strong> 条精选新闻</span>
                             <span id="multiSourceCountWrapper">多媒交叉印证：<strong id="multiSourceCountLabel" style="color: var(--brand);">0</strong> 个热点事件</span>
                         </div>
-                        <button onclick="app.toggleAgentLogDrawer()" class="hover:underline flex items-center gap-1.5 cursor-pointer" style="color: var(--brand);">
-                            <i class="fa-solid fa-terminal text-[11px]"></i>
+                        <button onclick="app.toggleAgentLogDrawer()" class="hover:underline flex items-center gap-1.5 cursor-pointer font-medium" style="color: var(--brand);">
+                            <i class="fa-solid fa-terminal text-xs"></i>
                             <span>展开实时采集日志</span>
                         </button>
                     </div>
 
                     <!-- 可折叠的实时终端日志 -->
-                    <div id="agentLogDrawer" class="hidden mt-3 kami-code-block max-h-44 overflow-y-auto space-y-1">
+                    <div id="agentLogDrawer" class="hidden mt-3 kami-code-block max-h-48 overflow-y-auto space-y-1">
                         <div style="color: var(--stone);">// CoreFeed 实时采集与编译遥测日志流...</div>
                     </div>
                 </div>
@@ -169,22 +169,22 @@
             <div class="kami-tabs-bar">
                 <div class="flex flex-wrap items-center gap-2" role="tablist">
                     <button id="tabBtn-feed" onclick="app.switchTab('feed')" class="tab-btn active">
-                        一 · 全球新闻流
+                        <i class="fa-regular fa-newspaper mr-1.5"></i>全球新闻卡片流
                     </button>
                     <button id="tabBtn-summary" onclick="app.switchTab('summary')" class="tab-btn">
-                        二 · 今日要闻综述
+                        <i class="fa-solid fa-Compass mr-1.5"></i>今日全球综述
                     </button>
                 </div>
 
                 <!-- 新闻流搜索与媒体过滤框 -->
-                <div id="feedSearchWrapper" class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                    <select id="sourceFilterSelect" onchange="app.applyFilters()" class="kami-input text-xs py-1.5 px-2.5 cursor-pointer">
+                <div id="feedSearchWrapper" class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                    <select id="sourceFilterSelect" onchange="app.applyFilters()" class="kami-input text-sm py-2 px-3 cursor-pointer">
                         <option value="全部">全部媒体来源</option>
                     </select>
-                    <div class="relative flex-1 sm:w-64">
-                        <input id="localFilterInput" type="text" placeholder="搜索新闻标题、摘要或关键词..."
+                    <div class="relative flex-1 sm:w-72">
+                        <input id="localFilterInput" type="text" placeholder="搜索中文标题、摘要或外媒关键词..."
                             oninput="app.applyFilters()"
-                            class="kami-input w-full text-xs py-1.5 px-3">
+                            class="kami-input w-full text-sm py-2 px-3.5">
                     </div>
                 </div>
             </div>
@@ -192,17 +192,17 @@
             <!-- ==================== TAB 1: 全球新闻卡片流 ==================== -->
             <section id="tabPanel-feed" class="space-y-5">
                 <!-- 地域与领域过滤栏 -->
-                <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                    <div id="regionFilterBar" class="flex flex-wrap items-center gap-1.5">
+                <div class="kami-card py-3.5 px-4 space-y-3">
+                    <div id="regionFilterBar" class="flex flex-wrap items-center gap-2">
                         <!-- 由 main.js 动态渲染地区按钮 -->
                     </div>
-                    <div id="categoryFilterBar" class="flex flex-wrap items-center gap-1.5">
+                    <div id="categoryFilterBar" class="flex flex-wrap items-center gap-2 pt-2.5" style="border-top: 1px solid var(--border-soft);">
                         <!-- 由 main.js 动态渲染领域按钮 -->
                     </div>
                 </div>
 
                 <!-- 新闻情报卡片网格 -->
-                <div id="newsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                <div id="newsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     <!-- 由 main.js 渲染卡片 -->
                 </div>
 

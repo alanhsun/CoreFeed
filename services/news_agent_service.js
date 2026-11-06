@@ -5,6 +5,7 @@ const { getGlobalSourceMatrix, getSourceAuthorityScore } = require('../config/gl
 const {
     fetchFromGlobalSource,
     extractFullArticleContent,
+    fetchArticleLeadImage,
     createArticleId
 } = require('./agent_tools');
 
@@ -140,25 +141,33 @@ class NewsAgentService {
             const rankedCandidates = await this.aiService.selectTopQualityNews(clusteredArticles, maxCandidatePool);
 
             // 选取进入展示与编译池的候选集，并立即赋予规则预判的地区、分类与初始摘要
-            const candidatePool = rankedCandidates
+            let candidatePool = rankedCandidates
                 .slice(0, Math.max(maxDisplayCount + 10, 40))
                 .map(item => this.aiService.applyPreliminaryMetadata(item));
+
+            // 【阶段一快速中文化】先通过并发高速中文翻译将首屏卡片标题与摘要转为中文（约 1-2 秒），彻底杜绝首屏纯英文卡片
+            this.emitAgentEvent('Curator 聚类总编', 'curate_translate', '正在对精选新闻执行高速首屏汉化与配图补全...', {
+                progress: 43
+            });
+            candidatePool = await this.aiService.ensureBatchInChinese(candidatePool, 8);
 
             const preliminaryDisplay = candidatePool.slice(0, maxDisplayCount);
             const multiSourceEvents = candidatePool.filter(a => (a.sourceCount || 1) > 1).length;
             const now = new Date();
 
-            // 【阶段一即时发布】无需等待漫长的 AI 编译，先把去重聚类后的最新全球新闻推送到前端展示！
+            // 【阶段一即时发布】先把去重聚类且已汉化的最新全球新闻推送到前端展示！
             await this._publishNewsSnapshot(preliminaryDisplay, candidatePool, sourceStats, now, 'collected');
 
             this.emitAgentEvent(
                 'Curator 聚类总编',
                 'curate_done',
-                `已即时展示 ${preliminaryDisplay.length} 条全球精选新闻（含 ${multiSourceEvents} 个多媒交叉验证热点），正在后台启动全文深读与中文编译...`,
+                `已即时展示 ${preliminaryDisplay.length} 条中文精选新闻（含 ${multiSourceEvents} 个多媒交叉验证热点），正在后台启动全文深读、配图抓取与 AI 精编...`,
                 { progress: 48, clusteredCount: clusteredArticles.length, selectedCount: candidatePool.length }
             );
 
-            // ==================== STAGE 3: DEEP-READER & COMPILER (全文深读与渐进式批量编译) ====================
+            // ==================== STAGE 3: DEEP-READER & COMPILER (全文深读、配图补全与渐进式批量编译) ====================
+            await this._enrichMissingArticleImages(candidatePool.slice(0, maxDisplayCount));
+
             if (deepReadCount > 0) {
                 this.emitAgentEvent(
                     'Deep-Reader 深读员',
@@ -180,7 +189,7 @@ class NewsAgentService {
                 this.emitAgentEvent(
                     'Compiler 编译员',
                     'compile',
-                    `正在分批执行 AI 中文编译 (${candidatePool.length} 条)，每完成一批将实时刷新页面卡片...`,
+                    `正在分批执行 AI 深度中文精编 (${candidatePool.length} 条)，每完成一批将实时刷新页面卡片...`,
                     { progress: 62 }
                 );
 
@@ -191,7 +200,7 @@ class NewsAgentService {
                         this.emitAgentEvent(
                             'Compiler 编译员',
                             'compile_progress',
-                            `正在编译第 ${batchIndex}/${totalBatches} 批新闻卡片 (${current}/${total})...`,
+                            `正在精编第 ${batchIndex}/${totalBatches} 批新闻卡片 (${current}/${total})...`,
                             { progress: pct, current, total }
                         );
                     },
@@ -202,8 +211,8 @@ class NewsAgentService {
                     }
                 );
             } else {
-                // 未配置 AI Key 时，同步 Jina 提取后的最新摘要并发布
-                enhancedArticles = candidatePool.map(item => this.aiService.applyPreliminaryMetadata(item));
+                // 未配置 AI Key 时，同步 Jina 提取后的最新摘要并确保全部汉化
+                enhancedArticles = await this.aiService.ensureBatchInChinese(candidatePool, 6);
                 await this._publishNewsSnapshot(enhancedArticles.slice(0, maxDisplayCount), enhancedArticles, sourceStats, new Date(), 'completed');
             }
 
@@ -427,6 +436,38 @@ class NewsAgentService {
     }
 
     /**
+     * 对缺失配图的精选报道并发抓取页面 og:image / twitter:image 标题图
+     */
+    async _enrichMissingArticleImages(articles) {
+        if (!Array.isArray(articles) || articles.length === 0) return;
+        const missing = articles.filter(a => !a.urlToImage);
+        if (missing.length === 0) return;
+
+        const concurrency = 6;
+        for (let i = 0; i < missing.length; i += concurrency) {
+            const slice = missing.slice(i, i + concurrency);
+            await Promise.all(
+                slice.map(async (article) => {
+                    try {
+                        let img = await fetchArticleLeadImage(article.url, 4500);
+                        if (!img && Array.isArray(article.relatedSources)) {
+                            for (const rel of article.relatedSources) {
+                                if (rel.url) {
+                                    img = await fetchArticleLeadImage(rel.url, 4000);
+                                    if (img) break;
+                                }
+                            }
+                        }
+                        if (img) {
+                            article.urlToImage = img;
+                        }
+                    } catch (_) {}
+                })
+            );
+        }
+    }
+
+    /**
      * 对高优先级但摘要较短的新闻执行 Jina Reader / Readability 全文深读扩充
      */
     async _enrichTopArticlesWithFullText(articles, maxDeepRead = 8) {
@@ -447,6 +488,9 @@ class NewsAgentService {
                             article.fullTextContent = extracted.content;
                             article.content = extracted.content;
                             article.deepReadMethod = extracted.method;
+                        }
+                        if (!article.urlToImage && extracted?.imageUrl) {
+                            article.urlToImage = extracted.imageUrl;
                         }
                     } catch (_) {}
                 })
@@ -479,7 +523,19 @@ class NewsAgentService {
             ? extracted.content
             : existingSummary || title;
 
+        const buildFallbackTranslationHtml = async () => {
+            const zhBody = await this.aiService.translateTextToChinese(rawBody.slice(0, 1500));
+            const paragraphs = stripHtml(zhBody)
+                .split(/\n+/)
+                .map(p => p.trim())
+                .filter(Boolean)
+                .map(p => `<p class="summary-paragraph">${p}</p>`)
+                .join('');
+            return `<h3 class="summary-section-title">全文核心内容中文直译</h3>${paragraphs || `<p class="summary-paragraph">${stripHtml(zhBody)}</p>`}`;
+        };
+
         if (!this.aiService.getCurrentModelInfo().apiKeyConfigured) {
+            const analysisHtml = await buildFallbackTranslationHtml();
             return {
                 success: true,
                 url,
@@ -487,7 +543,7 @@ class NewsAgentService {
                 sourceName,
                 extractionMethod: extracted?.method || 'fallback',
                 fullText: rawBody,
-                analysisHtml: `<p class="summary-paragraph">${stripHtml(rawBody).replace(/\n+/g, '</p><p class="summary-paragraph">')}</p>`
+                analysisHtml
             };
         }
 
@@ -507,19 +563,32 @@ ${rawBody}
 
 直接输出内容，不要包含 <think> 标签。`;
 
-        const analysisText = await this.aiService._callAI([{ role: 'user', content: prompt }]);
-        const analysisHtml = this.aiService.convertSummaryToRichHtml(analysisText, []);
-
-        return {
-            success: true,
-            url,
-            title: title || extracted?.title || '',
-            sourceName,
-            extractionMethod: extracted?.success ? extracted.method : 'summary_fallback',
-            fullText: rawBody,
-            analysisMarkdown: analysisText,
-            analysisHtml
-        };
+        try {
+            const analysisText = await this.aiService._callAI([{ role: 'user', content: prompt }]);
+            const analysisHtml = this.aiService.convertSummaryToRichHtml(analysisText, []);
+            return {
+                success: true,
+                url,
+                title: title || extracted?.title || '',
+                sourceName,
+                extractionMethod: extracted?.success ? extracted.method : 'summary_fallback',
+                fullText: rawBody,
+                analysisMarkdown: analysisText,
+                analysisHtml
+            };
+        } catch (err) {
+            logger.warn('AGENT', `单篇深读大模型调用降级，使用自动中文翻译: ${err.message}`);
+            const analysisHtml = await buildFallbackTranslationHtml();
+            return {
+                success: true,
+                url,
+                title: title || extracted?.title || '',
+                sourceName,
+                extractionMethod: extracted?.success ? extracted.method : 'summary_fallback',
+                fullText: rawBody,
+                analysisHtml
+            };
+        }
     }
 }
 

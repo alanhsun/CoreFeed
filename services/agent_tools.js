@@ -11,7 +11,15 @@ const parser = new Parser({
     timeout: 10000,
     customFields: {
         feed: ['language', 'copyright'],
-        item: ['media:content', 'media:thumbnail', 'enclosure', 'content:encoded', 'source']
+        item: [
+            ['media:content', 'mediaContent', { keepArray: true }],
+            ['media:thumbnail', 'mediaThumbnail', { keepArray: true }],
+            'media:group',
+            'enclosure',
+            'itunes:image',
+            'content:encoded',
+            'source'
+        ]
     }
 });
 
@@ -48,19 +56,75 @@ function sanitizeXmlString(xml = '') {
 }
 
 /**
- * 从 RSS Item 提取图片
+ * 校验并规范化图片 URL（过滤 tracking pixel / logo / icon）
+ */
+function normalizeValidImageUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return null;
+    const cleaned = rawUrl.trim().replace(/&amp;/g, '&');
+    if (!isValidUrl(cleaned)) return null;
+    if (/\b(1x1|pixel|tracker|spacer|avatar|logo|icon|favicon|badge)\b/i.test(cleaned)) return null;
+    if (/\.svg(\?|$)/i.test(cleaned)) return null;
+    return cleaned;
+}
+
+/**
+ * 从 RSS Item 多维度提取新闻配图
  */
 function extractImageFromItem(item) {
     if (!item) return null;
-    if (item['media:content']?.['$']?.url) return item['media:content']['$'].url;
-    if (item['media:thumbnail']?.['$']?.url) return item['media:thumbnail']['$'].url;
-    if (item.enclosure?.url && (!item.enclosure.type || item.enclosure.type.startsWith('image/'))) {
-        return item.enclosure.url;
+
+    // 1. media:content 数组或单对象
+    const mcList = item.mediaContent || (item['media:content'] ? [item['media:content']] : []);
+    for (const mc of mcList) {
+        const u = mc?.['$']?.url || mc?.url;
+        const valid = normalizeValidImageUrl(u);
+        if (valid) return valid;
     }
-    const html = item['content:encoded'] || item.content || item.description || '';
+
+    // 2. media:thumbnail 数组或单对象
+    const mtList = item.mediaThumbnail || (item['media:thumbnail'] ? [item['media:thumbnail']] : []);
+    for (const mt of mtList) {
+        const u = mt?.['$']?.url || mt?.url;
+        const valid = normalizeValidImageUrl(u);
+        if (valid) return valid;
+    }
+
+    // 3. media:group 嵌套结构 (如部分欧美及亚太媒体)
+    const mg = item['media:group'];
+    if (mg) {
+        const groupContent = Array.isArray(mg['media:content']) ? mg['media:content'] : [mg['media:content']];
+        for (const c of groupContent) {
+            const valid = normalizeValidImageUrl(c?.['$']?.url || c?.url);
+            if (valid) return valid;
+        }
+        const groupThumb = Array.isArray(mg['media:thumbnail']) ? mg['media:thumbnail'] : [mg['media:thumbnail']];
+        for (const t of groupThumb) {
+            const valid = normalizeValidImageUrl(t?.['$']?.url || t?.url);
+            if (valid) return valid;
+        }
+    }
+
+    // 4. enclosure 附件
+    if (item.enclosure?.url && (!item.enclosure.type || item.enclosure.type.startsWith('image/'))) {
+        const valid = normalizeValidImageUrl(item.enclosure.url);
+        if (valid) return valid;
+    }
+
+    // 5. itunes:image
+    const itunesImg = item['itunes:image']?.['$']?.href || item['itunes:image']?.href;
+    if (itunesImg) {
+        const valid = normalizeValidImageUrl(itunesImg);
+        if (valid) return valid;
+    }
+
+    // 6. 从 HTML 内容 (content:encoded / content / description) 提取 <img>
+    const html = `${item['content:encoded'] || ''} ${item.content || ''} ${item.description || ''}`;
     if (typeof html === 'string' && html.includes('<img')) {
-        const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
-        if (match && isValidUrl(match[1])) return match[1];
+        const srcMatch = html.match(/<img[^>]+(?:data-src|src)=["']([^"']+)["']/i);
+        if (srcMatch) {
+            const valid = normalizeValidImageUrl(srcMatch[1]);
+            if (valid) return valid;
+        }
     }
     return null;
 }
@@ -282,15 +346,24 @@ async function extractFullArticleContent(url, options = {}) {
             let title = '';
             let content = '';
             let publishedTime = null;
+            let imageUrl = null;
 
             if (response.data && typeof response.data === 'object' && response.data.data) {
                 title = response.data.data.title || '';
                 content = response.data.data.content || '';
                 publishedTime = response.data.data.publishedTime || null;
+                imageUrl = normalizeValidImageUrl(response.data.data.image || response.data.data.imageUrl);
             } else if (typeof response.data === 'string') {
                 content = response.data;
                 const titleMatch = content.match(/^Title:\s*(.+)$/m);
                 if (titleMatch) title = titleMatch[1].trim();
+            }
+
+            if (!imageUrl && content) {
+                const mdImgMatch = content.match(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/i);
+                if (mdImgMatch) {
+                    imageUrl = normalizeValidImageUrl(mdImgMatch[1]);
+                }
             }
 
             const cleanedContent = cleanExtractedMarkdown(content);
@@ -302,6 +375,7 @@ async function extractFullArticleContent(url, options = {}) {
                     title,
                     content: truncateText(cleanedContent, options.maxLength || 4500, ''),
                     excerpt: truncateText(cleanedContent, 350),
+                    imageUrl,
                     publishedTime,
                     method: 'jina_reader'
                 };
@@ -331,6 +405,23 @@ async function extractFullArticleContent(url, options = {}) {
         }
 
         const $ = cheerio.load(html);
+
+        const rawOgImage =
+            $('meta[property="og:image"]').attr('content') ||
+            $('meta[property="og:image:url"]').attr('content') ||
+            $('meta[name="twitter:image"]').attr('content') ||
+            $('meta[name="twitter:image:src"]').attr('content') ||
+            $('article img').first().attr('src') ||
+            null;
+        const resolvedUrl = response.request?.res?.responseUrl || url;
+        let imageUrl = null;
+        if (rawOgImage) {
+            try {
+                imageUrl = normalizeValidImageUrl(new URL(rawOgImage, resolvedUrl).href);
+            } catch (_) {
+                imageUrl = normalizeValidImageUrl(rawOgImage);
+            }
+        }
 
         $('script, style, noscript, iframe, nav, footer, header, aside, form, .ad, .advertisement, .social-share, .related-articles, .newsletter').remove();
 
@@ -386,10 +477,11 @@ async function extractFullArticleContent(url, options = {}) {
         if (bodyText && bodyText.length >= 80) {
             const result = {
                 success: true,
-                url: response.request?.res?.responseUrl || url,
+                url: resolvedUrl,
                 title: pageTitle,
                 content: truncateText(bodyText, options.maxLength || 4500, ''),
                 excerpt: truncateText(bodyText, 350),
+                imageUrl,
                 publishedTime: $('meta[property="article:published_time"]').attr('content') || null,
                 method: 'cheerio_readability'
             };
@@ -405,6 +497,43 @@ async function extractFullArticleContent(url, options = {}) {
         url,
         error: '无法提取该页面正文（可能受反爬保护或为重定向链接）'
     };
+}
+
+/**
+ * 轻量级快速抓取文章 og:image 封面图（用于补充无配图的 RSS 条目）
+ */
+async function fetchArticleLeadImage(url, timeout = 5000) {
+    if (!url || !isValidUrl(url) || url.includes('news.google.com/rss/articles/')) {
+        return null;
+    }
+    try {
+        const response = await axios.get(url, {
+            timeout,
+            maxRedirects: 4,
+            headers: {
+                'User-Agent': config.webScraping.userAgent,
+                'Accept': 'text/html,application/xhtml+xml',
+                'Range': 'bytes=0-32768'
+            },
+            responseType: 'text'
+        });
+        const html = String(response.data || '');
+        if (!html) return null;
+        const match =
+            html.match(/<meta[^>]+property=["']og:image(?::url)?["'][^>]+content=["']([^"']+)["']/i) ||
+            html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?::url)?["']/i) ||
+            html.match(/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i) ||
+            html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image(?::src)?["']/i);
+        if (match && match[1]) {
+            const resolvedUrl = response.request?.res?.responseUrl || url;
+            try {
+                return normalizeValidImageUrl(new URL(match[1], resolvedUrl).href);
+            } catch (_) {
+                return normalizeValidImageUrl(match[1]);
+            }
+        }
+    } catch (_) {}
+    return null;
 }
 
 /**
@@ -429,5 +558,6 @@ module.exports = {
     parseRssUrlRobust,
     buildGoogleNewsDomainRssUrl,
     fetchFromGlobalSource,
-    extractFullArticleContent
+    extractFullArticleContent,
+    fetchArticleLeadImage
 };

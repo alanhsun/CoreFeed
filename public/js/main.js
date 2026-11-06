@@ -256,17 +256,17 @@ class CoreFeedApp {
         }
 
         const regions = Object.keys(regionCounts);
-        regionBar.innerHTML = `<span class="text-xs mr-1" style="color: var(--stone);">地域：</span>` +
+        regionBar.innerHTML = `<span class="text-sm font-semibold mr-1" style="color: var(--stone);">地区：</span>` +
             regions.map(r => {
                 const active = this.selectedRegion === r;
-                return `<button onclick="app.setRegionFilter('${this.escapeHtml(r)}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(r)} <span style="opacity: 0.72;">${regionCounts[r]}</span></button>`;
+                return `<button onclick="app.setRegionFilter('${this.escapeHtml(r)}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(r)} <span style="opacity: 0.8;">(${regionCounts[r]})</span></button>`;
             }).join('');
 
         const categories = Object.keys(categoryCounts);
-        categoryBar.innerHTML = `<span class="text-xs mr-1" style="color: var(--stone);">版面：</span>` +
+        categoryBar.innerHTML = `<span class="text-sm font-semibold mr-1" style="color: var(--stone);">领域：</span>` +
             categories.map(c => {
                 const active = this.selectedCategory === c;
-                return `<button onclick="app.setCategoryFilter('${this.escapeHtml(c)}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(c)} <span style="opacity: 0.72;">${categoryCounts[c]}</span></button>`;
+                return `<button onclick="app.setCategoryFilter('${this.escapeHtml(c)}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(c)} <span style="opacity: 0.8;">(${categoryCounts[c]})</span></button>`;
             }).join('');
 
         // 更新媒体来源下拉筛选框
@@ -330,9 +330,9 @@ class CoreFeedApp {
         if (filtered.length === 0) {
             grid.innerHTML = `
                 <div class="col-span-full kami-card py-14 text-center space-y-3">
-                    <div class="kami-tag mx-auto">NO DISPATCHES · 暂无新闻</div>
-                    <h3 class="text-lg" style="color: var(--near-black);">当前筛选条件下暂无新闻条目</h3>
-                    <p class="text-xs max-w-md mx-auto" style="color: var(--stone);">点击右上角「立即采集全球新闻」按钮，并发采集路透社、BBC、纽约时报、彭博社、南华早报等全球知名媒体。</p>
+                    <div class="kami-tag mx-auto">暂无匹配新闻</div>
+                    <h3 class="text-xl font-bold" style="color: var(--near-black);">当前筛选条件下暂无新闻条目</h3>
+                    <p class="text-sm max-w-md mx-auto" style="color: var(--stone);">点击右上角「立即采集全球新闻」按钮，并发采集路透社、BBC、纽约时报、彭博社、南华早报等全球知名媒体。</p>
                 </div>
             `;
             return;
@@ -341,14 +341,28 @@ class CoreFeedApp {
         grid.innerHTML = filtered.map((item, idx) => this.renderSingleCardHtml(item, idx)).join('');
     }
 
+    getCategoryIconClass(category) {
+        const map = {
+            '科技': 'fa-microchip',
+            '财经': 'fa-chart-line',
+            '军事': 'fa-shield-halved',
+            '政经': 'fa-landmark',
+            '外交': 'fa-handshake',
+            '能源': 'fa-bolt',
+            '社会': 'fa-users'
+        };
+        return map[category] || 'fa-earth-americas';
+    }
+
     renderSingleCardHtml(item, idx) {
         const title = item.translatedTitle || item.title || '无标题';
         const originalTitle = item.translatedTitle && item.translatedTitle !== item.title ? item.title : '';
         const summary = item.summary || item.translatedDescription || item.description || '';
         const sourceName = item.source?.name || 'Global Media';
         const region = item.region || '国际';
-        const category = item.category || '';
+        const category = item.category || '国际';
         const timeStr = item.publishedAt ? this.formatRelativeTime(item.publishedAt) : '';
+        const imageUrl = item.urlToImage || '';
 
         const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
         const hasMultiSources = relatedSources.length > 0;
@@ -362,70 +376,96 @@ class CoreFeedApp {
 
         const relatedLinksHtml = relatedSources.map(r => {
             if (r.url) {
-                return `<a href="${this.escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" class="hover:underline" title="${this.escapeHtml(r.title || r.name)}">${this.escapeHtml(r.name)}</a>`;
+                return `<a href="${this.escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="${this.escapeHtml(r.title || r.name)}">${this.escapeHtml(r.name)}</a>`;
             }
             return `<span>${this.escapeHtml(r.name)}</span>`;
         }).join('、');
 
+        const catIcon = this.getCategoryIconClass(category);
+        const metaBadgeText = category && category !== region ? `${region} · ${category}` : region;
+
         return `
-            <article class="news-card flex flex-col justify-between space-y-4">
-                <div class="space-y-3">
-                    <!-- 顶部元信息：媒体名称 + 地区/分类 + 编译状态 + 时间 -->
-                    <div class="flex items-center justify-between gap-2 text-xs">
-                        <div class="flex flex-wrap items-center gap-1.5 min-w-0">
-                            <span class="kami-tag truncate max-w-[165px]" title="${this.escapeHtml(sourceName)}">
+            <article class="news-card">
+                <div>
+                    <!-- 顶部新闻标题图区域 (支持真实外媒配图 + 防盗链无引荐加载 + 智能分类视觉封面兜底) -->
+                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
+                       class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
+                        ${imageUrl ? `
+                            <img src="${this.escapeHtml(imageUrl)}"
+                                 alt="${this.escapeHtml(title)}"
+                                 loading="lazy"
+                                 referrerpolicy="no-referrer"
+                                 class="card-cover-img"
+                                 onerror="this.parentElement.classList.add('is-fallback'); this.remove();" />
+                        ` : ''}
+                        <div class="card-cover-fallback">
+                            <i class="fa-solid ${catIcon} text-3xl mb-2 opacity-80"></i>
+                            <div class="text-sm font-bold tracking-wide opacity-95">${this.escapeHtml(sourceName)}</div>
+                            <div class="text-xs opacity-75 mt-0.5">${this.escapeHtml(metaBadgeText)}</div>
+                        </div>
+                        <div class="card-cover-badges">
+                            <span class="cover-pill-source" title="${this.escapeHtml(sourceName)}">
                                 ${this.escapeHtml(sourceName)}
                             </span>
-                            <span class="kami-tag-neutral">
-                                ${this.escapeHtml(region)}
+                            <span class="cover-pill-meta">
+                                ${this.escapeHtml(metaBadgeText)}
                             </span>
-                            ${category && category !== region ? `<span class="kami-tag-neutral">${this.escapeHtml(category)}</span>` : ''}
-                            ${isCompiling ? `<span class="kami-tag-neutral" style="color: var(--brand);">编译中...</span>` : ''}
                         </div>
-                        <span class="text-xs whitespace-nowrap" style="color: var(--stone); font-variant-numeric: tabular-nums;">${this.escapeHtml(timeStr)}</span>
+                    </a>
+
+                    <!-- 卡片主体内容 -->
+                    <div class="card-body">
+                        <!-- 多信源交叉验证提示 -->
+                        ${hasMultiSources ? `
+                            <div class="kami-callout flex flex-col gap-0.5">
+                                <div class="font-bold">🔥 ${relatedSources.length + 1} 家权威外媒交叉印证</div>
+                                <div class="truncate text-xs" style="color: var(--olive);">同题报道：${relatedLinksHtml}</div>
+                            </div>
+                        ` : ''}
+
+                        ${isCompiling ? `
+                            <div>
+                                <span class="kami-tag">⚡ 后台深度精编中...</span>
+                            </div>
+                        ` : ''}
+
+                        <!-- 中文大号加粗主标题 + 外媒英文原标题对照 -->
+                        <div>
+                            <h3 class="card-title">
+                                <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(title)}</a>
+                            </h3>
+                            ${originalTitle ? `<p class="card-subtitle-en line-clamp-1" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
+                        </div>
+
+                        <!-- 舒适大字号中文摘要 -->
+                        <p class="card-summary line-clamp-4">
+                            ${this.escapeHtml(summary)}
+                        </p>
+
+                        <!-- 核心要点标签 -->
+                        ${keyPoints.length > 0 ? `
+                            <div class="pt-1 flex flex-wrap gap-1.5">
+                                ${keyPoints.map(kp => `<span class="kami-tag-neutral">• ${this.escapeHtml(kp)}</span>`).join('')}
+                            </div>
+                        ` : ''}
                     </div>
-
-                    <!-- 多信源交叉验证标识（支持点击跳转各家关联外媒报道） -->
-                    ${hasMultiSources ? `
-                        <div class="kami-callout flex flex-col gap-0.5" style="font-variant-numeric: tabular-nums;">
-                            <div><strong>${relatedSources.length + 1} 家权威外媒交叉印证</strong></div>
-                            <div class="truncate text-[11px]" style="color: var(--olive);">同题报道：${relatedLinksHtml}</div>
-                        </div>
-                    ` : ''}
-
-                    <!-- 主标题与外媒原标题 -->
-                    <div>
-                        <h3 class="text-[17px] leading-[1.35]" style="color: var(--near-black); margin: 0;">
-                            <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer" style="color: inherit;" onmouseover="this.style.color='var(--brand)'" onmouseout="this.style.color='inherit'">${this.escapeHtml(title)}</a>
-                        </h3>
-                        ${originalTitle ? `<p class="text-xs mt-1 line-clamp-1" style="color: var(--stone);" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
-                    </div>
-
-                    <!-- 新闻摘要 -->
-                    <p class="text-[14px] leading-[1.58] line-clamp-4" style="color: var(--olive); margin: 0;">
-                        ${this.escapeHtml(summary)}
-                    </p>
-
-                    <!-- 核心要点标签 -->
-                    ${keyPoints.length > 0 ? `
-                        <div class="pt-1 flex flex-wrap gap-1.5">
-                            ${keyPoints.map(kp => `<span class="kami-tag-neutral">• ${this.escapeHtml(kp)}</span>`).join('')}
-                        </div>
-                    ` : ''}
                 </div>
 
-                <!-- 卡片底部操作栏：全文深读 & 源站原文跳转 -->
-                <div class="pt-3 flex items-center justify-between gap-2 text-xs" style="border-top: 1px solid var(--border-soft);">
+                <!-- 卡片底部操作栏 -->
+                <div class="card-footer">
                     <button onclick="app.openDeepRead('${encodedUrl}', '${encodedTitle}', '${encodedSource}', '${encodedSummary}')"
-                        class="inline-flex items-center gap-1.5 py-1 font-medium hover:underline cursor-pointer" style="color: var(--brand);">
-                        <i class="fa-solid fa-book-open-reader text-[11px]"></i>
+                        class="inline-flex items-center gap-1.5 font-semibold hover:underline cursor-pointer" style="color: var(--brand);">
+                        <i class="fa-solid fa-book-open-reader text-xs"></i>
                         <span>全文深读</span>
                     </button>
-                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
-                        class="inline-flex items-center gap-1 hover:underline" style="color: var(--stone);">
-                        <span>访问源站</span>
-                        <span>↗</span>
-                    </a>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs" style="color: var(--stone);">${this.escapeHtml(timeStr)}</span>
+                        <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
+                            class="inline-flex items-center gap-1 font-medium hover:underline" style="color: var(--olive);">
+                            <span>原文</span>
+                            <span>↗</span>
+                        </a>
+                    </div>
                 </div>
             </article>
         `;

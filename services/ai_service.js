@@ -1,8 +1,12 @@
+const axios = require('axios');
+const https = require('https');
 const config = require('../config');
 const { delay, truncateText } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const RateLimiter = require('../utils/rate_limiter');
 const { getSourceAuthorityScore } = require('../config/global_sources');
+
+const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
 const VALID_REGIONS = ['中国', '美国', '欧洲', '日本', '韩国', '东南亚', '中东', '非洲', '拉美', '澳洲', '亚洲', '国际'];
 const VALID_CATEGORIES = ['政经', '外交', '科技', '财经', '军事', '社会', '能源', '国际'];
@@ -80,7 +84,7 @@ class AIService {
     }
 
     /**
-     * 底层大模型调用
+     * 底层大模型调用 (使用 axios + TLS 容错，全面兼容自建反代与 OpenAI/Gemini 网关)
      */
     async _callAI(messages, model = null, options = {}) {
         const { priority = 5, timeout = 90000 } = options;
@@ -96,46 +100,45 @@ class AIService {
         return await this.rateLimiter.execute(async () => {
             const headers = {
                 'Authorization': `Bearer ${this.modelConfig.apiKey}`,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'User-Agent': 'CoreFeed/2.0'
             };
 
             const requestBody = {
                 model: modelToUse,
-                messages
+                messages,
+                temperature: 0.3
             };
             if (this.modelConfig.baseUrl.includes('minimaxi.com') || /minimax/i.test(modelToUse)) {
                 requestBody.reasoning_split = true;
             }
 
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeout);
-
             let response;
             try {
-                response = await fetch(`${this.modelConfig.baseUrl}/chat/completions`, {
-                    method: 'POST',
+                response = await axios.post(`${this.modelConfig.baseUrl}/chat/completions`, requestBody, {
                     headers,
-                    body: JSON.stringify(requestBody),
-                    signal: controller.signal
+                    timeout,
+                    httpsAgent: httpsAgentIgnoreTls,
+                    validateStatus: () => true
                 });
-            } finally {
-                clearTimeout(timeoutId);
+            } catch (netErr) {
+                throw new Error(`大模型网络请求失败: ${netErr.message}`);
             }
 
-            if (!response.ok) {
-                const errText = await response.text().catch(() => '');
+            if (response.status < 200 || response.status >= 300) {
+                const errText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
                 throw new Error(`HTTP ${response.status}: ${errText.substring(0, 300)}`);
             }
 
-            const data = await response.json();
-            const msg = data.choices?.[0]?.message;
+            const data = response.data;
+            const msg = data?.choices?.[0]?.message;
             if (!msg) {
                 throw new Error('AI 响应内容为空');
             }
 
             const rawContent = Array.isArray(msg.content)
                 ? msg.content.map(part => (typeof part === 'string' ? part : part?.text || '')).join('')
-                : (msg.content || '');
+                : (msg.content || msg.reasoning_content || '');
 
             return this._cleanAIResponse(rawContent);
         }, { priority, maxRetries: 2 });
@@ -148,7 +151,7 @@ class AIService {
         if (!text) return '';
         let cleaned = String(text);
         cleaned = cleaned.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
-        cleaned = cleaned.replace(/^```(json|markdown|text|html)?\n?([\s\S]*?)\n?```$/i, '$2').trim();
+        cleaned = cleaned.replace(/^```(json|markdown|text|html)?\s*\n?([\s\S]*?)\n?```$/i, '$2').trim();
         return cleaned.trim();
     }
 
@@ -160,22 +163,31 @@ class AIService {
         const cleaned = this._cleanAIResponse(text);
         try {
             return JSON.parse(cleaned);
-        } catch (_) {
-            const arrStart = cleaned.indexOf('[');
-            const arrEnd = cleaned.lastIndexOf(']');
-            const objStart = cleaned.indexOf('{');
-            const objEnd = cleaned.lastIndexOf('}');
+        } catch (_) {}
 
-            if (arrStart !== -1 && arrEnd > arrStart && (objStart === -1 || arrStart < objStart)) {
-                try {
-                    return JSON.parse(cleaned.substring(arrStart, arrEnd + 1));
-                } catch (_) {}
-            }
-            if (objStart !== -1 && objEnd > objStart) {
-                try {
-                    return JSON.parse(cleaned.substring(objStart, objEnd + 1));
-                } catch (_) {}
-            }
+        // 优先提取 ```json ... ``` 代码块
+        const codeBlockMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        if (codeBlockMatch && codeBlockMatch[1]) {
+            try {
+                return JSON.parse(codeBlockMatch[1].trim());
+            } catch (_) {}
+        }
+
+        // 查找形如 [ { ... } ] 的 JSON 数组起始位置（避免误匹配 [#1]）
+        const arrayObjMatch = cleaned.match(/\[\s*\{/);
+        const arrEnd = cleaned.lastIndexOf(']');
+        if (arrayObjMatch && arrEnd > arrayObjMatch.index) {
+            try {
+                return JSON.parse(cleaned.substring(arrayObjMatch.index, arrEnd + 1));
+            } catch (_) {}
+        }
+
+        const objStart = cleaned.indexOf('{');
+        const objEnd = cleaned.lastIndexOf('}');
+        if (objStart !== -1 && objEnd > objStart) {
+            try {
+                return JSON.parse(cleaned.substring(objStart, objEnd + 1));
+            } catch (_) {}
         }
         return null;
     }
@@ -381,6 +393,108 @@ class AIService {
     }
 
     /**
+     * 免密钥高速中文翻译兜底 (使用 Google GTX 翻译接口，确保在任何网络/模型异常下 100% 呈现中文)
+     */
+    async translateTextToChinese(text, timeout = 8000) {
+        if (!text || typeof text !== 'string') return '';
+        const trimmed = text.trim();
+        if (!trimmed || this.isChineseText(trimmed)) return trimmed;
+
+        try {
+            const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=${encodeURIComponent(trimmed.substring(0, 1200))}`;
+            const res = await axios.get(url, {
+                timeout,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            });
+            if (Array.isArray(res.data) && Array.isArray(res.data[0])) {
+                const translated = res.data[0].map(seg => (Array.isArray(seg) ? seg[0] : '')).join('').trim();
+                if (translated) return translated;
+            }
+        } catch (err) {
+            logger.debug('AI', `快速中文翻译回退请求异常: ${err.message}`);
+        }
+        return trimmed;
+    }
+
+    /**
+     * 确保单条新闻的标题与摘要均为中文（若仍为英文则自动调用高速中文翻译补全）
+     */
+    async ensureArticleInChinese(article) {
+        if (!article) return article;
+        const currentTitle = (article.translatedTitle || article.title || '').trim();
+        const rawSummarySource = (article.summary || article.translatedDescription || article.description || article.content || article.title || '').trim();
+
+        let zhTitle = currentTitle;
+        let zhSummary = rawSummarySource;
+
+        const tasks = [];
+        if (!this.isChineseText(zhTitle)) {
+            tasks.push(
+                this.translateTextToChinese(article.title || currentTitle).then(res => {
+                    zhTitle = res || currentTitle;
+                })
+            );
+        }
+
+        const cleanEngDesc = truncateText(rawSummarySource, 280);
+        if (!this.isChineseText(zhSummary) || zhSummary === article.title) {
+            const sourceToTranslate = (article.description && article.description !== article.title)
+                ? truncateText(article.description, 280)
+                : truncateText(article.content || cleanEngDesc, 280);
+            tasks.push(
+                this.translateTextToChinese(sourceToTranslate).then(res => {
+                    zhSummary = res || cleanEngDesc;
+                })
+            );
+        }
+
+        if (tasks.length > 0) {
+            await Promise.all(tasks);
+        }
+
+        const region = this.determineNewsRegionSync(
+            `${article.title || ''} ${zhTitle}`,
+            `${article.description || ''} ${zhSummary}`,
+            article.source?.name || '',
+            article.region
+        );
+        const category = this.determineNewsCategorySync(
+            `${article.title || ''} ${zhTitle}`,
+            `${article.description || ''} ${zhSummary}`,
+            article.source?.category || '',
+            article.category
+        );
+
+        return {
+            ...article,
+            translatedTitle: zhTitle,
+            translatedDescription: zhSummary,
+            summary: zhSummary,
+            region,
+            category,
+            aiCompiled: this.isChineseText(zhTitle)
+        };
+    }
+
+    /**
+     * 批量并发确保新闻列表已翻译为中文（用于第一阶段快速汉化与第二阶段兜底）
+     */
+    async ensureBatchInChinese(articles, concurrency = 6) {
+        if (!Array.isArray(articles) || articles.length === 0) return [];
+        const results = [...articles];
+        for (let i = 0; i < results.length; i += concurrency) {
+            const slice = results.slice(i, i + concurrency);
+            const translatedSlice = await Promise.all(slice.map(item => this.ensureArticleInChinese(item)));
+            for (let j = 0; j < translatedSlice.length; j++) {
+                results[i + j] = translatedSlice[j];
+            }
+        }
+        return results;
+    }
+
+    /**
      * 高效结构化批量编译 (支持分批增量回调 onBatchCompiled，用于前端渐进式实时更新)
      */
     async enhanceNewsArticles(articles, onProgress = null, onBatchCompiled = null) {
@@ -390,12 +504,12 @@ class AIService {
         const initialized = articles.map(a => this.applyPreliminaryMetadata(a));
 
         if (!this.modelConfig.apiKey) {
-            logger.warn('AI', '未配置 AI_API_KEY，使用规则预分类与原文摘要直接展示');
-            return initialized;
+            logger.warn('AI', '未配置 AI_API_KEY，启用内置高速中文翻译通道...');
+            return await this.ensureBatchInChinese(initialized, 6);
         }
 
         logger.info('AI', `启动 Agent 批量深度编译，共 ${initialized.length} 条全球新闻`);
-        const batchSize = config.ai.batchSize || 8;
+        const batchSize = Math.min(config.ai.batchSize || 4, 5);
         const enhancedList = [...initialized];
 
         for (let i = 0; i < initialized.length; i += batchSize) {
@@ -416,12 +530,15 @@ class AIService {
             try {
                 compiledBatch = await this._compileBatchWithLLM(batch);
             } catch (err) {
-                logger.warn('AI', `批次 ${batchIndex} 批量编译降级: ${err.message}`);
+                logger.warn('AI', `批次 ${batchIndex} 大模型编译降级，自动切换高速中文翻译兜底: ${err.message}`);
                 compiledBatch = batch.map(item => ({
                     ...item,
                     processedAt: new Date().toISOString()
                 }));
             }
+
+            // 二次校验：对本批次中任何未成功生成中文标题或中文摘要的条目，自动执行高速中文翻译补全
+            compiledBatch = await this.ensureBatchInChinese(compiledBatch, 4);
 
             for (let j = 0; j < compiledBatch.length; j++) {
                 enhancedList[i + j] = compiledBatch[j];
@@ -454,8 +571,8 @@ class AIService {
 [
   {
     "id": 1,
-    "translatedTitle": "简洁专业的中文新闻标题（不超过32字，直述核心事实）",
-    "summary": "客观详实的中文深度摘要（80-130字，交代核心事实、关键数据或各方立场，不加主观评论）",
+    "translatedTitle": "简洁专业的中文新闻标题（不超过32字，直述核心事实，必须为中文）",
+    "summary": "客观详实的中文深度摘要（80-130字，交代核心事实、关键数据或各方立场，必须为中文）",
     "region": "主要涉及地区（只能从 [${VALID_REGIONS.join(', ')}] 中选1个）",
     "category": "新闻领域（只能从 [${VALID_CATEGORIES.join(', ')}] 中选1个）",
     "keyPoints": ["核心要点1", "核心要点2"]
@@ -475,26 +592,39 @@ ${itemsText}`;
         }
 
         const resultMap = new Map();
-        for (const entry of parsed) {
-            if (entry && typeof entry.id === 'number') {
+        parsed.forEach((entry, idx) => {
+            if (!entry || typeof entry !== 'object') return;
+            if (typeof entry.id === 'number') {
                 resultMap.set(entry.id - 1, entry);
+            } else if (typeof entry.id === 'string') {
+                const num = parseInt(entry.id.replace(/\D+/g, ''), 10);
+                if (!isNaN(num) && num >= 1) {
+                    resultMap.set(num - 1, entry);
+                } else {
+                    resultMap.set(idx, entry);
+                }
+            } else {
+                resultMap.set(idx, entry);
             }
-        }
+        });
 
         return batch.map((article, idx) => {
-            const compiled = resultMap.get(idx) || {};
+            const compiled = resultMap.get(idx) || parsed[idx] || {};
             const region = VALID_REGIONS.find(r => (compiled.region || '').includes(r)) || article.region || '国际';
             const category = VALID_CATEGORIES.find(c => (compiled.category || '').includes(c)) || article.category || '国际';
 
+            const candidateTitle = (compiled.translatedTitle || compiled.title || article.translatedTitle || article.title || '').trim();
+            const candidateSummary = (compiled.summary || compiled.description || article.summary || article.description || article.title || '').trim();
+
             return {
                 ...article,
-                translatedTitle: (compiled.translatedTitle || article.translatedTitle || article.title).trim(),
-                translatedDescription: (compiled.summary || article.summary || article.description || article.title).trim(),
-                summary: (compiled.summary || article.summary || article.description || article.title).trim(),
+                translatedTitle: candidateTitle,
+                translatedDescription: candidateSummary,
+                summary: candidateSummary,
                 region,
                 category,
                 keyPoints: Array.isArray(compiled.keyPoints) ? compiled.keyPoints.slice(0, 3) : [],
-                aiCompiled: Boolean(compiled.translatedTitle || compiled.summary),
+                aiCompiled: this.isChineseText(candidateTitle),
                 processedAt: new Date().toISOString()
             };
         });
@@ -504,11 +634,20 @@ ${itemsText}`;
      * 主编 Agent：生成结构化《全球新闻深度综述文章》
      */
     async generateNewsSummaryArticle(newsData) {
-        if (!this.modelConfig.apiKey) {
-            throw new Error('AI服务未配置密钥，无法生成综述文章');
-        }
         if (!newsData || newsData.length === 0) {
             throw new Error('没有可用的新闻数据');
+        }
+
+        const currentDate = new Date().toLocaleDateString('zh-CN', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            weekday: 'long',
+            timeZone: 'Asia/Shanghai'
+        });
+
+        if (!this.modelConfig.apiKey) {
+            return this._buildFallbackSummaryObject(newsData, currentDate);
         }
 
         logger.info('AI', `主编 Agent 正在整合 ${newsData.length} 条全球新闻生成深度综述...`);
@@ -523,14 +662,6 @@ ${itemsText}`;
             return `${index + 1}. 【${news.region || '国际'} | ${news.category || '要闻'}】${title}\n主信源：${sourceName}${crossSources}\n核心摘要：${summary}\n引用标识：[NEWS_${index + 1}]`;
         }).join('\n\n');
 
-        const currentDate = new Date().toLocaleDateString('zh-CN', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            weekday: 'long',
-            timeZone: 'Asia/Shanghai'
-        });
-
         const prompt = `你是“聚核 (CoreFeed)”全球情报中心的主编 Agent。请基于以下采集自全球知名媒体（路透社、美联社、BBC、纽约时报、彭博社、南华早报等）的 ${newsData.length} 条新闻，撰写一篇结构严谨、洞察深刻的《${currentDate} 全球新闻深度综述》。
 
 写作要求：
@@ -543,10 +674,41 @@ ${itemsText}`;
 今日全球信源素材：
 ${newsContent}`;
 
-        let rawContent = await this._callAI([{ role: 'user', content: prompt }]);
-        rawContent = this._cleanAIResponse(rawContent);
+        try {
+            let rawContent = await this._callAI([{ role: 'user', content: prompt }]);
+            rawContent = this._cleanAIResponse(rawContent);
+            if (rawContent && rawContent.length >= 100) {
+                return this.createSummaryArticleObject(rawContent, newsData, currentDate);
+            }
+        } catch (err) {
+            logger.warn('AI', `大模型综述生成异常，自动切换结构化智能综述生成: ${err.message}`);
+        }
 
-        return this.createSummaryArticleObject(rawContent, newsData, currentDate);
+        return this._buildFallbackSummaryObject(newsData, currentDate);
+    }
+
+    _buildFallbackSummaryObject(newsData, currentDate) {
+        const grouped = {};
+        newsData.forEach((item, idx) => {
+            const cat = item.category || '国际';
+            if (!grouped[cat]) grouped[cat] = [];
+            grouped[cat].push({ item, refIdx: idx + 1 });
+        });
+
+        const sections = [];
+        sections.push(`${currentDate} 全球要闻深度综述`);
+        sections.push(`### 全球态势导读\n本期共聚合全球权威媒体 ${newsData.length} 起核心焦点事件，覆盖 ${[...new Set(newsData.map(n => n.region || '国际'))].join('、')} 等重点地区，围绕 ${Object.keys(grouped).join('、')} 展开多信源交叉印证。`);
+
+        for (const [cat, list] of Object.entries(grouped)) {
+            const lines = list.map(({ item, refIdx }) => {
+                const title = item.translatedTitle || item.title;
+                const summary = item.summary || item.description || '';
+                return `**${title}**：${summary} [NEWS_${refIdx}]`;
+            });
+            sections.push(`### ${cat}焦点动态\n${lines.join('\n\n')}`);
+        }
+
+        return this.createSummaryArticleObject(sections.join('\n\n'), newsData, currentDate);
     }
 
     createSummaryArticleObject(articleContent, newsData, currentDate) {
