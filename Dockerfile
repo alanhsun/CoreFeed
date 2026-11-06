@@ -1,4 +1,4 @@
-# 使用官方Node.js 22 Alpine镜像作为基础镜像 (最新LTS版本)
+# 使用官方 Node.js 22 Alpine 镜像 (轻量级，支持 amd64 / arm64 软路由架构)
 FROM node:22-alpine
 
 # 设置工作目录
@@ -6,46 +6,41 @@ WORKDIR /app
 
 # 添加元数据
 LABEL maintainer="Alan Sun"
-LABEL version="1.3.2"
-LABEL description="A news aggregator website with AI translation and summarization"
+LABEL version="2.0.0"
+LABEL description="CoreFeed v2.0 - Global News Intelligence & Progressive Compilation Platform"
 
-# 安装系统依赖
+# 安装系统依赖与时区数据（确保 06:00 / 16:30 定时采集按北京时间触发）
 RUN apk add --no-cache \
     wget \
     curl \
+    tzdata \
     dumb-init \
+    && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone \
     && rm -rf /var/cache/apk/*
 
-# 复制package文件
+# 复制 package 文件并安装生产依赖
 COPY package*.json ./
-
-# 安装Node.js依赖
-RUN npm ci --only=production && \
+RUN npm ci --omit=dev && \
     npm cache clean --force
 
-# 创建非root用户
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
-
-# 创建必要的目录并设置权限
-RUN mkdir -p /app/data /app/logs && \
-    chown -R nodejs:nodejs /app
-
 # 复制应用代码
-COPY --chown=nodejs:nodejs . .
+COPY . .
 
-# 切换到非root用户
-USER nodejs
+# 创建持久化目录（保持 root 运行以兼容软路由 OpenWrt/iStoreOS 宿主机目录挂载权限）
+RUN mkdir -p /app/data /app/logs
+
+# 默认环境变量
+ENV NODE_ENV=production
+ENV PORT=3120
+ENV TZ=Asia/Shanghai
 
 # 暴露端口
 EXPOSE 3120
 
-# 设置默认端口环境变量
-ENV PORT=3120
-
 # 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3120/api/health || exit 1
 
-# 启动应用
-CMD ["dumb-init", "npm", "start"]
+# 使用 dumb-init 启动应用，确保信号正确转发
+CMD ["dumb-init", "node", "server.js"]
