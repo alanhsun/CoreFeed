@@ -188,11 +188,11 @@ function buildConfig() {
             batchSize: getNumberConfig('AI_BATCH_SIZE', 8)
         },
 
-        // 大模型配置 (MiniMax / OpenAI 兼容端点)
+        // 大模型配置 (OpenAI 兼容端点)
         minimax: {
-            baseUrl: getConfig('AI_BASE_URL', 'https://api.minimaxi.com/v1'),
-            apiKey: getConfig('AI_API_KEY', ''),
-            model: getConfig('AI_MODEL', 'MiniMax-M2.5'),
+            baseUrl: getConfig('AI_BASE_URL', 'https://nl.alansun.host:9443/v1'),
+            apiKey: getConfig('AI_API_KEY', 'sk-67a4e5e2baba0b27-666i7t-0f8052ff'),
+            model: getConfig('AI_MODEL', 'ag/gemini-4-argon-high'),
             rateLimitRpm: getNumberConfig('AI_RATE_LIMIT_RPM', 30),
             rateLimitBurst: getNumberConfig('AI_RATE_LIMIT_BURST', 5)
         },

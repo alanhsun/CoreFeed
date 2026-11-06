@@ -40,9 +40,9 @@ class AIService {
         const minimaxConfig = config.minimax || {};
         this.modelConfig = {
             apiKey: minimaxConfig.apiKey || '',
-            baseUrl: (minimaxConfig.baseUrl || 'https://api.minimaxi.com/v1').replace(/\/+$/, ''),
-            model: minimaxConfig.model || 'MiniMax-M2.5',
-            provider: 'MiniMax / OpenAI-Compatible'
+            baseUrl: (minimaxConfig.baseUrl || 'https://nl.alansun.host:9443/v1').replace(/\/+$/, ''),
+            model: minimaxConfig.model || 'ag/gemini-4-argon-high',
+            provider: 'OpenAI-Compatible'
         };
     }
 
@@ -101,9 +101,11 @@ class AIService {
 
             const requestBody = {
                 model: modelToUse,
-                messages,
-                reasoning_split: true
+                messages
             };
+            if (this.modelConfig.baseUrl.includes('minimaxi.com') || /minimax/i.test(modelToUse)) {
+                requestBody.reasoning_split = true;
+            }
 
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -131,7 +133,11 @@ class AIService {
                 throw new Error('AI 响应内容为空');
             }
 
-            return this._cleanAIResponse(msg.content || '');
+            const rawContent = Array.isArray(msg.content)
+                ? msg.content.map(part => (typeof part === 'string' ? part : part?.text || '')).join('')
+                : (msg.content || '');
+
+            return this._cleanAIResponse(rawContent);
         }, { priority, maxRetries: 2 });
     }
 

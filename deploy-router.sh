@@ -30,7 +30,7 @@ mkdir -p data logs
 
 if [ ! -f .env ] && [ -f .env.example ]; then
   cp .env.example .env
-  echo "📝 已从 .env.example 初始化默认 .env 配置文件"
+  echo "📝 已从 .env.example 初始化 .env 配置文件"
 fi
 
 echo "🔨 正在软路由上构建 Docker 镜像 corefeed:2.0 ..."
@@ -47,6 +47,9 @@ docker run -d \
   -e NODE_ENV=production \
   -e PORT=3120 \
   -e TZ=Asia/Shanghai \
+  -e AI_BASE_URL="https://nl.alansun.host:9443/v1" \
+  -e AI_API_KEY="sk-67a4e5e2baba0b27-666i7t-0f8052ff" \
+  -e AI_MODEL="ag/gemini-4-argon-high" \
   --env-file .env \
   -v "'"${REMOTE_DIR}"'/data:/app/data" \
   -v "'"${REMOTE_DIR}"'/logs:/app/logs" \
