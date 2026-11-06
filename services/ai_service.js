@@ -213,8 +213,10 @@ class AIService {
                 });
             } else {
                 const sorted = [...cluster].sort((a, b) => {
-                    const scoreA = getSourceAuthorityScore(a.source?.name) * 2 + Math.min(50, (a.content || '').length / 20);
-                    const scoreB = getSourceAuthorityScore(b.source?.name) * 2 + Math.min(50, (b.content || '').length / 20);
+                    const imgBonusA = (a.urlToImage ? 18 : 0) + (a.url && !a.url.includes('news.google.com') ? 10 : 0);
+                    const imgBonusB = (b.urlToImage ? 18 : 0) + (b.url && !b.url.includes('news.google.com') ? 10 : 0);
+                    const scoreA = getSourceAuthorityScore(a.source?.name) * 2 + Math.min(50, (a.content || '').length / 20) + imgBonusA;
+                    const scoreB = getSourceAuthorityScore(b.source?.name) * 2 + Math.min(50, (b.content || '').length / 20) + imgBonusB;
                     return scoreB - scoreA;
                 });
 
@@ -316,6 +318,7 @@ class AIService {
             .map(article => {
                 const authority = article.source?.authority || getSourceAuthorityScore(article.source?.name);
                 const multiSourceBonus = Math.min(20, ((article.sourceCount || 1) - 1) * 7);
+                const imageAndDirectBonus = (article.urlToImage ? 6 : 0) + (article.url && !article.url.includes('news.google.com') ? 4 : 0);
 
                 const contentLen = (article.content || '').length;
                 const descLen = (article.description || '').length;
@@ -324,7 +327,7 @@ class AIService {
                 const hoursOld = Math.max(0, (Date.now() - new Date(article.publishedAt || Date.now()).getTime()) / 3600000);
                 const freshness = hoursOld < 6 ? 98 : hoursOld < 12 ? 90 : hoursOld < 24 ? 80 : hoursOld < 48 ? 65 : 40;
 
-                const totalScore = Math.round(authority * 0.45 + completeness * 0.25 + freshness * 0.30 + multiSourceBonus);
+                const totalScore = Math.round(authority * 0.45 + completeness * 0.25 + freshness * 0.30 + multiSourceBonus + imageAndDirectBonus);
 
                 return {
                     article: {

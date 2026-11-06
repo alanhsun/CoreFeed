@@ -6,6 +6,7 @@ const {
     fetchFromGlobalSource,
     extractFullArticleContent,
     fetchArticleLeadImage,
+    searchNewsImageByTitle,
     createArticleId
 } = require('./agent_tools');
 
@@ -145,28 +146,36 @@ class NewsAgentService {
                 .slice(0, Math.max(maxDisplayCount + 10, 40))
                 .map(item => this.aiService.applyPreliminaryMetadata(item));
 
-            // 【阶段一快速中文化】先通过并发高速中文翻译将首屏卡片标题与摘要转为中文（约 1-2 秒），彻底杜绝首屏纯英文卡片
-            this.emitAgentEvent('Curator 聚类总编', 'curate_translate', '正在对精选新闻执行高速首屏汉化与配图补全...', {
+            // 【阶段一快速中文化与配图补全】并发执行首屏中文翻译与缺失题图抓取，确保首屏即呈现带图中文卡片
+            this.emitAgentEvent('Curator 聚类总编', 'curate_translate', '正在对精选新闻执行高速首屏汉化与高清题图补全...', {
                 progress: 43
             });
-            candidatePool = await this.aiService.ensureBatchInChinese(candidatePool, 8);
+            const topForImages = candidatePool.slice(0, maxDisplayCount);
+            const [translatedPool] = await Promise.all([
+                this.aiService.ensureBatchInChinese(candidatePool, 8),
+                this._enrichMissingArticleImages(topForImages)
+            ]);
+            candidatePool = translatedPool.map((item, idx) => ({
+                ...item,
+                urlToImage: item.urlToImage || topForImages[idx]?.urlToImage || null
+            }));
 
             const preliminaryDisplay = candidatePool.slice(0, maxDisplayCount);
             const multiSourceEvents = candidatePool.filter(a => (a.sourceCount || 1) > 1).length;
+            const withImagesCount = preliminaryDisplay.filter(a => Boolean(a.urlToImage)).length;
             const now = new Date();
 
-            // 【阶段一即时发布】先把去重聚类且已汉化的最新全球新闻推送到前端展示！
+            // 【阶段一即时发布】把去重聚类、已汉化且补全题图的最新全球新闻推送到前端展示！
             await this._publishNewsSnapshot(preliminaryDisplay, candidatePool, sourceStats, now, 'collected');
 
             this.emitAgentEvent(
                 'Curator 聚类总编',
                 'curate_done',
-                `已即时展示 ${preliminaryDisplay.length} 条中文精选新闻（含 ${multiSourceEvents} 个多媒交叉验证热点），正在后台启动全文深读、配图抓取与 AI 精编...`,
+                `已即时展示 ${preliminaryDisplay.length} 条中文精选新闻（含 ${withImagesCount} 张高清题图、${multiSourceEvents} 个多媒交叉热点），正在后台启动全文深读与 AI 精编...`,
                 { progress: 48, clusteredCount: clusteredArticles.length, selectedCount: candidatePool.length }
             );
 
             // ==================== STAGE 3: DEEP-READER & COMPILER (全文深读、配图补全与渐进式批量编译) ====================
-            await this._enrichMissingArticleImages(candidatePool.slice(0, maxDisplayCount));
 
             if (deepReadCount > 0) {
                 this.emitAgentEvent(
@@ -436,7 +445,7 @@ class NewsAgentService {
     }
 
     /**
-     * 对缺失配图的精选报道并发抓取页面 og:image / twitter:image 标题图
+     * 对缺失配图的精选报道并发抓取页面 og:image / twitter:image 或通过 Bing News 智能检索匹配题图
      */
     async _enrichMissingArticleImages(articles) {
         if (!Array.isArray(articles) || articles.length === 0) return;
@@ -457,6 +466,9 @@ class NewsAgentService {
                                     if (img) break;
                                 }
                             }
+                        }
+                        if (!img && article.title) {
+                            img = await searchNewsImageByTitle(article.title, article.source?.domain || '', 4000);
                         }
                         if (img) {
                             article.urlToImage = img;

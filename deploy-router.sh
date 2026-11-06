@@ -80,6 +80,8 @@ docker run -d \
   -v "${REMOTE_DIR}/views:/app/views" \
   -v "${REMOTE_DIR}/services:/app/services" \
   -v "${REMOTE_DIR}/config:/app/config" \
+  -v "${REMOTE_DIR}/routes:/app/routes" \
+  -v "${REMOTE_DIR}/middleware:/app/middleware" \
   -v "${REMOTE_DIR}/utils:/app/utils" \
   -v "${REMOTE_DIR}/server.js:/app/server.js" \
   corefeed:2.0

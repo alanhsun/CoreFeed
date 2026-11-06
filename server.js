@@ -59,11 +59,11 @@ app.use((req, res, next) => {
     next();
 });
 
-// 生产环境速率限制
+// 生产环境速率限制（放宽额度以支持新闻图片代理并发加载）
 if (config.server.env === 'production') {
     app.use('/api', createRateLimiter({
         windowMs: 15 * 60 * 1000,
-        maxRequests: 200,
+        maxRequests: 2000,
         message: 'API请求过于频繁，请稍后再试'
     }));
 }
@@ -75,8 +75,11 @@ app.use(express.static(path.join(__dirname, 'public'), {
     maxAge: config.server.env === 'production' ? '1h' : 0
 }));
 
-// API 响应禁用缓存
+// API 响应禁用缓存（图片代理 /api/image-proxy 除外）
 app.use('/api', (req, res, next) => {
+    if (req.path === '/image-proxy') {
+        return next();
+    }
     res.set({
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',

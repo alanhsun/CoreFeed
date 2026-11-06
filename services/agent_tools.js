@@ -1,4 +1,5 @@
 const axios = require('axios');
+const https = require('https');
 const Parser = require('rss-parser');
 const cheerio = require('cheerio');
 const crypto = require('crypto');
@@ -6,6 +7,8 @@ const config = require('../config');
 const logger = require('../utils/logger');
 const { stripHtml, truncateText, isValidUrl, SimpleCache } = require('../utils/helpers');
 const { getSourceAuthorityScore } = require('../config/global_sources');
+
+const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
 const parser = new Parser({
     timeout: 10000,
@@ -15,9 +18,15 @@ const parser = new Parser({
             ['media:content', 'mediaContent', { keepArray: true }],
             ['media:thumbnail', 'mediaThumbnail', { keepArray: true }],
             'media:group',
+            ['enclosure', 'enclosures', { keepArray: true }],
             'enclosure',
             'itunes:image',
             'content:encoded',
+            ['description', 'rawDescription'],
+            ['summary', 'rawSummary'],
+            ['image', 'itemImage'],
+            ['thumb', 'itemThumb'],
+            ['News:Image', 'bingNewsImage'],
             'source'
         ]
     }
@@ -25,6 +34,8 @@ const parser = new Parser({
 
 // 全文提取缓存（避免重复抓取同一URL，TTL 2小时）
 const fullTextCache = new SimpleCache(300, 2 * 60 * 60 * 1000);
+// 标题搜图缓存（TTL 6小时）
+const imageLookupCache = new SimpleCache(400, 6 * 60 * 60 * 1000);
 
 /**
  * 生成文章唯一ID
@@ -56,76 +67,188 @@ function sanitizeXmlString(xml = '') {
 }
 
 /**
- * 校验并规范化图片 URL（过滤 tracking pixel / logo / icon）
+ * 将外媒常见的低清缩略图 URL 自动升级为高清大图 URL
  */
-function normalizeValidImageUrl(rawUrl) {
-    if (!rawUrl || typeof rawUrl !== 'string') return null;
-    const cleaned = rawUrl.trim().replace(/&amp;/g, '&');
-    if (!isValidUrl(cleaned)) return null;
-    if (/\b(1x1|pixel|tracker|spacer|avatar|logo|icon|favicon|badge)\b/i.test(cleaned)) return null;
-    if (/\.svg(\?|$)/i.test(cleaned)) return null;
-    return cleaned;
+function upgradeImageResolution(url) {
+    if (!url || typeof url !== 'string') return url;
+    let upgraded = url.trim();
+
+    // 1. BBC iChef CDN: /standard/240/ 或 /news/240/ -> /standard/800/
+    if (upgraded.includes('ichef.bbci.co.uk')) {
+        upgraded = upgraded
+            .replace(/\/(ace\/standard|news)\/(?:144|200|240|320|464|480)\//i, '/$1/800/');
+    }
+
+    // 2. New York Times: -moth.jpg / -thumbStandard.jpg / -thumbLarge.jpg -> -articleLarge.jpg
+    if (upgraded.includes('static01.nyt.com/images/')) {
+        upgraded = upgraded.replace(/-(?:moth(?:-v\d+)?|thumbStandard(?:-v\d+)?|thumbLarge(?:-v\d+)?|mediumSquare149)\.(jpg|jpeg|png|webp)/i, '-articleLarge.$1');
+    }
+
+    // 3. Bing News Thumbnail: 补充高清 16:9 尺寸参数
+    if (upgraded.includes('bing.com/th') && !/[?&]w=\d+/i.test(upgraded)) {
+        upgraded += (upgraded.includes('?') ? '&' : '?') + 'w=720&h=405&c=7';
+    }
+
+    return upgraded;
 }
 
 /**
- * 从 RSS Item 多维度提取新闻配图
+ * 校验并规范化图片 URL（过滤 tracking pixel / logo / icon，并自动升级分辨率）
  */
-function extractImageFromItem(item) {
+function normalizeValidImageUrl(rawUrl, baseUrl = null) {
+    if (!rawUrl || typeof rawUrl !== 'string') return null;
+    let cleaned = rawUrl
+        .trim()
+        .replace(/&amp;/g, '&')
+        .replace(/^\/\//, 'https://');
+
+    if (baseUrl && !/^https?:\/\//i.test(cleaned)) {
+        try {
+            cleaned = new URL(cleaned, baseUrl).href;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    if (!isValidUrl(cleaned)) return null;
+    if (/\b(1x1|pixel|tracker|spacer|avatar|logo|favicon|badge|sprite|blank\.gif|feedburner|doubleclick|googlesyndication|gravatar)\b/i.test(cleaned)) {
+        return null;
+    }
+    if (/\.(svg|ico)(\?|$)/i.test(cleaned)) return null;
+    return upgradeImageResolution(cleaned);
+}
+
+/**
+ * 从一组 media 节点中选择分辨率最高（width 最大）的有效图片 URL
+ */
+function pickBestMediaImage(nodeList, baseUrl = null) {
+    if (!Array.isArray(nodeList) || nodeList.length === 0) return null;
+    let bestUrl = null;
+    let bestWidth = -1;
+
+    for (const node of nodeList) {
+        if (!node) continue;
+        const attrs = node['$'] || node;
+        const medium = String(attrs.medium || '').toLowerCase();
+        const type = String(attrs.type || '').toLowerCase();
+        if (medium === 'video' || medium === 'audio' || type.startsWith('video/') || type.startsWith('audio/')) {
+            continue;
+        }
+        const rawUrl = attrs.url || attrs.href || (typeof node === 'string' ? node : null);
+        const valid = normalizeValidImageUrl(rawUrl, baseUrl);
+        if (!valid) continue;
+
+        const w = parseInt(attrs.width, 10) || 0;
+        if (w > bestWidth) {
+            bestWidth = w;
+            bestUrl = valid;
+        }
+    }
+    return bestUrl;
+}
+
+/**
+ * 从 HTML 片段中遍历所有 <img> 标签（含 src / data-src / srcset）提取第一张有效新闻配图
+ */
+function extractFirstValidImgFromHtml(html, baseUrl = null) {
+    if (!html || typeof html !== 'string' || !html.includes('<img')) return null;
+
+    const imgTagRegex = /<img\b[^>]*>/gi;
+    let tagMatch;
+    while ((tagMatch = imgTagRegex.exec(html)) !== null) {
+        const tag = tagMatch[0];
+        if (/\b(?:width|height)=["']?[12]\b/i.test(tag)) continue;
+
+        // 优先尝试单属性 URL
+        const attrMatch = tag.match(/\b(?:data-src|data-original|data-lazy-src|src)=["']([^"']+)["']/i);
+        if (attrMatch && attrMatch[1]) {
+            const valid = normalizeValidImageUrl(attrMatch[1], baseUrl);
+            if (valid) return valid;
+        }
+
+        // 尝试从 srcset 中提取最高分辨率 URL
+        const srcsetMatch = tag.match(/\b(?:data-srcset|srcset)=["']([^"']+)["']/i);
+        if (srcsetMatch && srcsetMatch[1]) {
+            const candidates = srcsetMatch[1]
+                .split(',')
+                .map(part => part.trim().split(/\s+/)[0])
+                .filter(Boolean);
+            for (let i = candidates.length - 1; i >= 0; i--) {
+                const valid = normalizeValidImageUrl(candidates[i], baseUrl);
+                if (valid) return valid;
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * 从 RSS/Atom Item 多维度提取最高质量的新闻配图
+ */
+function extractImageFromItem(item, baseUrl = null) {
     if (!item) return null;
 
-    // 1. media:content 数组或单对象
+    // 1. Bing News / 专用图片字段
+    if (item.bingNewsImage) {
+        const valid = normalizeValidImageUrl(
+            typeof item.bingNewsImage === 'string' ? item.bingNewsImage : item.bingNewsImage?.['$']?.url || item.bingNewsImage?._,
+            baseUrl
+        );
+        if (valid) return valid;
+    }
+
+    // 2. media:content 数组或单对象（自动挑最大 width，适配卫报/纽时等）
     const mcList = item.mediaContent || (item['media:content'] ? [item['media:content']] : []);
-    for (const mc of mcList) {
-        const u = mc?.['$']?.url || mc?.url;
-        const valid = normalizeValidImageUrl(u);
-        if (valid) return valid;
-    }
+    const bestMc = pickBestMediaImage(mcList, baseUrl);
+    if (bestMc) return bestMc;
 
-    // 2. media:thumbnail 数组或单对象
+    // 3. media:thumbnail 数组或单对象（自动挑最大 width，适配 BBC/Sky/CNA 等）
     const mtList = item.mediaThumbnail || (item['media:thumbnail'] ? [item['media:thumbnail']] : []);
-    for (const mt of mtList) {
-        const u = mt?.['$']?.url || mt?.url;
-        const valid = normalizeValidImageUrl(u);
-        if (valid) return valid;
-    }
+    const bestMt = pickBestMediaImage(mtList, baseUrl);
+    if (bestMt) return bestMt;
 
-    // 3. media:group 嵌套结构 (如部分欧美及亚太媒体)
+    // 4. media:group 嵌套结构
     const mg = item['media:group'];
     if (mg) {
-        const groupContent = Array.isArray(mg['media:content']) ? mg['media:content'] : [mg['media:content']];
-        for (const c of groupContent) {
-            const valid = normalizeValidImageUrl(c?.['$']?.url || c?.url);
-            if (valid) return valid;
-        }
-        const groupThumb = Array.isArray(mg['media:thumbnail']) ? mg['media:thumbnail'] : [mg['media:thumbnail']];
-        for (const t of groupThumb) {
-            const valid = normalizeValidImageUrl(t?.['$']?.url || t?.url);
-            if (valid) return valid;
-        }
+        const groupContent = Array.isArray(mg['media:content']) ? mg['media:content'] : (mg['media:content'] ? [mg['media:content']] : []);
+        const bestGroupMc = pickBestMediaImage(groupContent, baseUrl);
+        if (bestGroupMc) return bestGroupMc;
+
+        const groupThumb = Array.isArray(mg['media:thumbnail']) ? mg['media:thumbnail'] : (mg['media:thumbnail'] ? [mg['media:thumbnail']] : []);
+        const bestGroupMt = pickBestMediaImage(groupThumb, baseUrl);
+        if (bestGroupMt) return bestGroupMt;
     }
 
-    // 4. enclosure 附件
-    if (item.enclosure?.url && (!item.enclosure.type || item.enclosure.type.startsWith('image/'))) {
-        const valid = normalizeValidImageUrl(item.enclosure.url);
+    // 5. enclosures 数组或单个 enclosure 附件 (适配明镜周刊、France24、WSJ 等)
+    const encList = Array.isArray(item.enclosures)
+        ? item.enclosures
+        : (item.enclosure ? [item.enclosure] : []);
+    const bestEnc = pickBestMediaImage(encList, baseUrl);
+    if (bestEnc) return bestEnc;
+
+    // 6. itemImage / itemThumb / itunes:image
+    for (const field of [item.itemImage, item.itemThumb, item['itunes:image']]) {
+        if (!field) continue;
+        const raw = typeof field === 'string'
+            ? field
+            : (field?.['$']?.url || field?.['$']?.href || field?.url || field?.href || field?._);
+        const valid = normalizeValidImageUrl(raw, baseUrl);
         if (valid) return valid;
     }
 
-    // 5. itunes:image
-    const itunesImg = item['itunes:image']?.['$']?.href || item['itunes:image']?.href;
-    if (itunesImg) {
-        const valid = normalizeValidImageUrl(itunesImg);
-        if (valid) return valid;
-    }
+    // 7. 从 HTML 内容 (content:encoded / content / rawDescription / description / rawSummary / summary) 遍历所有 <img>
+    const htmlBlocks = [
+        item['content:encoded'],
+        item.content,
+        item.rawDescription,
+        item.description,
+        item.rawSummary,
+        item.summary
+    ].filter(Boolean).join(' ');
 
-    // 6. 从 HTML 内容 (content:encoded / content / description) 提取 <img>
-    const html = `${item['content:encoded'] || ''} ${item.content || ''} ${item.description || ''}`;
-    if (typeof html === 'string' && html.includes('<img')) {
-        const srcMatch = html.match(/<img[^>]+(?:data-src|src)=["']([^"']+)["']/i);
-        if (srcMatch) {
-            const valid = normalizeValidImageUrl(srcMatch[1]);
-            if (valid) return valid;
-        }
-    }
+    const htmlImg = extractFirstValidImgFromHtml(htmlBlocks, baseUrl);
+    if (htmlImg) return htmlImg;
+
     return null;
 }
 
@@ -136,6 +259,7 @@ async function parseRssUrlRobust(rssUrl, timeout = 10000) {
     try {
         const response = await axios.get(rssUrl, {
             timeout,
+            httpsAgent: httpsAgentIgnoreTls,
             headers: {
                 'User-Agent': config.webScraping.userAgent,
                 'Accept': 'application/rss+xml, application/xml, text/xml, application/atom+xml, */*'
@@ -152,13 +276,13 @@ async function parseRssUrlRobust(rssUrl, timeout = 10000) {
 /**
  * 构造 Google News 定向域名 RSS 检索 URL（用于突破 Cloudflare 或无 RSS 知名站点）
  */
-function buildGoogleNewsDomainRssUrl(domain, when = '2d', hl = 'en-US', gl = 'US', ceid = 'US:en') {
-    const query = encodeURIComponent(`site:${domain} when:${when}`);
+function buildGoogleNewsDomainRssUrl(domain, when = '24h', hl = 'en-US', gl = 'US', ceid = 'US:en') {
+    const query = encodeURIComponent(`when:${when} site:${domain}`);
     return `https://news.google.com/rss/search?q=${query}&hl=${hl}&gl=${gl}&ceid=${ceid}`;
 }
 
 /**
- * 工具 1: 采集单个全球知名信源 (支持 RSS + Google News 站点代理自动降级 + Jina 网页解析)
+ * 工具 1: 采集单个全球知名信源 (支持主 RSS + 备用官方 RSS + Google News 站点代理 + Jina 列表抽取)
  */
 async function fetchFromGlobalSource(source, maxItemsOverride = null) {
     const maxItems = maxItemsOverride || source.maxArticles || config.news.maxArticlesPerSource || 5;
@@ -172,21 +296,29 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
             feed = await parseRssUrlRobust(source.rssUrl, 10000);
         } else if (source.domain) {
             usedStrategy = 'gnews_proxy';
-            const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '2d');
+            const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '24h');
             feed = await parseRssUrlRobust(proxyUrl, 10000);
         }
     } catch (rssError) {
-        // 如果直接 RSS 失败且配置了 domain，自动降级到 Google News Domain Proxy
-        if (source.domain && config.agent.enableGoogleNewsFallback !== false) {
+        // 优先尝试该信源配置的备用官方 RSS (backupRssUrl)
+        if (source.backupRssUrl) {
+            try {
+                usedStrategy = 'backup_rss';
+                feed = await parseRssUrlRobust(source.backupRssUrl, 10000);
+            } catch (_) {}
+        }
+
+        // 若仍未成功且配置了 domain，降级到 Google News Domain Proxy
+        if ((!feed || !Array.isArray(feed.items) || feed.items.length === 0) && source.domain && config.agent.enableGoogleNewsFallback !== false) {
             try {
                 usedStrategy = 'gnews_proxy_fallback';
-                const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '2d');
+                const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '24h');
                 logger.debug('AGENT_TOOL', `${sourceName} 直接RSS受阻，自动切换 Google News 站点代理: site:${source.domain}`);
                 feed = await parseRssUrlRobust(proxyUrl, 10000);
             } catch (fallbackErr) {
                 logger.warn('AGENT_TOOL', `${sourceName} 代理采集亦失败: ${fallbackErr.message}`);
             }
-        } else {
+        } else if (!feed) {
             logger.warn('AGENT_TOOL', `${sourceName} RSS采集失败: ${rssError.message}`);
         }
     }
@@ -199,8 +331,8 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
         for (const item of items) {
             if (!item.title || !item.link) continue;
 
-            const rawContent = item['content:encoded'] || item.content || item.contentSnippet || item.summary || item.description || '';
-            const rawDesc = item.contentSnippet || item.summary || item.description || rawContent || '';
+            const rawContent = item['content:encoded'] || item.content || item.rawDescription || item.contentSnippet || item.summary || item.description || '';
+            const rawDesc = item.contentSnippet || item.summary || item.rawDescription || item.description || rawContent || '';
 
             let cleanDesc = stripHtml(rawDesc);
             let cleanContent = stripHtml(rawContent);
@@ -213,17 +345,21 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
                 cleanDesc = cleanTitle;
             }
 
+            const baseUrl = source.url || item.link;
+            const extractedImg = extractImageFromItem(item, baseUrl);
+
             articles.push({
                 id: createArticleId(item.link, cleanTitle),
                 title: cleanTitle,
                 description: truncateText(cleanDesc, 500),
                 content: truncateText(cleanContent || cleanDesc, 2500),
                 url: item.link,
-                urlToImage: extractImageFromItem(item),
+                urlToImage: extractedImg,
                 publishedAt: item.isoDate || item.pubDate || new Date().toISOString(),
                 source: {
                     id: source.id || null,
                     name: sourceName,
+                    domain: source.domain || null,
                     category: source.category || 'global',
                     authority: source.authority || getSourceAuthorityScore(sourceName),
                     strategy: usedStrategy
@@ -262,7 +398,7 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
         headers['Authorization'] = `Bearer ${config.agent.jinaApiKey}`;
     }
 
-    const response = await axios.get(jinaUrl, { timeout: 15000, headers });
+    const response = await axios.get(jinaUrl, { timeout: 15000, headers, httpsAgent: httpsAgentIgnoreTls });
     const markdown = String(response.data || '');
     if (!markdown) return [];
 
@@ -295,6 +431,7 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
             source: {
                 id: source.id || 'jina-web',
                 name: source.name || new URL(source.url).hostname,
+                domain: source.domain || null,
                 category: source.category || 'global',
                 authority: source.authority || getSourceAuthorityScore(source.name),
                 strategy: 'jina_scrape'
@@ -310,9 +447,6 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
 
 /**
  * 工具 2: 提取单篇新闻全文 (Jina Reader 优先 + 本地 Cheerio Readability 回退)
- * @param {string} url - 新闻原文链接
- * @param {Object} options - 选项
- * @returns {Promise<Object>} { success, title, content, publishedTime, excerpt, method }
  */
 async function extractFullArticleContent(url, options = {}) {
     if (!url || !isValidUrl(url)) {
@@ -340,6 +474,7 @@ async function extractFullArticleContent(url, options = {}) {
 
             const response = await axios.get(jinaUrl, {
                 timeout: options.timeout || 15000,
+                httpsAgent: httpsAgentIgnoreTls,
                 headers
             });
 
@@ -352,7 +487,7 @@ async function extractFullArticleContent(url, options = {}) {
                 title = response.data.data.title || '';
                 content = response.data.data.content || '';
                 publishedTime = response.data.data.publishedTime || null;
-                imageUrl = normalizeValidImageUrl(response.data.data.image || response.data.data.imageUrl);
+                imageUrl = normalizeValidImageUrl(response.data.data.image || response.data.data.imageUrl, url);
             } else if (typeof response.data === 'string') {
                 content = response.data;
                 const titleMatch = content.match(/^Title:\s*(.+)$/m);
@@ -360,9 +495,14 @@ async function extractFullArticleContent(url, options = {}) {
             }
 
             if (!imageUrl && content) {
-                const mdImgMatch = content.match(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/i);
-                if (mdImgMatch) {
-                    imageUrl = normalizeValidImageUrl(mdImgMatch[1]);
+                const mdImgRegex = /!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/gi;
+                let mdMatch;
+                while ((mdMatch = mdImgRegex.exec(content)) !== null) {
+                    const valid = normalizeValidImageUrl(mdMatch[1], url);
+                    if (valid) {
+                        imageUrl = valid;
+                        break;
+                    }
                 }
             }
 
@@ -392,6 +532,7 @@ async function extractFullArticleContent(url, options = {}) {
         const response = await axios.get(url, {
             timeout: options.timeout || 12000,
             maxRedirects: 5,
+            httpsAgent: httpsAgentIgnoreTls,
             headers: {
                 'User-Agent': config.webScraping.userAgent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -405,23 +546,19 @@ async function extractFullArticleContent(url, options = {}) {
         }
 
         const $ = cheerio.load(html);
+        const resolvedUrl = response.request?.res?.responseUrl || url;
 
         const rawOgImage =
             $('meta[property="og:image"]').attr('content') ||
+            $('meta[property="og:image:secure_url"]').attr('content') ||
             $('meta[property="og:image:url"]').attr('content') ||
             $('meta[name="twitter:image"]').attr('content') ||
             $('meta[name="twitter:image:src"]').attr('content') ||
+            $('link[rel="image_src"]').attr('href') ||
             $('article img').first().attr('src') ||
             null;
-        const resolvedUrl = response.request?.res?.responseUrl || url;
-        let imageUrl = null;
-        if (rawOgImage) {
-            try {
-                imageUrl = normalizeValidImageUrl(new URL(rawOgImage, resolvedUrl).href);
-            } catch (_) {
-                imageUrl = normalizeValidImageUrl(rawOgImage);
-            }
-        }
+
+        const imageUrl = normalizeValidImageUrl(rawOgImage, resolvedUrl);
 
         $('script, style, noscript, iframe, nav, footer, header, aside, form, .ad, .advertisement, .social-share, .related-articles, .newsletter').remove();
 
@@ -500,39 +637,127 @@ async function extractFullArticleContent(url, options = {}) {
 }
 
 /**
- * 轻量级快速抓取文章 og:image 封面图（用于补充无配图的 RSS 条目）
+ * 轻量级快速抓取文章 og:image / twitter:image / JSON-LD 封面图
+ * （移除会导致部分 CDN 返回 416 错误的 Range 请求头，改用标准 HTML 读取）
  */
-async function fetchArticleLeadImage(url, timeout = 5000) {
+async function fetchArticleLeadImage(url, timeout = 5500) {
     if (!url || !isValidUrl(url) || url.includes('news.google.com/rss/articles/')) {
         return null;
     }
+
+    const cached = imageLookupCache.get(`url:${url}`);
+    if (cached) return cached;
+
     try {
         const response = await axios.get(url, {
             timeout,
-            maxRedirects: 4,
+            maxRedirects: 5,
+            maxContentLength: 450 * 1024,
+            httpsAgent: httpsAgentIgnoreTls,
             headers: {
                 'User-Agent': config.webScraping.userAgent,
-                'Accept': 'text/html,application/xhtml+xml',
-                'Range': 'bytes=0-32768'
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8'
             },
             responseType: 'text'
         });
+
         const html = String(response.data || '');
         if (!html) return null;
-        const match =
-            html.match(/<meta[^>]+property=["']og:image(?::url)?["'][^>]+content=["']([^"']+)["']/i) ||
-            html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?::url)?["']/i) ||
-            html.match(/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i) ||
-            html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image(?::src)?["']/i);
-        if (match && match[1]) {
-            const resolvedUrl = response.request?.res?.responseUrl || url;
-            try {
-                return normalizeValidImageUrl(new URL(match[1], resolvedUrl).href);
-            } catch (_) {
-                return normalizeValidImageUrl(match[1]);
+        const resolvedUrl = response.request?.res?.responseUrl || url;
+
+        // 1. 正则快速匹配 <meta property="og:image" / "twitter:image">
+        const metaMatch =
+            html.match(/<meta[^>]+property=["']og:image(?::secure_url|:url)?["'][^>]+content=["']([^"']+)["']/i) ||
+            html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?::secure_url|:url)?["']/i) ||
+            html.match(/<meta[^>]+(?:name|property)=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i) ||
+            html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:name|property)=["']twitter:image(?::src)?["']/i) ||
+            html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
+
+        if (metaMatch && metaMatch[1]) {
+            const valid = normalizeValidImageUrl(metaMatch[1], resolvedUrl);
+            if (valid) {
+                imageLookupCache.set(`url:${url}`, valid);
+                return valid;
+            }
+        }
+
+        // 2. 匹配 JSON-LD 中的 "thumbnailUrl" 或 "image":{"url":"..."}
+        const jsonLdImgMatch =
+            html.match(/"thumbnailUrl"\s*:\s*"(https?:\/\/[^"]+)"/i) ||
+            html.match(/"image"\s*:\s*\{\s*"@type"\s*:\s*"ImageObject"[^}]*"url"\s*:\s*"(https?:\/\/[^"]+)"/i) ||
+            html.match(/"image"\s*:\s*"(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/i);
+
+        if (jsonLdImgMatch && jsonLdImgMatch[1]) {
+            const valid = normalizeValidImageUrl(jsonLdImgMatch[1].replace(/\\u002F/gi, '/').replace(/\\\//g, '/'), resolvedUrl);
+            if (valid) {
+                imageLookupCache.set(`url:${url}`, valid);
+                return valid;
+            }
+        }
+
+        // 3. 从正文区域提取首张有效大图
+        const bodyImg = extractFirstValidImgFromHtml(html, resolvedUrl);
+        if (bodyImg) {
+            imageLookupCache.set(`url:${url}`, bodyImg);
+            return bodyImg;
+        }
+    } catch (_) {}
+
+    return null;
+}
+
+/**
+ * 通过 Bing News RSS 按新闻标题智能检索匹配的高清新闻配图
+ * （专用于解决 Reuters GoogleNews 重定向链接、Bloomberg/AlJazeera 等无原生 RSS 图片的痛点）
+ */
+async function searchNewsImageByTitle(title, sourceDomain = '', timeout = 4500) {
+    if (!title || typeof title !== 'string' || title.trim().length < 8) return null;
+
+    const cleanQuery = title
+        .replace(/[^\w\u4e00-\u9fa5\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(' ')
+        .slice(0, 10)
+        .join(' ');
+
+    if (!cleanQuery) return null;
+
+    const cacheKey = `title:${cleanQuery.toLowerCase()}`;
+    const cached = imageLookupCache.get(cacheKey);
+    if (cached) return cached;
+
+    try {
+        const searchUrl = `https://www.bing.com/news/search?q=${encodeURIComponent(cleanQuery)}&format=rss`;
+        const response = await axios.get(searchUrl, {
+            timeout,
+            httpsAgent: httpsAgentIgnoreTls,
+            headers: {
+                'User-Agent': config.webScraping.userAgent,
+                'Accept': 'application/rss+xml, application/xml, text/xml, */*'
+            },
+            responseType: 'text'
+        });
+
+        const xml = String(response.data || '');
+        if (!xml) return null;
+
+        // 提取 <News:Image>... 或 <media:content url="...">
+        const newsImgMatch =
+            xml.match(/<News:Image>([^<]+)<\/News:Image>/i) ||
+            xml.match(/<media:content[^>]+url=["']([^"']+)["']/i) ||
+            xml.match(/<enclosure[^>]+url=["']([^"']+)["']/i);
+
+        if (newsImgMatch && newsImgMatch[1]) {
+            const valid = normalizeValidImageUrl(newsImgMatch[1]);
+            if (valid) {
+                imageLookupCache.set(cacheKey, valid);
+                return valid;
             }
         }
     } catch (_) {}
+
     return null;
 }
 
@@ -555,9 +780,12 @@ function cleanExtractedMarkdown(md = '') {
 module.exports = {
     createArticleId,
     cleanHeadlineSuffix,
+    normalizeValidImageUrl,
+    upgradeImageResolution,
     parseRssUrlRobust,
     buildGoogleNewsDomainRssUrl,
     fetchFromGlobalSource,
     extractFullArticleContent,
-    fetchArticleLeadImage
+    fetchArticleLeadImage,
+    searchNewsImageByTitle
 };

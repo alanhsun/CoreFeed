@@ -383,20 +383,23 @@ class CoreFeedApp {
 
         const catIcon = this.getCategoryIconClass(category);
         const metaBadgeText = category && category !== region ? `${region} · ${category}` : region;
+        const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
+        const displayImgSrc = isRemoteHttp ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}` : imageUrl;
 
         return `
             <article class="news-card">
                 <div>
-                    <!-- 顶部新闻标题图区域 (支持真实外媒配图 + 防盗链无引荐加载 + 智能分类视觉封面兜底) -->
+                    <!-- 顶部新闻标题图区域 (优先通过服务端防盗链代理加载 + 原图直连回退 + 智能分类视觉封面兜底) -->
                     <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
                        class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
                         ${imageUrl ? `
-                            <img src="${this.escapeHtml(imageUrl)}"
+                            <img src="${this.escapeHtml(displayImgSrc)}"
+                                 data-raw-src="${this.escapeHtml(imageUrl)}"
                                  alt="${this.escapeHtml(title)}"
                                  loading="lazy"
                                  referrerpolicy="no-referrer"
                                  class="card-cover-img"
-                                 onerror="this.parentElement.classList.add('is-fallback'); this.remove();" />
+                                 onerror="if(!this.dataset.retried && this.dataset.rawSrc && this.src !== this.dataset.rawSrc){this.dataset.retried='1';this.src=this.dataset.rawSrc;}else{this.parentElement.classList.add('is-fallback');this.remove();}" />
                         ` : ''}
                         <div class="card-cover-fallback">
                             <i class="fa-solid ${catIcon} text-3xl mb-2 opacity-80"></i>

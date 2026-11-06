@@ -1,8 +1,13 @@
 const express = require('express');
+const axios = require('axios');
+const https = require('https');
 const config = require('../config');
-const { writeJsonFile, readJsonFile } = require('../utils/helpers');
+const { writeJsonFile, readJsonFile, isValidUrl, SimpleCache } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const { getGlobalSourceMatrix, saveGlobalSourceMatrixUpdate } = require('../config/global_sources');
+
+const proxyHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
+const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
 
 /**
  * 初始化 API 路由 (CoreFeed v2.0 - 专注全球新闻采集、渐进编译与展示)
@@ -22,6 +27,87 @@ function initializeApiRoutes(services, io, stateManager) {
             logger.debug('API', '加载初始综述缓存跳过', err.message);
         }
     })();
+
+    // ==================== 0. 外媒新闻题图防盗链与跨境加速代理 ====================
+    router.get('/image-proxy', async (req, res) => {
+        const rawUrl = (req.query.url || '').trim();
+        if (!rawUrl || !isValidUrl(rawUrl)) {
+            return res.status(400).end();
+        }
+
+        let parsed;
+        try {
+            parsed = new URL(rawUrl);
+            if (!['http:', 'https:'].includes(parsed.protocol)) {
+                return res.status(400).end();
+            }
+            const host = parsed.hostname.toLowerCase();
+            if (
+                host === 'localhost' ||
+                host.startsWith('127.') ||
+                host.startsWith('10.') ||
+                host.startsWith('192.168.') ||
+                host === '0.0.0.0' ||
+                host.endsWith('.local')
+            ) {
+                return res.status(403).end();
+            }
+        } catch (_) {
+            return res.status(400).end();
+        }
+
+        const cached = imageProxyCache.get(rawUrl);
+        if (cached && cached.buffer) {
+            res.setHeader('Content-Type', cached.contentType || 'image/jpeg');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            return res.send(cached.buffer);
+        }
+
+        const fetchImageBuffer = async (withReferer = true) => {
+            const headers = {
+                'User-Agent': config.webScraping.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9'
+            };
+            if (withReferer) {
+                headers['Referer'] = `${parsed.origin}/`;
+            }
+            return await axios.get(rawUrl, {
+                responseType: 'arraybuffer',
+                timeout: 8000,
+                maxRedirects: 5,
+                maxContentLength: 8 * 1024 * 1024,
+                httpsAgent: proxyHttpsAgent,
+                headers
+            });
+        };
+
+        try {
+            let upstream;
+            try {
+                upstream = await fetchImageBuffer(true);
+            } catch (firstErr) {
+                upstream = await fetchImageBuffer(false);
+            }
+
+            const contentType = String(upstream.headers['content-type'] || 'image/jpeg').toLowerCase();
+            if (contentType.includes('text/html')) {
+                return res.status(404).end();
+            }
+
+            const buffer = Buffer.from(upstream.data);
+            if (!buffer || buffer.length < 120) {
+                return res.status(404).end();
+            }
+
+            imageProxyCache.set(rawUrl, { buffer, contentType });
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            return res.send(buffer);
+        } catch (err) {
+            return res.status(502).end();
+        }
+    });
 
     // ==================== 1. Agent 采集与深读接口 ====================
 
