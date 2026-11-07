@@ -289,11 +289,14 @@ function initializeApiRoutes(services, io, stateManager) {
                 summaryMarkdown = null,
                 sourceStats = [],
                 lastUpdated = null,
-                publishedAt = null
+                publishedAt = null,
+                publishedBy: rawPublishedBy = null,
+                clientId: rawClientId = null
             } = req.body || {};
 
             const summaryArticle = rawSummaryArticle || summary || null;
             const effectiveLastUpdated = lastUpdated || publishedAt || null;
+            const publishedBy = String(rawPublishedBy || rawClientId || '').trim() || null;
 
             if (!Array.isArray(news) || news.length === 0) {
                 return res.status(400).json({
@@ -367,6 +370,9 @@ function initializeApiRoutes(services, io, stateManager) {
                 'completed'
             );
             stateManager.set('lastUpdated', nowIso, false);
+            if (publishedBy) {
+                stateManager.set('lastPublishedBy', publishedBy, false);
+            }
 
             // 2. 处理并持久化今日深度综述 (支持完整对象、仅含 content 的对象或 Markdown 字符串)
             let finalSummary = null;
@@ -445,7 +451,8 @@ function initializeApiRoutes(services, io, stateManager) {
                 totalPoolCount: normalizedFullPool.length,
                 hasSummary: Boolean(finalSummary),
                 publishedAt: nowIso,
-                lastUpdated: nowIso
+                lastUpdated: nowIso,
+                publishedBy
             });
         } catch (error) {
             logger.error('API', '接收外部发布新闻数据失败', error.message);
@@ -656,11 +663,16 @@ function initializeApiRoutes(services, io, stateManager) {
             version: '2.0.0',
             newsCount: newsData.length,
             lastUpdated: stateManager.get('lastUpdated'),
+            lastPublishedBy:
+                stateManager.get('lastPublishedBy') ||
+                (githubSyncManager ? githubSyncManager.getStatus().publishedBy : null) ||
+                null,
             collectionPhase: stateManager.get('collectionPhase') || 'idle',
             hasSummary: Boolean(summaryArticle),
             aiConfigured: Boolean(config.minimax.apiKey),
             aiModel: aiService.getCurrentModelInfo(),
-            schedule: scheduleManager ? scheduleManager.getStatus() : null
+            schedule: scheduleManager ? scheduleManager.getStatus() : null,
+            githubSync: githubSyncManager ? githubSyncManager.getStatus() : null
         });
     });
 

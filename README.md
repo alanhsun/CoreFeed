@@ -21,15 +21,15 @@
   - **分批增量中文编译 (`Compiler`)**：以结构化 JSON 批处理生成中文标题、百字客观摘要、地域/领域标签与核心要点；每完成一批（8 条），立即通过 WebSocket 增量刷新页面卡片。
   - **今日要闻深度综述 (`Chief Editor`)**：统筹当日精选全球新闻生成带可点击 `[NEWS_k]` / `[媒体名]` 原文引注的《全球要闻深度综述》。
 
-### 2. 🤖 Antigravity 客户端自动化采编发流水线 (Path A)
-- 支持将信源采集、深度中文精编与站点发布解耦，提供完整的命令行工具链与外部发布接口：
+### 2. 🤖 Antigravity 多客户端自动化采编发流水线 (Path A & 方案 2B 默认工作流)
+- 支持将信源采集、深度中文精编、GitHub 快照中枢同步与站点发布解耦，提供开箱即用的多客户端协同工具链：
   - **`npm run ag:harvest` (`scripts/ag-harvest.js`)**：并发采集全球 30 大信源、跨源去重、抽取首图与正文，输出候选包 `data/ag_candidates.json`。
-  - **`npm run ag:publish` (`scripts/ag-publish.js`)**：读取编译产物 `data/ag_compiled.json`，执行并查集（Union-Find）二次语义合并、渲染 `[NEWS_k]` 引注锚点，并通过 `POST /api/agent/publish` 推送到目标站点实时落盘并触发 WebSocket 全站广播。
-  - **`npm run ag:auto` (`scripts/ag-auto-update.js`)**：一键全自动四阶段闭环编排（`Harvest` → `AI/Fallback Compile` → `Publish` → `/api/health` 在线健康核验）。
+  - **`npm run ag:publish` (`scripts/ag-publish.js`)**：读取编译产物 `data/ag_compiled.json`，执行并查集（Union-Find）二次语义合并、渲染 `[NEWS_k]` 引注锚点，**默认同步推送至 GitHub `ag-snapshot/latest.json` 分支**（`GITHUB_PUSH_ENABLED=true`，写入 `publishedBy` 客户端标识），并通过 `POST /api/agent/publish` 推送到目标站点实时落盘与全站广播。
+  - **`npm run ag:auto` (`scripts/ag-auto-update.js`)**：一键全自动闭环编排（**30 分钟多客户端远端快照冷却预检** → `Harvest` → `AI/Fallback Compile` → **默认推送 `ag-snapshot/latest.json` 及目标站点** → `/api/health` 在线健康核验）。
 
 ### 3. ⏰ 每天早、中、晚三次全自动更新机制 (`08:00, 12:30, 19:30` 北京时间)
 - 内置 `ScheduleManager` (`utils/schedule_manager.js`) 与外部定时任务双保险，默认锁定 `Asia/Shanghai` 时区，每天在 **早 (`08:00`)、中 (`12:30`)、晚 (`19:30`)** 三个黄金时段全自动采集、整理并更新网站新闻。
-- 内置 **10 分钟新鲜度防重守卫**：若外部流水线刚完成推送发布，内置调度器会自动跳过同一窗口期内的重复巡检。
+- 内置 **多客户端 30 分钟冷却窗口防冲突与 5 分钟轻量级 ETag 同步**：任意客户端完成发布后，其他客户端及软路由在冷却窗口内自动拉取复用最新快照，避免多端重复采集覆盖。
 
 ### 4. 📖 单篇外媒即时全文深读 (`/api/agent/deep-read`)
 - 点击任意新闻卡片底部的「全文深读」，即时穿透抓取外媒原文正文，并输出「核心导读 + 全文核心内容精译 + 背景与深层解读」及原文对照。
@@ -56,15 +56,15 @@ CoreFeed/
 │   └── state_manager.js           # 集中式状态管理与实时事件广播
 ├── scripts/
 │   ├── ag-harvest.js              # Path A 阶段一：全球信源并发采集与正文提取 CLI
-│   ├── ag-publish.js              # Path A 阶段二：并查集二次聚类、引注渲染与远程发布 CLI
-│   └── ag-auto-update.js          # Path A 全自动四阶段闭环更新脚本 (采集->编译->发布->核验)
+│   ├── ag-publish.js              # Path A 阶段二：并查集二次聚类、引注渲染与默认 GitHub 快照发布 CLI
+│   └── ag-auto-update.js          # Path A/2B 全自动多客户端协同更新脚本 (冷却预检->采集->编译->发布->核验)
 ├── routes/
-│   └── api.js                     # RESTful API 路由 (/api/agent/publish, /api/schedule/* 等)
+│   └── api.js                     # RESTful API 路由 (/api/agent/publish, /api/agent/pull-github, /api/schedule/* 等)
 ├── middleware/
 │   └── error_handler.js           # 全局错误处理、异步包装与 API 速率限制中间件
 ├── utils/
-│   ├── github_sync.js             # GitHub 独立快照分支发布 (Plumbing) 与软路由免公网 IP 拉取同步器
-│   ├── schedule_manager.js        # Cron 多时间点自动采集调度器 (默认 08:00, 12:30, 19:30)
+│   ├── github_sync.js             # GitHub 独立快照分支发布 (Plumbing)、多客户端冷却检查与 ETag 同步器
+│   ├── schedule_manager.js        # Cron 多时间点自动采集调度器 (08:00, 12:30, 19:30 + 5 分钟快照轮询)
 │   ├── rate_limiter.js            # 令牌桶 API 速率限制器
 │   ├── network_config.js          # 全局 HTTP Keep-Alive 连接池配置
 │   ├── logger.js                  # 彩色结构化日志与指标统计
@@ -75,61 +75,54 @@ CoreFeed/
 │   ├── css/style.css              # Kami 宣纸/墨夜双主题排版样式
 │   └── js/main.js                 # 前端控制器、多维筛选与 WebSocket 渐进式刷新
 └── tests/
-    ├── ag_pipeline.test.js        # Path A 接口、CLI 与 GitHub 快照中转同步端到端测试套件 (10/10)
+    ├── ag_pipeline.test.js        # Path A 接口、CLI 与方案 2B 多客户端协同端到端测试套件 (12/12)
     └── deploy_router.test.js      # 软路由一键部署与热更新脚本端到端自动化测试套件 (4/4)
 ```
 
 ---
 
-## 每日更新指南：从 Antigravity 同步新闻到软路由网站 (`10.10.20.10:3120`) 🔄
+## 每日更新指南：多客户端协同与软路由 (`10.10.20.10:3120`) 自动同步 🔄
 
-根据 Antigravity 运行位置的不同，系统支持以下两种全自动同步拓扑：
+系统将 **方案 2B（以 GitHub `ag-snapshot/latest.json` 作为多客户端统一中枢与唯一事实源）** 设为全项目默认主流程，同时支持局域网 HTTP 直推：
 
-### 场景一：在局域网本机（如 Windows 电脑 `C:\Users\alan`）运行本地 Antigravity 客户端或脚本
-当本机与软路由处于同一局域网（可直接访问 `http://10.10.20.10:3120`）时，采用 **局域网 HTTP 直推模式**：
+### 🌟 默认主流程（方案 2B）：GitHub `ag-snapshot/latest.json` 多客户端统一中枢 + 软路由 5 分钟无感同步
+无论你有多少个不同的 Antigravity 客户端（如云端沙箱 VM、家里或公司的 Windows 电脑、MacBook），均可通过 GitHub `ag-snapshot` 分支实现免公网 IP、防冲突的自动协同：
 
-1. **完整数据流向**：
-   - **采集 (`Harvest`)**：本机执行 `npm run ag:harvest` 并发抓取全球 30 大权威信源，生成候选集 `data/ag_candidates.json`；
-   - **精编 (`Compile`)**：由本机 Antigravity 客户端（或 `ag-auto-update.js`）完成同题事件去重、中文深度编译与《全球要闻深度综述》，生成 `data/ag_compiled.json`；
-   - **局域网直推 (`Publish`)**：执行 `npm run ag:publish`（或一键运行 `npm run ag:auto`），通过局域网 HTTP 向软路由发送 `POST http://10.10.20.10:3120/api/agent/publish`（携带 `news`、`allEnhancedNews`、`summary`、`publishedAt`）；
-   - **软路由容器收到请求后的内部动作**：软路由 `corefeed` 容器校验 `PUBLISH_SECRET`（若已配置，支持 `Authorization: Bearer` 或 `X-Publish-Secret`）→ 更新内存 `stateManager`（`newsData`、`allEnhancedNews`、`summaryArticle`、`lastUpdated`）→ 将综述中的 `[NEWS_k]` 自动渲染为可点击原文引注链接 → 持久化落盘写入软路由 `/opt/corefeed/data/{news,summary,state}.json` → 通过 Socket.IO 广播实时无刷新更新所有打开的前端网页。
+1. **开箱即用默认推送 GitHub (`GITHUB_PUSH_ENABLED=true`)**：
+   - 任意客户端直接执行 `npm run ag:auto` 或 `npm run ag:publish`（无需额外加 `--github` 参数），脚本都会使用 Git 底层 Plumbing 命令（`hash-object` → `mktree` → `commit-tree` → `push --force`）自动将精编完成的脱敏数据包写入 GitHub `ag-snapshot` 独立孤儿分支的 `latest.json`，全程不触碰 `main` 分支工作区。
+   - 快照中自动记录 `publishedBy` / `clientId`（可通过 `--client-id=<名称>` 或环境变量 `CLIENT_ID` 指定，默认取当前机器 `os.hostname()`），清晰标识当前快照由哪个客户端发布。
+   - 如需在单次运行中仅更新本地而不推送 GitHub，可传入 `--no-github`（或在 `.env` 中设置 `GITHUB_PUSH_ENABLED=false`）。
 
-2. **本机配置与执行命令（Windows PowerShell）**：
-   ```powershell
-   # 方式 A：在本机项目根目录 .env 文件中配置软路由地址（一劳永逸，无论当前在哪个目录执行均自动加载）
-   # COREFEED_SITE_URL=http://10.10.20.10:3120
-   # PUBLISH_SECRET=你的密钥(若软路由未设密钥可留空)
-   npm run ag:auto        # 一键执行：采集 -> 编译 -> 推送至 10.10.20.10:3120 -> 健康检查
-   npm run ag:publish     # 仅将已由 Antigravity 生成的 data/ag_compiled.json 推送至软路由
+2. **多客户端防冲突冷却保护 (`GITHUB_COOLDOWN_MINUTES=30`)**：
+   - 当任意客户端执行 `ag-auto-update.js`（或每日 `08:00, 12:30, 19:30` 定时任务触发）时，会先检查远端 GitHub `ag-snapshot/latest.json` 的 `publishedAt` 时间戳：
+     - **若在 30 分钟冷却窗口内已被其他客户端更新过**（且未传 `--force`）：当前客户端自动跳过耗时的重复采集与编译，直接拉取远端最新快照同步至本地并退出，避免多客户端互相覆盖与重复消耗资源；
+     - **若远端快照已超过 30 分钟或传入了 `--force`**：当前客户端执行完整采集、中文精编与综述生成，并推送最新快照至 `ag-snapshot/latest.json`。
 
-   # 方式 B：命令行通过 --site / --file 直接指定软路由地址推送（无需修改 .env）
-   node scripts/ag-publish.js --site http://10.10.20.10:3120 --file data/ag_compiled.json
-   node scripts/ag-auto-update.js --site http://10.10.20.10:3120
-   ```
-
----
-
-### 场景二：Antigravity 运行在云端沙箱 VM（无法直接访问内网 `10.10.20.10`）
-当 Antigravity 运行在云端沙箱环境、无法直接向局域网 IP `10.10.20.10` 发起请求时，提供以下两种同步方案：
-
-#### 方式 2A：公网域名 / 反向代理直推（适合已配置公网 DDNS / Cloudflare Tunnel 的用户）
-- 在云端将 `COREFEED_SITE_URL=https://你的公网域名` 与 `PUBLISH_SECRET=你的密钥` 写入环境变量，云端每日早中晚三次（`08:00, 12:30, 19:30`）执行 `npm run ag:auto` 即可直接通过 HTTPS 推送至软路由 `/api/agent/publish`。
-
-#### 方式 2B：GitHub 快照中转同步（免公网 IP / 零端口映射，开箱即用）
-- **双向解耦工作流 (`Cloud Antigravity -> GitHub ag-snapshot 分支 -> 内网软路由 10.10.20.10`)**：
-  1. **云端发布精编快照到 GitHub**：云端 Antigravity 每日早（`08:00`）、中（`12:30`）、晚（`19:30`）完成精编后，执行：
-     ```bash
-     npm run ag:auto:github
-     # 等价于: node scripts/ag-auto-update.js --github
-     # 或仅将已编译的 data/ag_compiled.json 推送到 GitHub 快照分支:
-     npm run ag:publish:github
-     ```
-     脚本通过 Git 底层 Plumbing 命令（`hash-object` → `mktree` → `commit-tree` → `push --force`）直接将脱敏精编数据包写入 GitHub 仓库独立孤儿分支 `ag-snapshot` 的 `latest.json`（全程不污染 `main` 分支工作区与提交历史）。
-  2. **软路由自动从 GitHub 拉取并落盘**：软路由 `10.10.20.10:3120` 默认启用 `GITHUB_SYNC_ENABLED=true`，在**容器启动时**、**后台每 15 分钟轮询**及**每日 08:00 / 12:30 / 19:30 定时调度窗口**自动检查 `GITHUB_SNAPSHOT_URL`（`https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json`，内置 GitHub API / `ghfast.top` 多源加速回退与 `publishedAt` 时间戳防重比对）。一旦检测到新快照，软路由自动拉取并更新内存 `stateManager`、写入 `/opt/corefeed/data/{news,summary,state}.json`，同时通过 Socket.IO 全站实时广播。
-  3. **软路由手动即时拉取（可选）**：
+3. **软路由 (`10.10.20.10:3120`) 纯正方案 2B 接收端（每 5 分钟轻量轮询）**：
+   - 通过 `deploy-router.sh` 部署的软路由容器默认开启 `GITHUB_SYNC_ENABLED=true` 且配置 `GITHUB_SYNC_INTERVAL_MINUTES=5`。
+   - 软路由在**容器启动时**、**后台每 5 分钟轻量级轮询（支持 `If-None-Match` ETag / `304 Not Modified` 零流量比对与 `publishedAt` 校验）**以及**每日 `08:00, 12:30, 19:30` 定时点**自动检查 `ag-snapshot/latest.json`。
+   - 任意客户端一推送 GitHub，软路由在几分钟内即可无感拉取最新快照，更新内存 `stateManager`、写入 `/opt/corefeed/data/{news,summary,state}.json`，并通过 Socket.IO 实时刷新所有打开的网页。
+   - 也可随时手动触发软路由立即拉取：
      ```bash
      curl -X POST http://10.10.20.10:3120/api/agent/pull-github
      ```
+
+---
+
+### 补充拓扑：局域网本机直推 (`10.10.20.10:3120`) 或公网反代直推 (2A)
+当本机与软路由处于同一局域网（可直接访问 `http://10.10.20.10:3120`）时，除了默认同步到 GitHub `ag-snapshot` 外，还可同时向软路由发起 HTTP 秒级直推：
+
+```powershell
+# 在本机 .env 中设置 COREFEED_SITE_URL=http://10.10.20.10:3120（或通过 --site 指定）
+# 一键执行：多客户端冷却检查 -> 采集 -> 编译 -> 同步推送至 GitHub ag-snapshot 与 10.10.20.10:3120
+npm run ag:auto
+
+# 强制忽略 30 分钟冷却窗口立即重新采编并发布（携带自定义客户端标识）：
+node scripts/ag-auto-update.js --force --client-id=alan-windows-pc --site http://10.10.20.10:3120
+
+# 仅将已编译的 data/ag_compiled.json 推送至 GitHub ag-snapshot 及软路由：
+node scripts/ag-publish.js --site http://10.10.20.10:3120 --file data/ag_compiled.json
+```
 
 ---
 
@@ -139,7 +132,7 @@ CoreFeed/
 POST /api/agent/patrol             # 触发两阶段全球知名信源采集与渐进式编译
 POST /api/agent/publish            # 接收外部预编译新闻与综述数据、持久化并全站广播 (支持 Bearer/X-Publish-Secret)
 POST /api/agent/pull-github        # 从 GitHub ag-snapshot 分支拉取最新精编快照并应用落盘 (支持 force/snapshotUrl)
-GET  /api/agent/sync-status        # 获取 GitHub 快照中转同步状态、最近同步时间与来源地址
+GET  /api/agent/sync-status        # 获取 GitHub 快照中转同步状态、最近同步时间、ETag 与发布客户端标识 (publishedBy)
 POST /api/agent/deep-read          # 对指定外媒 URL 执行 Jina/Cheerio 全文提取与中文深读
 GET  /api/agent/status             # 获取采集引擎实时状态、阶段、日志与信源统计
 GET  /api/schedule/status          # 获取定时自动更新配置、运行状态与下次触发时间
@@ -175,18 +168,17 @@ npm run dev
 
 ### 2. Antigravity 自动化采编发 CLI 与测试
 ```bash
-# 执行全自动四阶段闭环更新 (采集 -> 编译 -> 发布 -> 健康检查)
+# 执行全自动闭环更新 (默认启用方案 2B：30m 冷却预检 -> 采集 -> 编译 -> 推送 GitHub ag-snapshot & 本地站点)
 npm run ag:auto
 
-# 执行全自动采编并将快照同步发布至 GitHub ag-snapshot 分支 (供内网软路由拉取)
-npm run ag:auto:github
+# 强制忽略远端冷却窗口立即采编并推送 GitHub 快照分支
+node scripts/ag-auto-update.js --force --client-id=my-client
 
-# 分步执行：仅采集候选池 / 仅发布已编译结果 / 仅发布快照至 GitHub
+# 分步执行：仅采集候选池 / 发布已编译结果 (默认推送 GitHub ag-snapshot，加 --no-github 可仅限本地)
 npm run ag:harvest
 npm run ag:publish
-npm run ag:publish:github
 
-# 运行端到端自动化测试套件 (14/14 测试用例)
+# 运行端到端自动化测试套件 (16/16 测试用例)
 npm test
 ```
 

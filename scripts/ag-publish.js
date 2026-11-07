@@ -17,6 +17,7 @@
  *   --fallback-compile     当缺少预编译文件时自动使用内置编译/翻译兜底生成
  *   --local-only           仅写入本地 data/*.json，不发起远程 HTTP 推送
  */
+const os = require('os');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('dotenv').config();
@@ -33,10 +34,30 @@ const VALID_REGIONS = ['中国', '美国', '欧洲', '日本', '韩国', '东南
 const VALID_CATEGORIES = ['政经', '外交', '科技', '财经', '军事', '社会', '能源', '国际'];
 const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: false });
 
+function resolveDefaultPushToGithub() {
+    if (process.env.GITHUB_PUSH_ENABLED !== undefined && process.env.GITHUB_PUSH_ENABLED !== '') {
+        const val = String(process.env.GITHUB_PUSH_ENABLED).toLowerCase().trim();
+        return val !== 'false' && val !== '0' && val !== 'no';
+    }
+    if (process.env.AG_GITHUB_SYNC !== undefined && process.env.AG_GITHUB_SYNC !== '') {
+        const val = String(process.env.AG_GITHUB_SYNC).toLowerCase().trim();
+        return val !== 'false' && val !== '0' && val !== 'no';
+    }
+    return Boolean(config.githubSync?.pushEnabled ?? config.agent?.githubPushEnabled ?? true);
+}
+
 function parseArgs(argv = process.argv.slice(2)) {
     const eqVal = (a) => a.slice(a.indexOf('=') + 1);
     const defaultPort = config.server?.port || 3120;
-    const defaultGithubSync = String(process.env.AG_GITHUB_SYNC || '').toLowerCase() === 'true';
+    const defaultGithubSync = resolveDefaultPushToGithub();
+    const defaultClientId = String(
+        process.env.CLIENT_ID ||
+        process.env.AG_CLIENT_ID ||
+        config.githubSync?.clientId ||
+        config.agent?.clientId ||
+        os.hostname() ||
+        'antigravity-client'
+    ).trim();
     const options = {
         candidates: process.env.AG_CANDIDATES_FILE || path.join(config.storage.dataDir, 'ag_candidates.json'),
         compiled: process.env.AG_COMPILED_FILE || path.join(config.storage.dataDir, 'ag_compiled.json'),
@@ -45,10 +66,14 @@ function parseArgs(argv = process.argv.slice(2)) {
         limit: config.agent?.maxCuratedArticles || 30,
         fallbackCompile: false,
         localOnly: false,
+        pushToGithub: defaultGithubSync,
         githubSync: defaultGithubSync,
         github: defaultGithubSync,
+        githubExplicit: false,
         githubBranch: process.env.AG_GITHUB_BRANCH || config.githubSync?.branch || 'ag-snapshot',
         githubRemote: process.env.AG_GITHUB_REMOTE || config.githubSync?.remote || 'origin',
+        clientId: defaultClientId,
+        publishedBy: defaultClientId,
         snapshotOut: process.env.AG_SNAPSHOT_OUT || null,
         targetExplicit: Boolean(process.env.COREFEED_SITE_URL)
     };
@@ -82,8 +107,15 @@ function parseArgs(argv = process.argv.slice(2)) {
         } else if (arg === '--local-only' || arg === '--no-push') {
             options.localOnly = true;
         } else if (arg === '--github' || arg === '--github-sync') {
+            options.pushToGithub = true;
             options.githubSync = true;
             options.github = true;
+            options.githubExplicit = true;
+        } else if (arg === '--no-github' || arg === '--no-github-sync') {
+            options.pushToGithub = false;
+            options.githubSync = false;
+            options.github = false;
+            options.githubExplicit = true;
         } else if (arg === '--github-branch' && argv[i + 1]) {
             options.githubBranch = argv[++i];
         } else if (arg.startsWith('--github-branch=')) {
@@ -92,6 +124,18 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.githubRemote = argv[++i];
         } else if (arg.startsWith('--github-remote=')) {
             options.githubRemote = eqVal(arg);
+        } else if ((arg === '--client-id' || arg === '--published-by') && argv[i + 1]) {
+            const val = String(argv[++i]).trim();
+            if (val) {
+                options.clientId = val;
+                options.publishedBy = val;
+            }
+        } else if (arg.startsWith('--client-id=') || arg.startsWith('--published-by=')) {
+            const val = String(eqVal(arg)).trim();
+            if (val) {
+                options.clientId = val;
+                options.publishedBy = val;
+            }
         } else if (arg === '--snapshot-out' && argv[i + 1]) {
             options.snapshotOut = path.resolve(argv[++i]);
         } else if (arg.startsWith('--snapshot-out=')) {
@@ -124,14 +168,41 @@ async function runPublish(customOptions = {}) {
     if (customOptions.target) {
         opts.targetExplicit = true;
     }
+
+    let shouldPushToGithub = Boolean(opts.pushToGithub);
+    if (
+        customOptions.noGithub === true ||
+        customOptions.pushToGithub === false ||
+        customOptions.githubSync === false ||
+        customOptions.github === false
+    ) {
+        shouldPushToGithub = false;
+    } else if (
+        customOptions.pushToGithub === true ||
+        customOptions.githubSync === true ||
+        customOptions.github === true
+    ) {
+        shouldPushToGithub = true;
+    }
+
+    const hasExplicitGithubOpt = Boolean(
+        opts.githubExplicit ||
+        customOptions.githubExplicit ||
+        customOptions.pushToGithub !== undefined ||
+        customOptions.githubSync !== undefined ||
+        customOptions.github !== undefined ||
+        customOptions.noGithub !== undefined
+    );
+
     const aiService = new AIService(null, stateManager);
 
     let harvestData = await readJsonFile(opts.candidates, null);
     let compiledData = await readJsonFile(opts.compiled, null);
 
-    // 支持独立自包含的 ag_compiled.json 快照文件（无需 ag_candidates.json 存在即可直接发布）
-    if ((!harvestData || !Array.isArray(harvestData.fullCandidates) || harvestData.fullCandidates.length === 0) && compiledData) {
-        const standaloneCandidates = Array.isArray(compiledData.news) && compiledData.news.length > 0
+    // 支持独立自包含的 ag_compiled.json 或远端同步快照文件（当 compiledData 包含完整 news 数组或缺少候选集文件时直接以其为准）
+    const hasStandaloneNews = Boolean(compiledData && Array.isArray(compiledData.news) && compiledData.news.length > 0);
+    if (hasStandaloneNews || ((!harvestData || !Array.isArray(harvestData.fullCandidates) || harvestData.fullCandidates.length === 0) && compiledData)) {
+        const standaloneCandidates = hasStandaloneNews
             ? compiledData.news
             : (Array.isArray(compiledData.fullCandidates) && compiledData.fullCandidates.length > 0
                 ? compiledData.fullCandidates
@@ -368,11 +439,29 @@ async function runPublish(customOptions = {}) {
     }
 
     const sourceStats = harvestData.sourceStats || [];
+    const publishedBy = String(
+        customOptions.publishedBy ||
+        customOptions.clientId ||
+        compiledData?.publishedBy ||
+        compiledData?.clientId ||
+        opts.publishedBy ||
+        opts.clientId ||
+        process.env.CLIENT_ID ||
+        process.env.AG_CLIENT_ID ||
+        config.githubSync?.clientId ||
+        config.agent?.clientId ||
+        os.hostname() ||
+        'antigravity-client'
+    ).trim();
 
     const snapshotPayload = {
         version: '2.0',
         publishedAt: nowIso,
         lastUpdated: nowIso,
+        publishedBy,
+        clientId: publishedBy,
+        sourceCount: sourceStats.length,
+        articleCount: finalNews.length,
         displayedCount: finalNews.length,
         totalPoolCount: allEnhancedNews.length,
         news: finalNews,
@@ -402,6 +491,7 @@ async function runPublish(customOptions = {}) {
 
     stateManager.set('collectionPhase', 'completed', false);
     stateManager.set('sourceStats', sourceStats, false);
+    stateManager.set('lastPublishedBy', publishedBy, false);
     stateManager.updateNewsData(finalNews, allEnhancedNews);
     stateManager.updateSummaryArticle(summaryArticle);
     await stateManager.saveToFile(config.storage.stateFile);
@@ -411,19 +501,39 @@ async function runPublish(customOptions = {}) {
         `本地数据文件已更新: news=${finalNews.length} 条 (总池 ${allEnhancedNews.length} 条), summary=${summaryArticle.wordCount} 字`
     );
 
-    // 6. 可选：推送快照至 GitHub 独立分支 (如 ag-snapshot)，供无公网 IP 的内网软路由自动拉取同步
+    // 6. 方案 2B 默认开启：推送快照至 GitHub 独立分支 (默认 ag-snapshot)，供多客户端协同与内网软路由自动拉取同步
     let githubSyncResult = null;
-    if (opts.github || opts.githubSync) {
-        githubSyncResult = publishSnapshotToGitHub(snapshotPayload, {
-            branch: opts.githubBranch,
-            remote: opts.githubRemote,
-            repoDir: opts.repoDir,
-            skipPush: Boolean(opts.skipGitPush)
-        });
-        logger.success(
-            'AG-PUBLISH',
-            `已发布精编快照至 GitHub 分支 ${githubSyncResult.branch} (commit=${githubSyncResult.commitSha.slice(0, 8)}, pushed=${githubSyncResult.pushed})`
-        );
+    const isUnscopedTestRun =
+        process.env.NODE_ENV === 'test' &&
+        !opts.repoDir &&
+        !opts.skipGitPush &&
+        process.env.GITHUB_PUSH_ENABLED !== 'true';
+
+    if (shouldPushToGithub && !isUnscopedTestRun) {
+        try {
+            githubSyncResult = publishSnapshotToGitHub(snapshotPayload, {
+                branch: opts.githubBranch,
+                remote: opts.githubRemote,
+                repoDir: opts.repoDir,
+                skipPush: Boolean(opts.skipGitPush),
+                publishedBy,
+                clientId: publishedBy
+            });
+            logger.success(
+                'AG-PUBLISH',
+                `已发布精编快照至 GitHub 分支 ${githubSyncResult.branch} (commit=${githubSyncResult.commitSha.slice(0, 8)}, pushed=${githubSyncResult.pushed}, by=${publishedBy})`
+            );
+        } catch (gitErr) {
+            if (hasExplicitGithubOpt || opts.repoDir) {
+                throw gitErr;
+            }
+            logger.warn('AG-PUBLISH', `推送快照至 GitHub 跳过或失败 (${gitErr.message})，继续执行本地与目标站点发布`);
+            githubSyncResult = {
+                success: false,
+                skipped: true,
+                error: gitErr.message
+            };
+        }
     }
 
     // 7. 通过 HTTP POST 推送至网站 /api/agent/publish 接口
@@ -451,7 +561,9 @@ async function runPublish(customOptions = {}) {
                     summaryArticle,
                     sourceStats,
                     publishedAt: nowIso,
-                    lastUpdated: nowIso
+                    lastUpdated: nowIso,
+                    publishedBy,
+                    clientId: publishedBy
                 },
                 {
                     headers,
@@ -463,8 +575,8 @@ async function runPublish(customOptions = {}) {
             remoteResponse = response.data;
             logger.success('AG-PUBLISH', `成功推送至网站 ${publishUrl}:`, remoteResponse);
         } catch (httpErr) {
-            if (githubSyncResult?.success && !opts.targetExplicit && httpErr.code === 'ECONNREFUSED') {
-                logger.info('AG-PUBLISH', `本地服务 ${publishUrl} 未运行，已完成 GitHub 快照分支发布`);
+            if ((githubSyncResult?.success || opts.syncedFromGithub) && !opts.targetExplicit && httpErr.code === 'ECONNREFUSED') {
+                logger.info('AG-PUBLISH', `本地服务 ${publishUrl} 未运行，已完成 GitHub 快照同步/发布`);
             } else {
                 throw httpErr;
             }
@@ -478,6 +590,8 @@ async function runPublish(customOptions = {}) {
         summaryArticle,
         publishedAt: nowIso,
         lastUpdated: nowIso,
+        publishedBy,
+        clientId: publishedBy,
         snapshotOut: opts.snapshotOut || null,
         githubSync: githubSyncResult,
         remoteResponse

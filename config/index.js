@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('dotenv').config();
 
@@ -119,6 +120,8 @@ function buildConfig() {
     savedSettings = loadSavedSettings();
 
     const env = getConfig('NODE_ENV', 'development');
+    const defaultPushToGithub = getBooleanConfig('GITHUB_PUSH_ENABLED', getBooleanConfig('AG_GITHUB_SYNC', true));
+    const defaultClientId = getConfig('CLIENT_ID', getConfig('AG_CLIENT_ID', os.hostname() || 'antigravity-client'));
 
     const baseConfig = {
         server: {
@@ -141,24 +144,32 @@ function buildConfig() {
             publishSecret: getConfig('PUBLISH_SECRET', getConfig('PUBLISH_API_KEY', '')),
             siteUrl: getConfig('COREFEED_SITE_URL', `http://localhost:${getNumberConfig('PORT', 3120)}`),
             githubSyncEnabled: getBooleanConfig('GITHUB_SYNC_ENABLED', true),
+            githubPushEnabled: defaultPushToGithub,
+            pushToGithub: defaultPushToGithub,
             githubSnapshotUrl: getConfig(
                 'GITHUB_SNAPSHOT_URL',
                 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
             ),
-            githubSyncIntervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 15),
+            githubSyncIntervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 5),
+            githubCooldownMinutes: getNumberConfig('GITHUB_COOLDOWN_MINUTES', 30),
+            clientId: defaultClientId,
             githubBranch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),
             githubRemote: getConfig('AG_GITHUB_REMOTE', 'origin'),
             syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)
         },
 
-        // GitHub 快照中转同步配置 (云端 Antigravity -> GitHub ag-snapshot -> 软路由)
+        // GitHub 快照中转同步配置 (多客户端方案 2B 统一中枢: Antigravity Clients <-> GitHub ag-snapshot -> 软路由)
         githubSync: {
             enabled: getBooleanConfig('GITHUB_SYNC_ENABLED', true),
+            pushEnabled: defaultPushToGithub,
+            pushToGithub: defaultPushToGithub,
             snapshotUrl: getConfig(
                 'GITHUB_SNAPSHOT_URL',
                 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
             ),
-            intervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 15),
+            intervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 5),
+            cooldownMinutes: getNumberConfig('GITHUB_COOLDOWN_MINUTES', 30),
+            clientId: defaultClientId,
             branch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),
             remote: getConfig('AG_GITHUB_REMOTE', 'origin'),
             syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)

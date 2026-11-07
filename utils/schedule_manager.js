@@ -1,6 +1,10 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const cron = require('node-cron');
 const config = require('../config');
 const logger = require('./logger');
+const { publishSnapshotToGitHub } = require('./github_sync');
 
 /**
  * 定时任务管理器 (CoreFeed v2.0)
@@ -77,9 +81,9 @@ class ScheduleManager {
 
         this.isRunning = this.currentTasks.length > 0;
 
-        // 若启用了 GitHub 快照中转同步，启动后台轮询定时器（使用 .unref() 确保不阻塞进程退出）
+        // 若启用了 GitHub 快照中转同步，启动后台轮询定时器（默认 5 分钟，使用 .unref() 确保不阻塞进程退出）
         const githubSyncEnabled = Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true);
-        const syncIntervalMinutes = Number(config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 15);
+        const syncIntervalMinutes = Number(config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 5);
         if (githubSyncEnabled && this.githubSyncManager && syncIntervalMinutes > 0 && process.env.NODE_ENV !== 'test') {
             this.githubSyncTimer = setInterval(async () => {
                 try {
@@ -133,8 +137,8 @@ class ScheduleManager {
     }
 
     /**
-     * 执行完整定时更新流程 (优先检查 GitHub 快照中转同步 -> 若无新快照则执行本地信源采集与编译)
-     * 内置 10 分钟新鲜度防重守卫：若过去 10 分钟内已通过外部流水线或手动巡检完成发布，则自动跳过本次重复巡检。
+     * 执行完整定时更新流程 (优先检查 GitHub 快照中转同步 -> 若无新快照则执行本地信源采集与编译 -> 自动发布快照至 GitHub)
+     * 内置 10 分钟本地新鲜度防重与 30 分钟远端多客户端冷却窗口守卫。
      */
     async executeUpdate() {
         if (this.stateManager) {
@@ -154,11 +158,14 @@ class ScheduleManager {
         }
 
         const githubSyncEnabled = Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true);
+        const cooldownMinutes = Number(
+            process.env.GITHUB_COOLDOWN_MINUTES ?? config.githubSync?.cooldownMinutes ?? config.agent?.githubCooldownMinutes ?? 30
+        );
         if (githubSyncEnabled && this.githubSyncManager) {
             try {
                 const syncResult = await this.githubSyncManager.pullAndApply({ force: false, trigger: 'schedule' });
                 if (syncResult && syncResult.applied) {
-                    logger.success('SCHEDULE', `已通过 GitHub 快照中转同步完成定时更新 (${syncResult.displayedCount} 条新闻)`);
+                    logger.success('SCHEDULE', `已通过 GitHub 快照中转同步完成定时更新 (${syncResult.displayedCount} 条新闻, by=${syncResult.publishedBy || 'remote'})`);
                     if (this.io) {
                         this.io.emit('news-update-completed', {
                             type: 'scheduled',
@@ -171,6 +178,16 @@ class ScheduleManager {
                         });
                     }
                     return;
+                }
+                if (syncResult && syncResult.skipped && syncResult.reason === 'already-up-to-date' && syncResult.publishedAt) {
+                    const ageMs = Date.now() - new Date(syncResult.publishedAt).getTime();
+                    if (!isNaN(ageMs) && ageMs >= -5 * 60 * 1000 && ageMs < cooldownMinutes * 60 * 1000) {
+                        logger.info(
+                            'SCHEDULE',
+                            `检测到远端 GitHub 快照在冷却窗口 (${cooldownMinutes}m) 内已最新 (${syncResult.publishedAt}, by=${syncResult.publishedBy || 'remote'})，跳过重复巡检`
+                        );
+                        return;
+                    }
                 }
             } catch (syncErr) {
                 logger.warn('SCHEDULE', `从 GitHub 快照中转拉取未命中，回退至本地巡检流水线: ${syncErr.message}`);
@@ -199,6 +216,53 @@ class ScheduleManager {
 
             const finalArticles = patrolResult.news || [];
             const summaryArticle = patrolResult.summaryArticle || null;
+
+            // 方案 2B：若当前节点启用了 GitHub 推送且具备本地 Git 仓库，将定时采集结果自动同步至 ag-snapshot 分支
+            const pushEnabled = Boolean(config.githubSync?.pushEnabled ?? config.agent?.githubPushEnabled ?? true);
+            const repoRoot = path.resolve(__dirname, '..');
+            if (finalArticles.length > 0 && pushEnabled && process.env.NODE_ENV !== 'test' && fs.existsSync(path.join(repoRoot, '.git'))) {
+                try {
+                    const publishedBy = String(
+                        process.env.CLIENT_ID ||
+                        config.githubSync?.clientId ||
+                        config.agent?.clientId ||
+                        os.hostname() ||
+                        'antigravity-client'
+                    ).trim();
+                    const allEnhancedNews = (this.stateManager && this.stateManager.get('allEnhancedNews')) || finalArticles;
+                    const nowIso = patrolResult.lastUpdated || new Date().toISOString();
+                    const ghRes = publishSnapshotToGitHub(
+                        {
+                            version: '2.0',
+                            publishedAt: nowIso,
+                            lastUpdated: nowIso,
+                            publishedBy,
+                            clientId: publishedBy,
+                            displayedCount: finalArticles.length,
+                            totalPoolCount: allEnhancedNews.length,
+                            news: finalArticles,
+                            allEnhancedNews,
+                            summary: summaryArticle,
+                            summaryArticle,
+                            sourceStats: patrolResult.sourceStats || []
+                        },
+                        {
+                            repoDir: repoRoot,
+                            branch: config.githubSync?.branch || 'ag-snapshot',
+                            remote: config.githubSync?.remote || 'origin',
+                            publishedBy,
+                            clientId: publishedBy
+                        }
+                    );
+                    if (this.stateManager) {
+                        this.stateManager.set('lastPublishedBy', publishedBy, false);
+                        await this.stateManager.saveToFile();
+                    }
+                    logger.success('SCHEDULE', `定时巡检结果已自动发布至 GitHub 快照分支 ${ghRes.branch} (commit=${ghRes.commitSha.slice(0, 8)}, by=${publishedBy})`);
+                } catch (gitErr) {
+                    logger.warn('SCHEDULE', `定时巡检结果推送至 GitHub 快照分支跳过: ${gitErr.message}`);
+                }
+            }
 
             if (this.io) {
                 this.io.emit('news-update-completed', {

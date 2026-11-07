@@ -32,7 +32,7 @@ const { app, server, io, services } = require('../server');
 const { parseArgs: parseHarvestArgs, runHarvest } = require('../scripts/ag-harvest');
 const { parseArgs: parsePublishArgs, runPublish } = require('../scripts/ag-publish');
 const { parseArgs: parseAutoArgs, runAutoUpdate } = require('../scripts/ag-auto-update');
-const { publishSnapshotToGitHub } = require('../utils/github_sync');
+const { publishSnapshotToGitHub, checkRemoteSnapshotCooldown } = require('../utils/github_sync');
 
 const DATA_DIR = config.storage.dataDir || path.join(__dirname, '..', 'data');
 const TRACKED_DATA_FILES = [
@@ -533,7 +533,8 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             '--candidates', candidatesPath,
             '--compiled', compiledPath,
             '--target', baseUrl,
-            '--secret', 'ag-test-secret-999'
+            '--secret', 'ag-test-secret-999',
+            '--no-github'
         ], {
             env: {
                 ...process.env,
@@ -866,11 +867,13 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
     });
 
     it('10. Router GitHub Snapshot Puller E2E: POST /api/agent/pull-github, GET /api/agent/sync-status, deduplication guard, force override & ScheduleManager pre-check', async () => {
-        const snapshotTimestamp = '2026-11-07T07:00:00.000Z';
+        const snapshotTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
         let mockSnapshotPayload = {
             version: '2.0',
             publishedAt: snapshotTimestamp,
             lastUpdated: snapshotTimestamp,
+            publishedBy: 'ag-client-alpha',
+            clientId: 'ag-client-alpha',
             news: [
                 {
                     id: 'gh-pull-1',
@@ -949,6 +952,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.equal(pullBody1.displayedCount, 2);
             assert.equal(pullBody1.hasSummary, true);
             assert.equal(pullBody1.publishedAt, snapshotTimestamp);
+            assert.equal(pullBody1.publishedBy, 'ag-client-alpha');
 
             // Verify router GET /api/news and GET /api/summary reflect pulled snapshot
             const resNews = await fetch(`${baseUrl}/api/news`);
@@ -1003,22 +1007,331 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             const syncStatusBody = await resSyncStatus.json();
             assert.equal(syncStatusBody.success, true);
             assert.equal(syncStatusBody.enabled, true);
+            assert.equal(syncStatusBody.intervalMinutes, 5);
             assert.equal(syncStatusBody.lastSyncStatus, 'synced');
             assert.equal(syncStatusBody.lastSyncedPublishedAt, snapshotTimestamp);
+            assert.equal(syncStatusBody.lastSyncedPublishedBy, 'ag-client-alpha');
+            assert.equal(syncStatusBody.publishedBy, 'ag-client-alpha');
 
             // 10f. Verify ScheduleManager.executeUpdate() pulls newer GitHub snapshot and skips local patrol
-            const newerTimestamp = '2026-11-07T08:00:00.000Z';
+            const newerTimestamp = new Date(Date.now() - 2 * 60 * 1000).toISOString();
             mockSnapshotPayload = {
                 ...mockSnapshotPayload,
                 publishedAt: newerTimestamp,
-                lastUpdated: newerTimestamp
+                lastUpdated: newerTimestamp,
+                publishedBy: 'cloud-client-test'
             };
-            // Set stateManager.lastUpdated to 30 minutes ago so 10-minute guard allows executeUpdate() to run
-            stateManager.set('lastUpdated', new Date(Date.now() - 30 * 60 * 1000).toISOString(), false);
+            // Set stateManager.lastUpdated to 45 minutes ago so 10-minute/30-minute guard allows executeUpdate() to run
+            stateManager.set('lastUpdated', new Date(Date.now() - 45 * 60 * 1000).toISOString(), false);
             await services.scheduleManager.executeUpdate();
             assert.equal(stateManager.get('lastUpdated'), newerTimestamp, 'ScheduleManager.executeUpdate() should apply newer GitHub snapshot');
+            assert.equal(stateManager.get('lastPublishedBy'), 'cloud-client-test');
         } finally {
             delete process.env.GITHUB_SNAPSHOT_URL;
+            await new Promise((resolve) => mockGhServer.close(() => resolve()));
+        }
+    });
+
+    it('11. Method 2B Default GitHub Push (pushToGithub=true), --no-github / GITHUB_PUSH_ENABLED=false opt-out & publishedBy / clientId metadata', async () => {
+        // 11a. Verify config defaults
+        assert.equal(config.githubSync.pushEnabled, true, 'config.githubSync.pushEnabled should default to true');
+        assert.equal(config.githubSync.intervalMinutes, 5, 'config.githubSync.intervalMinutes should default to 5');
+        assert.equal(config.githubSync.cooldownMinutes, 30, 'config.githubSync.cooldownMinutes should default to 30');
+        assert.ok(config.githubSync.clientId && config.githubSync.clientId.length > 0, 'config.githubSync.clientId should have a non-empty default');
+
+        // 11b. Verify CLI default parseArgs in ag-publish.js and ag-auto-update.js
+        const defaultPubArgs = parsePublishArgs([]);
+        assert.equal(defaultPubArgs.pushToGithub, true);
+        assert.equal(defaultPubArgs.githubSync, true);
+        assert.equal(defaultPubArgs.github, true);
+        assert.ok(defaultPubArgs.clientId.length > 0);
+
+        const defaultAutoArgs = parseAutoArgs([]);
+        assert.equal(defaultAutoArgs.pushToGithub, true);
+        assert.equal(defaultAutoArgs.githubSync, true);
+        assert.equal(defaultAutoArgs.github, true);
+        assert.equal(defaultAutoArgs.cooldownMinutes, 30);
+        assert.equal(defaultAutoArgs.force, false);
+        assert.ok(defaultAutoArgs.clientId.length > 0);
+
+        // 11c. Verify --no-github, --cooldown, --client-id, --force flags & GITHUB_PUSH_ENABLED=false opt-out
+        const optOutPubArgs = parsePublishArgs(['--no-github', '--client-id=win-pc-alan']);
+        assert.equal(optOutPubArgs.pushToGithub, false);
+        assert.equal(optOutPubArgs.githubSync, false);
+        assert.equal(optOutPubArgs.github, false);
+        assert.equal(optOutPubArgs.clientId, 'win-pc-alan');
+        assert.equal(optOutPubArgs.publishedBy, 'win-pc-alan');
+
+        const optOutAutoArgs = parseAutoArgs(['--no-github', '--cooldown=20', '--client-id=mac-alan', '--force']);
+        assert.equal(optOutAutoArgs.pushToGithub, false);
+        assert.equal(optOutAutoArgs.githubSync, false);
+        assert.equal(optOutAutoArgs.github, false);
+        assert.equal(optOutAutoArgs.cooldownMinutes, 20);
+        assert.equal(optOutAutoArgs.clientId, 'mac-alan');
+        assert.equal(optOutAutoArgs.publishedBy, 'mac-alan');
+        assert.equal(optOutAutoArgs.force, true);
+
+        process.env.GITHUB_PUSH_ENABLED = 'false';
+        try {
+            assert.equal(parsePublishArgs([]).pushToGithub, false);
+            assert.equal(parseAutoArgs([]).pushToGithub, false);
+        } finally {
+            delete process.env.GITHUB_PUSH_ENABLED;
+        }
+
+        // 11d. Verify runPublish pushes to ag-snapshot by default (without passing github: true) and embeds publishedBy / clientId
+        const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'corefeed-m2b-default-'));
+        const bareRemoteDir = path.join(tmpRoot, 'remote.git');
+        const workRepoDir = path.join(tmpRoot, 'work');
+        const candidatesPath = path.join(DATA_DIR, 'ag_candidates.json');
+        const compiledPath = path.join(DATA_DIR, 'ag_compiled.json');
+
+        try {
+            fs.mkdirSync(bareRemoteDir, { recursive: true });
+            fs.mkdirSync(workRepoDir, { recursive: true });
+            execFileSync('git', ['init', '--bare', bareRemoteDir], { stdio: 'ignore' });
+            execFileSync('git', ['init', workRepoDir], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'config', 'user.name', 'Test User'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'remote', 'add', 'origin', bareRemoteDir], { stdio: 'ignore' });
+            fs.writeFileSync(path.join(workRepoDir, 'README.md'), '# Test\n', 'utf8');
+            execFileSync('git', ['-C', workRepoDir, 'add', 'README.md'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'commit', '-m', 'init'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'branch', '-M', 'main'], { stdio: 'ignore' });
+
+            // Write 2 compiled items so candidates + compiled merge cleanly
+            const nowIso = new Date().toISOString();
+            fs.writeFileSync(compiledPath, JSON.stringify({
+                publishedAt: nowIso,
+                articles: [
+                    {
+                        index: 1,
+                        id: 'cand-1',
+                        translatedTitle: '多客户端默认推送测试标题一',
+                        summary: '验证默认开启 Method 2B 自动推送到 GitHub ag-snapshot 分支并记录客户端标识。',
+                        region: '国际',
+                        category: '科技',
+                        keyPoints: ['默认推送ag-snapshot']
+                    },
+                    {
+                        index: 2,
+                        id: 'cand-2',
+                        translatedTitle: '多客户端默认推送测试标题二',
+                        summary: '验证多客户端协同元数据与文章数量统计。',
+                        region: '亚洲',
+                        category: '财经',
+                        keyPoints: ['记录publishedBy元数据']
+                    }
+                ],
+                summaryMarkdown: '### 全球科技与经贸\n多客户端默认推送测试综述 [NEWS_1] [NEWS_2]。'
+            }, null, 2), 'utf8');
+
+            const pubDefaultRes = await runPublish({
+                candidates: candidatesPath,
+                compiled: compiledPath,
+                repoDir: workRepoDir,
+                localOnly: true,
+                clientId: 'test-client-m2b'
+            });
+            assert.equal(pubDefaultRes.success, true);
+            assert.equal(pubDefaultRes.publishedBy, 'test-client-m2b');
+            assert.equal(pubDefaultRes.clientId, 'test-client-m2b');
+            assert.ok(pubDefaultRes.githubSync, 'runPublish should push to GitHub by default when repoDir is provided');
+            assert.equal(pubDefaultRes.githubSync.pushed, true);
+            assert.equal(pubDefaultRes.githubSync.publishedBy, 'test-client-m2b');
+
+            const remoteJsonRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:latest.json'], { encoding: 'utf8' });
+            const remoteSnap = JSON.parse(remoteJsonRaw);
+            assert.equal(remoteSnap.publishedBy, 'test-client-m2b');
+            assert.equal(remoteSnap.clientId, 'test-client-m2b');
+            assert.ok(remoteSnap.articleCount >= 2);
+            assert.ok(remoteSnap.sourceCount >= 1);
+
+            // Verify explicit pushToGithub: false skips GitHub push
+            const pubDisabledRes = await runPublish({
+                candidates: candidatesPath,
+                compiled: compiledPath,
+                repoDir: workRepoDir,
+                localOnly: true,
+                pushToGithub: false
+            });
+            assert.equal(pubDisabledRes.success, true);
+            assert.equal(pubDisabledRes.githubSync, null);
+        } finally {
+            fs.rmSync(tmpRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('12. Multi-Client Cooldown Coordination (skip harvest & auto-pull when fresh, proceed on --force or expired cooldown) & ETag If-None-Match 304 polling', async () => {
+        const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'corefeed-m2b-cooldown-'));
+        const bareRemoteDir = path.join(tmpRoot, 'remote.git');
+        const workRepoDir = path.join(tmpRoot, 'work');
+        const tmpCompiledPath = path.join(tmpRoot, 'cooldown_compiled.json');
+        const candidatesPath = path.join(DATA_DIR, 'ag_candidates.json');
+        const compiledPath = path.join(DATA_DIR, 'ag_compiled.json');
+
+        let currentEtag = '"snap-etag-v1"';
+        const ifNoneMatchHeaders = [];
+        let mockRemoteSnapshot = {
+            version: '2.0',
+            publishedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(), // 5 mins ago (within 30m cooldown)
+            lastUpdated: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+            publishedBy: 'peer-client-windows',
+            clientId: 'peer-client-windows',
+            news: [
+                {
+                    id: 'cooldown-news-1',
+                    title: 'Peer Client Windows Published Fresh Global Brief',
+                    translatedTitle: '其他客户端五分钟前刚发布的全球要闻：跨国清洁能源走廊投运',
+                    summary: '由于其他客户端在30分钟冷却窗口内刚完成采集与精编发布，当前客户端直接拉取复用该快照而无需重复采集。',
+                    url: 'https://www.reuters.com/world/cooldown-test-2026',
+                    region: '国际',
+                    category: '能源',
+                    keyPoints: ['30分钟冷却窗口防冲突', '自动拉取远端快照同步本地'],
+                    source: { id: 'reuters', name: 'Reuters (路透社)' }
+                }
+            ],
+            summary: {
+                title: '2026年全球要闻深度综述（多客户端协同复用）',
+                content: '### 多客户端协同\n跨国清洁能源走廊正式投运 [NEWS_1]。'
+            },
+            sourceStats: [{ id: 'reuters', name: 'Reuters', count: 1, status: 'ok' }]
+        };
+
+        const mockGhServer = http.createServer((req, res) => {
+            if (req.url && req.url.startsWith('/alanhsun/CoreFeed/ag-snapshot/latest.json')) {
+                const inm = req.headers['if-none-match'];
+                if (inm) {
+                    ifNoneMatchHeaders.push(inm);
+                }
+                if (inm && inm === currentEtag) {
+                    res.writeHead(304, { ETag: currentEtag });
+                    res.end();
+                    return;
+                }
+                res.writeHead(200, {
+                    'Content-Type': 'application/json',
+                    'ETag': currentEtag
+                });
+                res.end(JSON.stringify(mockRemoteSnapshot));
+                return;
+            }
+            res.writeHead(404);
+            res.end('Not Found');
+        });
+
+        await new Promise((resolve, reject) => {
+            mockGhServer.listen(0, '127.0.0.1', (err) => (err ? reject(err) : resolve()));
+        });
+        const ghPort = mockGhServer.address().port;
+        const mockSnapshotUrl = `http://127.0.0.1:${ghPort}/alanhsun/CoreFeed/ag-snapshot/latest.json`;
+
+        try {
+            fs.mkdirSync(bareRemoteDir, { recursive: true });
+            fs.mkdirSync(workRepoDir, { recursive: true });
+            execFileSync('git', ['init', '--bare', bareRemoteDir], { stdio: 'ignore' });
+            execFileSync('git', ['init', workRepoDir], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'config', 'user.name', 'Test User'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'remote', 'add', 'origin', bareRemoteDir], { stdio: 'ignore' });
+            fs.writeFileSync(path.join(workRepoDir, 'README.md'), '# Test\n', 'utf8');
+            execFileSync('git', ['-C', workRepoDir, 'add', 'README.md'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'commit', '-m', 'init'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'branch', '-M', 'main'], { stdio: 'ignore' });
+
+            process.env.PUBLISH_SECRET = 'router-sync-sec-123';
+
+            // 12a. Fresh remote snapshot (5m old < 30m cooldown) -> skips harvest/compile and pulls remote snapshot to local & target server
+            const cooldownSyncRes = await runAutoUpdate({
+                snapshotUrl: mockSnapshotUrl,
+                target: baseUrl,
+                secret: 'router-sync-sec-123',
+                cooldownMinutes: 30,
+                compiled: tmpCompiledPath,
+                skipHarvest: false
+            });
+            assert.equal(cooldownSyncRes.success, true);
+            assert.equal(cooldownSyncRes.mode, 'cooldown-remote-sync');
+            assert.equal(cooldownSyncRes.skippedHarvest, true);
+            assert.equal(cooldownSyncRes.cooldownTriggered, true);
+            assert.equal(cooldownSyncRes.publishedBy, 'peer-client-windows');
+            assert.equal(cooldownSyncRes.displayedCount, 1);
+            assert.equal(cooldownSyncRes.healthVerified, true);
+            assert.ok(fs.existsSync(tmpCompiledPath), 'Remote snapshot should be saved to compiled path');
+
+            const resNewsAfterCooldown = await fetch(`${baseUrl}/api/news`);
+            const newsAfterCooldown = await resNewsAfterCooldown.json();
+            assert.equal(newsAfterCooldown.news.length, 1);
+            assert.equal(newsAfterCooldown.news[0].translatedTitle, '其他客户端五分钟前刚发布的全球要闻：跨国清洁能源走廊投运');
+            assert.equal(stateManager.get('lastPublishedBy'), 'peer-client-windows');
+
+            // 12b. --force bypasses the 30m cooldown and publishes with override-client metadata
+            const forceRes = await runAutoUpdate({
+                snapshotUrl: mockSnapshotUrl,
+                candidates: candidatesPath,
+                compiled: compiledPath,
+                skipHarvest: true,
+                useExistingCompiled: true,
+                force: true,
+                clientId: 'override-client',
+                repoDir: workRepoDir,
+                localOnly: true
+            });
+            assert.equal(forceRes.success, true);
+            assert.equal(forceRes.mode, 'existing-compiled');
+            assert.equal(forceRes.cooldownTriggered, false);
+            assert.equal(forceRes.publishedBy, 'override-client');
+            assert.ok(forceRes.githubSync?.pushed);
+
+            const forcedRemoteRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:latest.json'], { encoding: 'utf8' });
+            const forcedRemoteSnap = JSON.parse(forcedRemoteRaw);
+            assert.equal(forcedRemoteSnap.publishedBy, 'override-client');
+
+            // 12c. Expired remote snapshot (45m old > 30m cooldown) returns inCooldown === false
+            mockRemoteSnapshot = {
+                ...mockRemoteSnapshot,
+                publishedAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+                lastUpdated: new Date(Date.now() - 45 * 60 * 1000).toISOString()
+            };
+            const expiredCheck = await checkRemoteSnapshotCooldown({
+                snapshotUrl: mockSnapshotUrl,
+                cooldownMinutes: 30
+            });
+            assert.equal(expiredCheck.inCooldown, false);
+            assert.equal(expiredCheck.reason, 'cooldown-expired');
+            assert.ok(expiredCheck.ageMinutes >= 44);
+
+            // 12d. ETag If-None-Match -> 304 Not Modified fast polling in GitHubSyncManager
+            currentEtag = '"snap-etag-v2"';
+            const freshEtagTs = new Date(Date.now() - 1 * 60 * 1000).toISOString();
+            mockRemoteSnapshot = {
+                ...mockRemoteSnapshot,
+                publishedAt: freshEtagTs,
+                lastUpdated: freshEtagTs,
+                publishedBy: 'etag-publisher-client'
+            };
+
+            const firstPull = await services.githubSyncManager.pullAndApply({
+                snapshotUrl: mockSnapshotUrl,
+                force: true
+            });
+            assert.equal(firstPull.applied, true);
+            assert.equal(firstPull.etag, '"snap-etag-v2"');
+            assert.equal(firstPull.publishedBy, 'etag-publisher-client');
+
+            ifNoneMatchHeaders.length = 0;
+            const secondPull304 = await services.githubSyncManager.pullAndApply({
+                snapshotUrl: mockSnapshotUrl,
+                force: false
+            });
+            assert.ok(ifNoneMatchHeaders.includes('"snap-etag-v2"'), 'Second poll must send If-None-Match header');
+            assert.equal(secondPull304.success, true);
+            assert.equal(secondPull304.applied, false);
+            assert.equal(secondPull304.skipped, true);
+            assert.equal(secondPull304.notModified, true);
+            assert.equal(secondPull304.reason, 'already-up-to-date');
+        } finally {
+            fs.rmSync(tmpRoot, { recursive: true, force: true });
             await new Promise((resolve) => mockGhServer.close(() => resolve()));
         }
     });

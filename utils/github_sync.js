@@ -12,6 +12,7 @@
  *      并通过 Socket.IO 实时向全站前端广播。
  */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const https = require('https');
 const axios = require('axios');
@@ -56,15 +57,36 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
     const skipPush = Boolean(options.skipPush);
 
     const publishedAt = snapshotPayload.publishedAt || snapshotPayload.lastUpdated || new Date().toISOString();
+    const publishedBy = String(
+        options.publishedBy ||
+        options.clientId ||
+        snapshotPayload.publishedBy ||
+        snapshotPayload.clientId ||
+        process.env.CLIENT_ID ||
+        process.env.AG_CLIENT_ID ||
+        config.githubSync?.clientId ||
+        config.agent?.clientId ||
+        os.hostname() ||
+        'antigravity-client'
+    ).trim();
+    const resolvedClientId = String(options.clientId || snapshotPayload.clientId || publishedBy).trim();
+    const sourceStats = Array.isArray(snapshotPayload.sourceStats) ? snapshotPayload.sourceStats : [];
+
     const normalizedPayload = {
         version: '2.0',
         publishedAt,
         lastUpdated: snapshotPayload.lastUpdated || publishedAt,
+        publishedBy,
+        clientId: resolvedClientId,
+        sourceCount: Number(snapshotPayload.sourceCount) || sourceStats.length,
+        articleCount: Number(snapshotPayload.articleCount) || newsList.length,
         displayedCount: newsList.length,
         totalPoolCount: Array.isArray(snapshotPayload.allEnhancedNews)
             ? snapshotPayload.allEnhancedNews.length
             : newsList.length,
-        ...snapshotPayload
+        ...snapshotPayload,
+        publishedBy,
+        clientId: resolvedClientId
     };
 
     const jsonContent = JSON.stringify(normalizedPayload, null, 2) + '\n';
@@ -101,7 +123,7 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
     const treeSha = runGit(['mktree'], treeEntry);
 
     // 3. 创建无父节点的孤儿 Commit 对象，保持快照分支永远只有 1 个最新提交
-    const commitMessage = `chore(snapshot): publish CoreFeed compiled snapshot (${publishedAt})`;
+    const commitMessage = `chore(snapshot): publish CoreFeed compiled snapshot (${publishedAt} by ${publishedBy})`;
     const commitSha = runGit(['commit-tree', treeSha, '-m', commitMessage]);
 
     // 4. 更新本地引用 refs/heads/<branch>
@@ -122,6 +144,8 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
         commitSha,
         pushed: !skipPush,
         publishedAt,
+        publishedBy,
+        clientId: resolvedClientId,
         rawUrl: config.githubSync?.snapshotUrl || config.agent?.githubSnapshotUrl
     };
 }
@@ -148,6 +172,7 @@ async function applySnapshotToRouter(
     const summaryMarkdown = snapshot.summaryMarkdown || null;
     const sourceStats = snapshot.sourceStats || [];
     const rawTimestamp = snapshot.publishedAt || snapshot.lastUpdated || null;
+    const publishedBy = String(snapshot.publishedBy || snapshot.clientId || '').trim() || null;
 
     const parsedDate = rawTimestamp ? new Date(rawTimestamp) : new Date();
     const timestamp = isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
@@ -232,6 +257,9 @@ async function applySnapshotToRouter(
 
     if (stateManager) {
         stateManager.set('lastUpdated', nowIso, false);
+        if (publishedBy) {
+            stateManager.set('lastPublishedBy', publishedBy, false);
+        }
     }
 
     // 2. 处理并持久化今日深度综述 (支持完整对象、仅含 content 的对象或 Markdown 字符串)
@@ -319,8 +347,78 @@ async function applySnapshotToRouter(
         totalPoolCount: normalizedFullPool.length,
         hasSummary: Boolean(finalSummary),
         publishedAt: nowIso,
-        lastUpdated: nowIso
+        lastUpdated: nowIso,
+        publishedBy
     };
+}
+
+/**
+ * 多客户端协同冷却检查：检查远端 GitHub ag-snapshot/latest.json 的 publishedAt 是否在冷却窗口内 (默认 30 分钟)
+ * 若在冷却窗口内，返回远端快照与发布客户端标识，供当前客户端直接拉取同步而不必重复采集。
+ */
+async function checkRemoteSnapshotCooldown(options = {}) {
+    const rawCooldown = options.cooldownMinutes !== undefined
+        ? Number(options.cooldownMinutes)
+        : Number(process.env.GITHUB_COOLDOWN_MINUTES ?? config.githubSync?.cooldownMinutes ?? config.agent?.githubCooldownMinutes ?? 30);
+    const cooldownMinutes = Number.isFinite(rawCooldown) ? Math.max(0, rawCooldown) : 30;
+    const nowMs = Number(options.nowMs) || Date.now();
+
+    if (cooldownMinutes <= 0) {
+        return {
+            inCooldown: false,
+            reachable: false,
+            reason: 'cooldown-disabled',
+            cooldownMinutes
+        };
+    }
+
+    const manager = options.syncManager || new GitHubSyncManager();
+    try {
+        const { data, sourceUrl } = await manager.fetchRemoteSnapshot(options.snapshotUrl || null, { useEtag: false });
+        const newsList = Array.isArray(data?.news)
+            ? data.news
+            : (Array.isArray(data?.articles) ? data.articles : []);
+        const remotePublishedAt = data?.publishedAt || data?.lastUpdated || null;
+        const publishedMs = remotePublishedAt ? new Date(remotePublishedAt).getTime() : NaN;
+
+        if (!Array.isArray(newsList) || newsList.length === 0 || isNaN(publishedMs) || publishedMs <= 0) {
+            return {
+                inCooldown: false,
+                reachable: true,
+                reason: 'invalid-or-empty-snapshot',
+                cooldownMinutes,
+                sourceUrl
+            };
+        }
+
+        const ageMs = nowMs - publishedMs;
+        const cooldownMs = cooldownMinutes * 60 * 1000;
+        const inCooldown = ageMs < cooldownMs;
+        const ageMinutes = Number((Math.max(0, ageMs) / 60000).toFixed(2));
+        const publishedBy = String(data.publishedBy || data.clientId || 'unknown').trim();
+
+        return {
+            inCooldown,
+            reachable: true,
+            reason: inCooldown ? 'within-cooldown-window' : 'cooldown-expired',
+            cooldownMinutes,
+            ageMinutes,
+            publishedAt: new Date(publishedMs).toISOString(),
+            publishedBy,
+            clientId: String(data.clientId || publishedBy).trim(),
+            displayedCount: newsList.length,
+            sourceUrl,
+            snapshot: data
+        };
+    } catch (err) {
+        return {
+            inCooldown: false,
+            reachable: false,
+            reason: 'remote-unreachable',
+            error: err.message,
+            cooldownMinutes
+        };
+    }
 }
 
 /**
@@ -335,9 +433,12 @@ class GitHubSyncManager {
         this.lastSyncCheckAt = null;
         this.lastSyncedAt = null;
         this.lastSyncedPublishedAt = null;
+        this.lastSyncedPublishedBy = null;
         this.lastSyncStatus = 'idle';
         this.lastSyncError = null;
         this.lastSyncSourceUrl = null;
+        this.lastEtag = null;
+        this.etagCache = new Map();
     }
 
     buildCandidateEndpoints(primaryUrl) {
@@ -364,7 +465,7 @@ class GitHubSyncManager {
         return endpoints;
     }
 
-    async fetchRemoteSnapshot(customSnapshotUrl = null) {
+    async fetchRemoteSnapshot(customSnapshotUrl = null, options = {}) {
         const targetUrl = String(
             customSnapshotUrl ||
             process.env.GITHUB_SNAPSHOT_URL ||
@@ -379,24 +480,42 @@ class GitHubSyncManager {
             throw err;
         }
 
+        const useEtag = options.useEtag !== false && !options.force;
         const candidates = this.buildCandidateEndpoints(targetUrl);
         let lastError = null;
 
         for (const candidate of candidates) {
             const sep = candidate.url.includes('?') ? '&' : '?';
             const requestUrl = `${candidate.url}${sep}_t=${Date.now()}`;
+            const cachedEntry = useEtag ? this.etagCache.get(candidate.url) : null;
+            const reqHeaders = {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'User-Agent': 'CoreFeed-Router-Sync/2.0',
+                ...candidate.headers
+            };
+            if (cachedEntry && cachedEntry.etag) {
+                reqHeaders['If-None-Match'] = cachedEntry.etag;
+            }
+
             try {
                 const response = await axios.get(requestUrl, {
                     timeout: 15000,
                     httpsAgent: syncHttpsAgent,
                     responseType: 'json',
-                    headers: {
-                        'Cache-Control': 'no-cache, no-store, must-revalidate',
-                        'Pragma': 'no-cache',
-                        'User-Agent': 'CoreFeed-Router-Sync/2.0',
-                        ...candidate.headers
-                    }
+                    validateStatus: (status) => (status >= 200 && status < 300) || status === 304,
+                    headers: reqHeaders
                 });
+
+                if (response.status === 304 && cachedEntry && cachedEntry.data) {
+                    this.lastEtag = cachedEntry.etag;
+                    return {
+                        data: cachedEntry.data,
+                        sourceUrl: candidate.url,
+                        notModified: true,
+                        etag: cachedEntry.etag
+                    };
+                }
 
                 let parsed = response.data;
                 if (typeof parsed === 'string') {
@@ -409,9 +528,22 @@ class GitHubSyncManager {
                     throw schemaErr;
                 }
 
+                const responseEtag = String(response.headers?.etag || response.headers?.ETag || '').trim() || null;
+                if (responseEtag) {
+                    this.lastEtag = responseEtag;
+                    this.etagCache.set(candidate.url, {
+                        etag: responseEtag,
+                        data: parsed,
+                        publishedAt: parsed.publishedAt || parsed.lastUpdated || null,
+                        publishedBy: parsed.publishedBy || parsed.clientId || null
+                    });
+                }
+
                 return {
                     data: parsed,
-                    sourceUrl: candidate.url
+                    sourceUrl: candidate.url,
+                    notModified: false,
+                    etag: responseEtag
                 };
             } catch (err) {
                 lastError = err;
@@ -424,6 +556,17 @@ class GitHubSyncManager {
         const finalErr = new Error(lastError?.message || `无法从 ${targetUrl} 拉取快照`);
         finalErr.statusCode = lastError?.statusCode || 502;
         throw finalErr;
+    }
+
+    async checkRemoteCooldown(options = {}) {
+        return checkRemoteSnapshotCooldown({
+            ...options,
+            syncManager: this
+        });
+    }
+
+    async syncFromGitHub(options = {}) {
+        return this.pullAndApply(options);
     }
 
     async pullAndApply(options = {}) {
@@ -448,7 +591,10 @@ class GitHubSyncManager {
         this.lastSyncCheckAt = new Date().toISOString();
 
         try {
-            const { data, sourceUrl } = await this.fetchRemoteSnapshot(snapshotUrl);
+            const { data, sourceUrl, notModified, etag } = await this.fetchRemoteSnapshot(snapshotUrl, {
+                useEtag: !force,
+                force
+            });
             const newsList = Array.isArray(data?.news)
                 ? data.news
                 : (Array.isArray(data?.articles) ? data.articles : null);
@@ -460,6 +606,7 @@ class GitHubSyncManager {
             }
 
             const remotePublishedAt = data.publishedAt || data.lastUpdated || null;
+            const remotePublishedBy = String(data.publishedBy || data.clientId || '').trim() || null;
             const remoteMs = remotePublishedAt ? new Date(remotePublishedAt).getTime() : 0;
             const currentNews = this.stateManager ? (this.stateManager.get('newsData') || []) : [];
             const stateLastUpdated = this.stateManager ? this.stateManager.get('lastUpdated') : null;
@@ -473,23 +620,30 @@ class GitHubSyncManager {
             if (
                 !force &&
                 currentNews.length > 0 &&
-                remoteMs > 0 &&
-                !isNaN(remoteMs) &&
-                !isNaN(lastKnownTime) &&
-                remoteMs <= lastKnownTime
+                (notModified ||
+                    (remoteMs > 0 &&
+                        !isNaN(remoteMs) &&
+                        !isNaN(lastKnownTime) &&
+                        remoteMs <= lastKnownTime))
             ) {
                 this.lastSyncStatus = 'up-to-date';
                 this.lastSyncError = null;
                 this.lastSyncSourceUrl = sourceUrl;
+                if (remotePublishedBy) {
+                    this.lastSyncedPublishedBy = remotePublishedBy;
+                }
                 return {
                     success: true,
                     updated: false,
                     applied: false,
                     skipped: true,
                     reason: 'already-up-to-date',
+                    notModified: Boolean(notModified),
+                    etag: etag || this.lastEtag,
                     trigger,
                     snapshotUrl: sourceUrl,
                     publishedAt: remotePublishedAt,
+                    publishedBy: remotePublishedBy || this.lastSyncedPublishedBy,
                     lastUpdated: stateLastUpdated || remotePublishedAt,
                     displayedCount: currentNews.length
                 };
@@ -506,6 +660,7 @@ class GitHubSyncManager {
 
             this.lastSyncedAt = new Date().toISOString();
             this.lastSyncedPublishedAt = remotePublishedAt || applied.lastUpdated;
+            this.lastSyncedPublishedBy = remotePublishedBy || applied.publishedBy || null;
             this.lastSyncStatus = 'synced';
             this.lastSyncError = null;
             this.lastSyncSourceUrl = sourceUrl;
@@ -515,9 +670,12 @@ class GitHubSyncManager {
                 updated: true,
                 applied: true,
                 skipped: false,
+                notModified: false,
+                etag: etag || this.lastEtag,
                 trigger,
                 snapshotUrl: sourceUrl,
-                ...applied
+                ...applied,
+                publishedBy: this.lastSyncedPublishedBy
             };
         } catch (err) {
             this.lastSyncStatus = 'error';
@@ -529,8 +687,11 @@ class GitHubSyncManager {
     }
 
     getStatus() {
+        const statePublishedBy = this.stateManager ? this.stateManager.get('lastPublishedBy') : null;
+        const publishedBy = statePublishedBy || this.lastSyncedPublishedBy || null;
         return {
             enabled: Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true),
+            pushEnabled: Boolean(config.githubSync?.pushEnabled ?? config.agent?.githubPushEnabled ?? true),
             snapshotUrl:
                 process.env.GITHUB_SNAPSHOT_URL ||
                 config.githubSync?.snapshotUrl ||
@@ -542,12 +703,18 @@ class GitHubSyncManager {
                 config.agent?.githubBranch ||
                 'ag-snapshot',
             intervalMinutes: Number(
-                config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 15
+                config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 5
+            ),
+            cooldownMinutes: Number(
+                config.githubSync?.cooldownMinutes ?? config.agent?.githubCooldownMinutes ?? 30
             ),
             isSyncing: this.isSyncing,
             lastSyncCheckAt: this.lastSyncCheckAt,
             lastSyncedAt: this.lastSyncedAt,
             lastSyncedPublishedAt: this.lastSyncedPublishedAt,
+            lastSyncedPublishedBy: publishedBy,
+            publishedBy,
+            lastEtag: this.lastEtag,
             lastSyncStatus: this.lastSyncStatus,
             lastSyncError: this.lastSyncError,
             lastSyncSourceUrl: this.lastSyncSourceUrl
@@ -558,5 +725,6 @@ class GitHubSyncManager {
 module.exports = {
     publishSnapshotToGitHub,
     applySnapshotToRouter,
+    checkRemoteSnapshotCooldown,
     GitHubSyncManager
 };

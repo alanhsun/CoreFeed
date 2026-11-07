@@ -121,6 +121,7 @@ sync_settings_json() {
       SCHEDULE_TIMEZONE: "Asia/Shanghai",
       timezone: "Asia/Shanghai",
       GITHUB_SYNC_ENABLED: current.GITHUB_SYNC_ENABLED !== undefined ? current.GITHUB_SYNC_ENABLED : true,
+      GITHUB_SYNC_INTERVAL_MINUTES: current.GITHUB_SYNC_INTERVAL_MINUTES && Number(current.GITHUB_SYNC_INTERVAL_MINUTES) !== 15 ? Number(current.GITHUB_SYNC_INTERVAL_MINUTES) : 5,
       GITHUB_SNAPSHOT_URL: current.GITHUB_SNAPSHOT_URL || "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json",
       updatedAt: new Date().toISOString()
     };
@@ -130,7 +131,7 @@ sync_settings_json() {
     SETTINGS_FILE="$_settings_file" node -e "$_node_script" "$_settings_file" 2>/dev/null || true
   elif command -v jq >/dev/null 2>&1; then
     [ -f "$_settings_file" ] || printf '{}\n' > "$_settings_file"
-    jq '.AUTO_UPDATE_ENABLED=true | .enabled=true | .scheduleEnabled=true | .UPDATE_TIMES="08:00,12:30,19:30" | .updateTimes="08:00,12:30,19:30" | .scheduleTimes=["08:00","12:30","19:30"] | .SCHEDULE_TIMEZONE="Asia/Shanghai" | .timezone="Asia/Shanghai" | .GITHUB_SYNC_ENABLED=(if .GITHUB_SYNC_ENABLED == null then true else .GITHUB_SYNC_ENABLED end) | .GITHUB_SNAPSHOT_URL=(.GITHUB_SNAPSHOT_URL // "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json")' "$_settings_file" > "${_settings_file}.tmp" 2>/dev/null && mv "${_settings_file}.tmp" "$_settings_file" || rm -f "${_settings_file}.tmp"
+    jq '.AUTO_UPDATE_ENABLED=true | .enabled=true | .scheduleEnabled=true | .UPDATE_TIMES="08:00,12:30,19:30" | .updateTimes="08:00,12:30,19:30" | .scheduleTimes=["08:00","12:30","19:30"] | .SCHEDULE_TIMEZONE="Asia/Shanghai" | .timezone="Asia/Shanghai" | .GITHUB_SYNC_ENABLED=(if .GITHUB_SYNC_ENABLED == null then true else .GITHUB_SYNC_ENABLED end) | .GITHUB_SYNC_INTERVAL_MINUTES=(if .GITHUB_SYNC_INTERVAL_MINUTES == null or .GITHUB_SYNC_INTERVAL_MINUTES == 15 then 5 else .GITHUB_SYNC_INTERVAL_MINUTES end) | .GITHUB_SNAPSHOT_URL=(.GITHUB_SNAPSHOT_URL // "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json")' "$_settings_file" > "${_settings_file}.tmp" 2>/dev/null && mv "${_settings_file}.tmp" "$_settings_file" || rm -f "${_settings_file}.tmp"
   elif command -v docker >/dev/null 2>&1 && docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
     docker run --rm -v "${REMOTE_DIR}/data:/app/data" "${IMAGE_NAME}" node -e "$_node_script" "/app/data/settings.json" >/dev/null 2>&1 || true
   elif [ ! -f "$_settings_file" ]; then
@@ -149,6 +150,7 @@ sync_settings_json() {
   "SCHEDULE_TIMEZONE": "Asia/Shanghai",
   "timezone": "Asia/Shanghai",
   "GITHUB_SYNC_ENABLED": true,
+  "GITHUB_SYNC_INTERVAL_MINUTES": 5,
   "GITHUB_SNAPSHOT_URL": "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json"
 }
 EOF
@@ -260,6 +262,10 @@ upsert_env_var "SCHEDULE_TIMEZONE" "Asia/Shanghai" ".env"
 
 if is_empty_env_val "$(get_env_var_from_file "GITHUB_SYNC_ENABLED" ".env")"; then
   upsert_env_var "GITHUB_SYNC_ENABLED" "true" ".env"
+fi
+CURRENT_SYNC_INTERVAL=$(get_env_var_from_file "GITHUB_SYNC_INTERVAL_MINUTES" ".env")
+if is_empty_env_val "$CURRENT_SYNC_INTERVAL" || [ "$CURRENT_SYNC_INTERVAL" = "15" ]; then
+  upsert_env_var "GITHUB_SYNC_INTERVAL_MINUTES" "5" ".env"
 fi
 if is_empty_env_val "$(get_env_var_from_file "GITHUB_SNAPSHOT_URL" ".env")"; then
   upsert_env_var "GITHUB_SNAPSHOT_URL" "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json" ".env"

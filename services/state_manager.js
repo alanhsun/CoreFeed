@@ -16,6 +16,7 @@ class StateManager extends EventEmitter {
             summaryArticle: null,
             sourceStats: [],
             lastUpdated: null,
+            lastPublishedBy: null,
             isUpdating: false,
             collectionPhase: 'idle', // idle | collecting | collected | compiling | completed
             updateProgress: {
@@ -183,6 +184,7 @@ class StateManager extends EventEmitter {
                 summaryArticle: null,
                 sourceStats: [],
                 lastUpdated: null,
+                lastPublishedBy: null,
                 isUpdating: false,
                 collectionPhase: 'idle',
                 updateProgress: {
@@ -275,6 +277,7 @@ class StateManager extends EventEmitter {
             allEnhancedCount: this.state.allEnhancedNews?.length || 0,
             hasSummary: !!this.state.summaryArticle,
             lastUpdated: this.state.lastUpdated,
+            lastPublishedBy: this.state.lastPublishedBy || null,
             isUpdating: this.state.isUpdating,
             collectionPhase: this.state.collectionPhase,
             progress: this.state.updateProgress

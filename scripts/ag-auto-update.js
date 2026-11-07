@@ -9,11 +9,13 @@
  *   - Stage 3 (Publish) : 调用 `ag-publish.js` 将编译产物推送至 `POST /api/agent/publish` 落盘并触发全站 WebSocket 广播；
  *   - Stage 4 (Verify)  : 校验目标站点 `/api/health` 与 `/api/news` 在线健康状态，确保闭环更新成功。
  */
+const os = require('os');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('dotenv').config();
 const axios = require('axios');
 const https = require('https');
+const cron = require('node-cron');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { readJsonFile, writeJsonFile } = require('../utils/helpers');
@@ -21,13 +23,43 @@ const AIService = require('../services/ai_service');
 const stateManager = require('../services/state_manager');
 const { runHarvest } = require('./ag-harvest');
 const { runPublish } = require('./ag-publish');
+const { checkRemoteSnapshotCooldown } = require('../utils/github_sync');
 
 const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: false });
+
+function resolveDefaultPushToGithub() {
+    if (process.env.GITHUB_PUSH_ENABLED !== undefined && process.env.GITHUB_PUSH_ENABLED !== '') {
+        const val = String(process.env.GITHUB_PUSH_ENABLED).toLowerCase().trim();
+        return val !== 'false' && val !== '0' && val !== 'no';
+    }
+    if (process.env.AG_GITHUB_SYNC !== undefined && process.env.AG_GITHUB_SYNC !== '') {
+        const val = String(process.env.AG_GITHUB_SYNC).toLowerCase().trim();
+        return val !== 'false' && val !== '0' && val !== 'no';
+    }
+    return Boolean(config.githubSync?.pushEnabled ?? config.agent?.githubPushEnabled ?? true);
+}
+
+function resolveDefaultCooldownMinutes() {
+    if (process.env.GITHUB_COOLDOWN_MINUTES !== undefined && process.env.GITHUB_COOLDOWN_MINUTES !== '') {
+        const parsed = Number(process.env.GITHUB_COOLDOWN_MINUTES);
+        if (Number.isFinite(parsed)) return Math.max(0, parsed);
+    }
+    const cfgVal = Number(config.githubSync?.cooldownMinutes ?? config.agent?.githubCooldownMinutes ?? 30);
+    return Number.isFinite(cfgVal) ? Math.max(0, cfgVal) : 30;
+}
 
 function parseArgs(argv = process.argv.slice(2)) {
     const eqVal = (a) => a.slice(a.indexOf('=') + 1);
     const defaultPort = config.server?.port || 3120;
-    const defaultGithubSync = String(process.env.AG_GITHUB_SYNC || '').toLowerCase() === 'true';
+    const defaultGithubSync = resolveDefaultPushToGithub();
+    const defaultClientId = String(
+        process.env.CLIENT_ID ||
+        process.env.AG_CLIENT_ID ||
+        config.githubSync?.clientId ||
+        config.agent?.clientId ||
+        os.hostname() ||
+        'antigravity-client'
+    ).trim();
     const options = {
         candidates: process.env.AG_CANDIDATES_FILE || path.join(config.storage.dataDir, 'ag_candidates.json'),
         compiled: process.env.AG_COMPILED_FILE || path.join(config.storage.dataDir, 'ag_compiled.json'),
@@ -41,11 +73,19 @@ function parseArgs(argv = process.argv.slice(2)) {
         useExistingCompiled: false,
         fallbackCompile: false,
         localOnly: false,
+        pushToGithub: defaultGithubSync,
         githubSync: defaultGithubSync,
         github: defaultGithubSync,
+        githubExplicit: false,
         githubBranch: process.env.AG_GITHUB_BRANCH || config.githubSync?.branch || 'ag-snapshot',
         githubRemote: process.env.AG_GITHUB_REMOTE || config.githubSync?.remote || 'origin',
+        cooldownMinutes: resolveDefaultCooldownMinutes(),
+        force: false,
+        clientId: defaultClientId,
+        publishedBy: defaultClientId,
+        snapshotUrl: process.env.GITHUB_SNAPSHOT_URL || config.githubSync?.snapshotUrl || null,
         snapshotOut: process.env.AG_SNAPSHOT_OUT || null,
+        daemon: false,
         targetExplicit: Boolean(process.env.COREFEED_SITE_URL)
     };
 
@@ -94,8 +134,15 @@ function parseArgs(argv = process.argv.slice(2)) {
         } else if (arg === '--local-only' || arg === '--no-push') {
             options.localOnly = true;
         } else if (arg === '--github' || arg === '--github-sync') {
+            options.pushToGithub = true;
             options.githubSync = true;
             options.github = true;
+            options.githubExplicit = true;
+        } else if (arg === '--no-github' || arg === '--no-github-sync') {
+            options.pushToGithub = false;
+            options.githubSync = false;
+            options.github = false;
+            options.githubExplicit = true;
         } else if (arg === '--github-branch' && argv[i + 1]) {
             options.githubBranch = argv[++i];
         } else if (arg.startsWith('--github-branch=')) {
@@ -104,10 +151,40 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.githubRemote = argv[++i];
         } else if (arg.startsWith('--github-remote=')) {
             options.githubRemote = eqVal(arg);
+        } else if (arg === '--cooldown' && argv[i + 1] !== undefined) {
+            const parsed = Number(argv[++i]);
+            if (Number.isFinite(parsed)) {
+                options.cooldownMinutes = Math.max(0, parsed);
+            }
+        } else if (arg.startsWith('--cooldown=')) {
+            const parsed = Number(eqVal(arg));
+            if (Number.isFinite(parsed)) {
+                options.cooldownMinutes = Math.max(0, parsed);
+            }
+        } else if (arg === '--force' || arg === '-f') {
+            options.force = true;
+        } else if ((arg === '--client-id' || arg === '--published-by') && argv[i + 1]) {
+            const val = String(argv[++i]).trim();
+            if (val) {
+                options.clientId = val;
+                options.publishedBy = val;
+            }
+        } else if (arg.startsWith('--client-id=') || arg.startsWith('--published-by=')) {
+            const val = String(eqVal(arg)).trim();
+            if (val) {
+                options.clientId = val;
+                options.publishedBy = val;
+            }
+        } else if (arg === '--snapshot-url' && argv[i + 1]) {
+            options.snapshotUrl = String(argv[++i]).trim();
+        } else if (arg.startsWith('--snapshot-url=')) {
+            options.snapshotUrl = String(eqVal(arg)).trim();
         } else if (arg === '--snapshot-out' && argv[i + 1]) {
             options.snapshotOut = path.resolve(argv[++i]);
         } else if (arg.startsWith('--snapshot-out=')) {
             options.snapshotOut = path.resolve(eqVal(arg));
+        } else if (arg === '--daemon') {
+            options.daemon = true;
         }
     }
 
@@ -162,10 +239,152 @@ async function probeAiEndpointReachable(aiService, timeoutMs = 2500) {
     }
 }
 
+async function verifyTargetHealth(opts) {
+    let healthVerified = false;
+    let healthStatus = null;
+    if (!opts.localOnly && opts.target) {
+        const baseTarget = opts.target.replace(/\/+$/, '').replace(/\/api\/agent\/publish$/, '');
+        const healthUrl = `${baseTarget}/api/health`;
+        try {
+            const healthRes = await axios.get(healthUrl, {
+                timeout: 10000,
+                httpsAgent: httpsAgentIgnoreTls,
+                validateStatus: () => true
+            });
+            healthStatus = healthRes.data;
+            healthVerified = healthRes.status === 200 && (healthRes.data?.status === 'healthy' || healthRes.data?.status === 'ok');
+            logger.info('AG-AUTO', `[Stage 4/4] 目标站点健康检查 (${healthUrl}): verified=${healthVerified}`);
+        } catch (err) {
+            logger.warn('AG-AUTO', `[Stage 4/4] 目标站点健康检查失败 (${healthUrl}): ${err.message}`);
+        }
+    }
+    return { healthVerified, healthStatus };
+}
+
 async function runAutoUpdate(customOptions = {}) {
     const opts = { ...parseArgs([]), ...customOptions };
+    if (customOptions.file && !customOptions.compiled) {
+        opts.compiled = path.resolve(customOptions.file);
+    }
+    if ((customOptions.site || customOptions.url) && !customOptions.target) {
+        opts.target = customOptions.site || customOptions.url;
+        opts.targetExplicit = true;
+    }
+    if (customOptions.target) {
+        opts.targetExplicit = true;
+    }
+
+    let shouldPushToGithub = Boolean(opts.pushToGithub);
+    if (
+        customOptions.noGithub === true ||
+        customOptions.pushToGithub === false ||
+        customOptions.githubSync === false ||
+        customOptions.github === false
+    ) {
+        shouldPushToGithub = false;
+    } else if (
+        customOptions.pushToGithub === true ||
+        customOptions.githubSync === true ||
+        customOptions.github === true
+    ) {
+        shouldPushToGithub = true;
+    }
+    opts.pushToGithub = shouldPushToGithub;
+    opts.githubSync = shouldPushToGithub;
+    opts.github = shouldPushToGithub;
+
+    const publishedBy = String(
+        customOptions.publishedBy ||
+        customOptions.clientId ||
+        opts.publishedBy ||
+        opts.clientId ||
+        process.env.CLIENT_ID ||
+        process.env.AG_CLIENT_ID ||
+        config.githubSync?.clientId ||
+        config.agent?.clientId ||
+        os.hostname() ||
+        'antigravity-client'
+    ).trim();
+    opts.publishedBy = publishedBy;
+    opts.clientId = publishedBy;
+
     const startTime = Date.now();
     const aiService = new AIService(null, stateManager);
+
+    // Stage 0: Multi-Client Cooldown Check (方案 2B 多客户端防冲突保护)
+    const hasExplicitTestSnapshotUrl = Boolean(
+        customOptions.snapshotUrl ||
+        process.env.GITHUB_SNAPSHOT_URL ||
+        customOptions.checkCooldown
+    );
+    const shouldCheckCooldown =
+        !opts.force &&
+        opts.cooldownMinutes > 0 &&
+        (!opts.skipHarvest || customOptions.checkCooldown) &&
+        (process.env.NODE_ENV !== 'test' || hasExplicitTestSnapshotUrl);
+
+    if (shouldCheckCooldown) {
+        const cooldownCheck = await checkRemoteSnapshotCooldown({
+            snapshotUrl: opts.snapshotUrl,
+            cooldownMinutes: opts.cooldownMinutes
+        });
+        if (cooldownCheck.inCooldown && cooldownCheck.snapshot) {
+            logger.info(
+                'AG-AUTO',
+                `[Multi-Client Cooldown] 远端快照已由客户端 "${cooldownCheck.publishedBy}" 于 ${cooldownCheck.publishedAt} 更新 (距今 ${cooldownCheck.ageMinutes} 分钟 < 冷却窗口 ${opts.cooldownMinutes} 分钟)，直接拉取同步至本地...`
+            );
+            await writeJsonFile(opts.compiled, cooldownCheck.snapshot);
+            const publishResult = await runPublish({
+                candidates: opts.candidates,
+                compiled: opts.compiled,
+                target: opts.target,
+                targetExplicit: opts.targetExplicit,
+                secret: opts.secret,
+                limit: opts.limit,
+                localOnly: opts.localOnly,
+                pushToGithub: false,
+                githubSync: false,
+                github: false,
+                syncedFromGithub: true,
+                snapshotOut: opts.snapshotOut,
+                publishedAt: cooldownCheck.publishedAt,
+                publishedBy: cooldownCheck.publishedBy,
+                clientId: cooldownCheck.clientId
+            });
+            const { healthVerified, healthStatus } = await verifyTargetHealth(opts);
+            return {
+                success: true,
+                mode: 'cooldown-remote-sync',
+                skippedHarvest: true,
+                cooldownTriggered: true,
+                cooldownSkipped: true,
+                cooldownMinutes: opts.cooldownMinutes,
+                remoteAgeMinutes: cooldownCheck.ageMinutes,
+                publishedBy: cooldownCheck.publishedBy,
+                clientId: cooldownCheck.clientId,
+                harvestedCount: 0,
+                compiledCount: publishResult.totalPoolCount,
+                displayedCount: publishResult.displayedCount,
+                totalPoolCount: publishResult.totalPoolCount,
+                summaryWordCount: publishResult.summaryArticle?.wordCount || 0,
+                publishedAt: publishResult.publishedAt,
+                lastUpdated: publishResult.lastUpdated,
+                target: opts.localOnly ? 'local-only' : opts.target,
+                snapshotUrl: cooldownCheck.sourceUrl,
+                healthVerified,
+                healthStatus,
+                githubSync: {
+                    success: true,
+                    pulledFromRemote: true,
+                    publishedAt: cooldownCheck.publishedAt,
+                    publishedBy: cooldownCheck.publishedBy,
+                    sourceUrl: cooldownCheck.sourceUrl
+                },
+                remoteResponse: publishResult.remoteResponse,
+                elapsedSeconds: Number(((Date.now() - startTime) / 1000).toFixed(1))
+            };
+        }
+    }
 
     // Stage 1: Harvest (or load existing candidates)
     let harvestData = null;
@@ -235,6 +454,8 @@ async function runAutoUpdate(customOptions = {}) {
         compiledData = {
             compiledAt: new Date().toISOString(),
             mode: compilationMode,
+            publishedBy,
+            clientId: publishedBy,
             duplicateGroups: [],
             articles: compiledArticles.map((item, idx) => ({
                 index: idx + 1,
@@ -253,7 +474,7 @@ async function runAutoUpdate(customOptions = {}) {
         logger.success('AG-AUTO', `[Stage 2/4] 编译结果已写入 ${opts.compiled} (mode=${compilationMode}, count=${compiledData.articles.length})`);
     }
 
-    // Stage 3: Publish to local files, GitHub snapshot branch (if enabled), & target server
+    // Stage 3: Publish to local files, GitHub snapshot branch (default enabled in Method 2B), & target server
     logger.info('AG-AUTO', `[Stage 3/4] 正在发布精编新闻与综述至 ${opts.localOnly ? '本地存储' : opts.target}...`);
     const publishResult = await runPublish({
         candidates: opts.candidates,
@@ -264,37 +485,37 @@ async function runAutoUpdate(customOptions = {}) {
         limit: opts.limit,
         fallbackCompile: true,
         localOnly: opts.localOnly,
-        githubSync: Boolean(opts.github || opts.githubSync),
+        pushToGithub: shouldPushToGithub,
+        githubSync: shouldPushToGithub,
+        github: shouldPushToGithub,
+        githubExplicit: Boolean(
+            opts.githubExplicit ||
+            customOptions.githubExplicit ||
+            customOptions.pushToGithub !== undefined ||
+            customOptions.githubSync !== undefined ||
+            customOptions.github !== undefined ||
+            customOptions.noGithub !== undefined
+        ),
         githubBranch: opts.githubBranch,
         githubRemote: opts.githubRemote,
+        publishedBy,
+        clientId: publishedBy,
         snapshotOut: opts.snapshotOut,
         repoDir: opts.repoDir,
         skipGitPush: opts.skipGitPush
     });
 
     // Stage 4: Verify target website /api/health
-    let healthVerified = false;
-    let healthStatus = null;
-    if (!opts.localOnly && opts.target) {
-        const baseTarget = opts.target.replace(/\/+$/, '').replace(/\/api\/agent\/publish$/, '');
-        const healthUrl = `${baseTarget}/api/health`;
-        try {
-            const healthRes = await axios.get(healthUrl, {
-                timeout: 10000,
-                httpsAgent: httpsAgentIgnoreTls,
-                validateStatus: () => true
-            });
-            healthStatus = healthRes.data;
-            healthVerified = healthRes.status === 200 && (healthRes.data?.status === 'healthy' || healthRes.data?.status === 'ok');
-            logger.info('AG-AUTO', `[Stage 4/4] 目标站点健康检查 (${healthUrl}): verified=${healthVerified}`);
-        } catch (err) {
-            logger.warn('AG-AUTO', `[Stage 4/4] 目标站点健康检查失败 (${healthUrl}): ${err.message}`);
-        }
-    }
+    const { healthVerified, healthStatus } = await verifyTargetHealth(opts);
 
     const result = {
         success: true,
         mode: compilationMode,
+        skippedHarvest: Boolean(opts.skipHarvest),
+        cooldownTriggered: false,
+        cooldownSkipped: false,
+        publishedBy: publishResult.publishedBy || publishedBy,
+        clientId: publishResult.clientId || publishedBy,
         harvestedCount: harvestData.fullCandidates.length,
         compiledCount: Array.isArray(compiledData.articles) ? compiledData.articles.length : 0,
         displayedCount: publishResult.displayedCount,
@@ -313,17 +534,45 @@ async function runAutoUpdate(customOptions = {}) {
     return result;
 }
 
-if (require.main === module) {
-    const cliOpts = parseArgs(process.argv.slice(2));
-    runAutoUpdate(cliOpts)
-        .then(result => {
-            console.log(JSON.stringify(result, null, 2));
-            process.exit(0);
-        })
-        .catch(err => {
-            console.error('[AG-AUTO] 自动更新流水线失败:', err.message);
-            process.exit(1);
-        });
+function startAutoUpdateDaemon(cliOpts = {}) {
+    const times = Array.isArray(config.news?.updateTimes) && config.news.updateTimes.length > 0
+        ? config.news.updateTimes
+        : ['08:00', '12:30', '19:30'];
+    const timezone = config.news?.timezone || 'Asia/Shanghai';
+    logger.info('AG-AUTO', `启动 Method 2B 定时守护进程: 计划时间 [${times.join(', ')}] (${timezone}), clientId=${cliOpts.clientId}`);
+    for (const time of times) {
+        const [hour, minute] = String(time).split(':').map(Number);
+        if (isNaN(hour) || isNaN(minute)) continue;
+        const expr = `${minute} ${hour} * * *`;
+        cron.schedule(
+            expr,
+            async () => {
+                try {
+                    await runAutoUpdate(cliOpts);
+                } catch (err) {
+                    logger.error('AG-AUTO', `定时自动更新任务执行失败 (${time}):`, err.message);
+                }
+            },
+            { scheduled: true, timezone }
+        );
+    }
 }
 
-module.exports = { runAutoUpdate, parseArgs };
+if (require.main === module) {
+    const cliOpts = parseArgs(process.argv.slice(2));
+    if (cliOpts.daemon) {
+        startAutoUpdateDaemon(cliOpts);
+    } else {
+        runAutoUpdate(cliOpts)
+            .then(result => {
+                console.log(JSON.stringify(result, null, 2));
+                process.exit(0);
+            })
+            .catch(err => {
+                console.error('[AG-AUTO] 自动更新流水线失败:', err.message);
+                process.exit(1);
+            });
+    }
+}
+
+module.exports = { runAutoUpdate, parseArgs, startAutoUpdateDaemon };
