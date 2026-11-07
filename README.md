@@ -74,7 +74,8 @@ CoreFeed/
 │   ├── css/style.css              # Kami 宣纸/墨夜双主题排版样式
 │   └── js/main.js                 # 前端控制器、多维筛选与 WebSocket 渐进式刷新
 └── tests/
-    └── ag_pipeline.test.js        # Path A 接口与 CLI 流水线端到端自动化测试套件 (7/7)
+    ├── ag_pipeline.test.js        # Path A 接口与 CLI 流水线端到端自动化测试套件 (7/7)
+    └── deploy_router.test.js      # 软路由一键部署与热更新脚本端到端自动化测试套件 (4/4)
 ```
 
 ---
@@ -126,14 +127,21 @@ npm run ag:auto
 npm run ag:harvest
 npm run ag:publish
 
-# 运行端到端自动化测试套件 (7/7 测试用例)
+# 运行端到端自动化测试套件 (11/11 测试用例)
 npm test
 ```
 
-### 3. Docker / 软路由部署
+### 3. Docker / 软路由一键部署与热更新
 ```bash
-# 使用 Docker Compose 启动
+# 方式 A：OpenWrt / iStoreOS / Linux 软路由远程一键更新与部署
+# (完全兼容 Windows PowerShell / CMD / 终端，自动迁移旧容器 AI 密钥并同步每日 08:00,12:30,19:30 自动更新，请将 <YOUR_ROUTER_IP> 替换为软路由 IP)
+ssh root@<YOUR_ROUTER_IP> "wget -qO /tmp/deploy-router.sh https://raw.githubusercontent.com/alanhsun/CoreFeed/main/deploy-router.sh && sh /tmp/deploy-router.sh --rebuild && rm -f /tmp/deploy-router.sh"
+
+# 首次安装后，日常秒级热更新代码只需执行：
+ssh root@<YOUR_ROUTER_IP> "sh /opt/corefeed/deploy-router.sh"
+
+# 方式 B：使用 Docker Compose 启动
 docker-compose up -d --build
 ```
 
-访问 `http://localhost:3120` 即可打开 **聚核 CoreFeed v2.0**。
+访问 `http://localhost:3120`（或 `http://<YOUR_ROUTER_IP>:3120`）即可打开 **聚核 CoreFeed v2.0**。
