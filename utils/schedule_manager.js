@@ -7,19 +7,22 @@ const logger = require('./logger');
  * 定时触发全球知名信源巡检、渐进式编译及今日要闻综述生成
  */
 class ScheduleManager {
-    constructor(newsService, io, stateManager = null, newsAgentService = null, aiService = null) {
+    constructor(newsService, io, stateManager = null, newsAgentService = null, aiService = null, githubSyncManager = null) {
         this.newsService = newsService;
         this.io = io;
         this.stateManager = stateManager;
         this.newsAgentService = newsAgentService;
         this.aiService = aiService;
+        this.githubSyncManager = githubSyncManager;
         this.currentTasks = [];
+        this.githubSyncTimer = null;
         this.isRunning = false;
     }
 
-    setServices({ newsAgentService, aiService }) {
+    setServices({ newsAgentService, aiService, githubSyncManager }) {
         if (newsAgentService) this.newsAgentService = newsAgentService;
         if (aiService) this.aiService = aiService;
+        if (githubSyncManager) this.githubSyncManager = githubSyncManager;
     }
 
     /**
@@ -74,6 +77,22 @@ class ScheduleManager {
 
         this.isRunning = this.currentTasks.length > 0;
 
+        // 若启用了 GitHub 快照中转同步，启动后台轮询定时器（使用 .unref() 确保不阻塞进程退出）
+        const githubSyncEnabled = Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true);
+        const syncIntervalMinutes = Number(config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 15);
+        if (githubSyncEnabled && this.githubSyncManager && syncIntervalMinutes > 0 && process.env.NODE_ENV !== 'test') {
+            this.githubSyncTimer = setInterval(async () => {
+                try {
+                    await this.githubSyncManager.pullAndApply({ force: false, trigger: 'periodic' });
+                } catch (err) {
+                    logger.debug('SCHEDULE', `后台定期检查 GitHub 快照跳过: ${err.message}`);
+                }
+            }, syncIntervalMinutes * 60 * 1000);
+            if (typeof this.githubSyncTimer.unref === 'function') {
+                this.githubSyncTimer.unref();
+            }
+        }
+
         if (this.isRunning) {
             logger.success('SCHEDULE', `定时调度器启动成功 (${this.currentTasks.length} 个时间点)`);
             logger.info('SCHEDULE', `下次执行时间: ${this.getNextExecutionTime()}`);
@@ -99,6 +118,10 @@ class ScheduleManager {
             this.currentTasks.forEach(({ task }) => task.stop());
             this.currentTasks = [];
         }
+        if (this.githubSyncTimer) {
+            clearInterval(this.githubSyncTimer);
+            this.githubSyncTimer = null;
+        }
         this.isRunning = false;
 
         if (this.io) {
@@ -110,7 +133,7 @@ class ScheduleManager {
     }
 
     /**
-     * 执行完整定时更新流程 (信源采集 -> 聚类即时展示 -> 正文深读与中文编译 -> 今日要闻综述)
+     * 执行完整定时更新流程 (优先检查 GitHub 快照中转同步 -> 若无新快照则执行本地信源采集与编译)
      * 内置 10 分钟新鲜度防重守卫：若过去 10 分钟内已通过外部流水线或手动巡检完成发布，则自动跳过本次重复巡检。
      */
     async executeUpdate() {
@@ -127,6 +150,30 @@ class ScheduleManager {
             ) {
                 logger.info('SCHEDULE', `检测到过去 10 分钟内已完成新鲜发布 (${lastUpdated})，跳过本次重复巡检`);
                 return;
+            }
+        }
+
+        const githubSyncEnabled = Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true);
+        if (githubSyncEnabled && this.githubSyncManager) {
+            try {
+                const syncResult = await this.githubSyncManager.pullAndApply({ force: false, trigger: 'schedule' });
+                if (syncResult && syncResult.applied) {
+                    logger.success('SCHEDULE', `已通过 GitHub 快照中转同步完成定时更新 (${syncResult.displayedCount} 条新闻)`);
+                    if (this.io) {
+                        this.io.emit('news-update-completed', {
+                            type: 'scheduled',
+                            timestamp: new Date().toISOString(),
+                            success: true,
+                            stats: {
+                                newsCount: syncResult.displayedCount,
+                                hasSummary: Boolean(syncResult.hasSummary)
+                            }
+                        });
+                    }
+                    return;
+                }
+            } catch (syncErr) {
+                logger.warn('SCHEDULE', `从 GitHub 快照中转拉取未命中，回退至本地巡检流水线: ${syncErr.message}`);
             }
         }
 
@@ -239,7 +286,8 @@ class ScheduleManager {
             scheduleTimes: updateTimes,
             timezone: config.news.timezone || 'Asia/Shanghai',
             tasksCount: this.currentTasks.length,
-            nextExecution: this.getNextExecutionTime()
+            nextExecution: this.getNextExecutionTime(),
+            githubSync: this.githubSyncManager ? this.githubSyncManager.getStatus() : null
         };
     }
 

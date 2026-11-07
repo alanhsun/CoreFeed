@@ -16,6 +16,8 @@
  *   --translate-fallback   启用免密钥高速中文直译预填充
  */
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config();
 const config = require('../config');
 const logger = require('../utils/logger');
 const { writeJsonFile, truncateText } = require('../utils/helpers');
@@ -25,6 +27,7 @@ const NewsAgentService = require('../services/news_agent_service');
 const stateManager = require('../services/state_manager');
 
 function parseArgs(argv = process.argv.slice(2)) {
+    const eqVal = (a) => a.slice(a.indexOf('=') + 1);
     const options = {
         out: process.env.AG_CANDIDATES_FILE || path.join(config.storage.dataDir, 'ag_candidates.json'),
         limit: 35,
@@ -36,26 +39,26 @@ function parseArgs(argv = process.argv.slice(2)) {
 
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
-        if (arg === '--out' && argv[i + 1]) {
+        if ((arg === '--out' || arg === '--raw' || arg === '--candidates') && argv[i + 1]) {
             options.out = path.resolve(argv[++i]);
-        } else if (arg.startsWith('--out=')) {
-            options.out = path.resolve(arg.split('=')[1]);
+        } else if (arg.startsWith('--out=') || arg.startsWith('--raw=') || arg.startsWith('--candidates=')) {
+            options.out = path.resolve(eqVal(arg));
         } else if (arg === '--limit' && argv[i + 1]) {
             options.limit = Math.max(1, parseInt(argv[++i], 10) || 35);
         } else if (arg.startsWith('--limit=')) {
-            options.limit = Math.max(1, parseInt(arg.split('=')[1], 10) || 35);
+            options.limit = Math.max(1, parseInt(eqVal(arg), 10) || 35);
         } else if (arg === '--deep-read' && argv[i + 1] !== undefined) {
             options.deepRead = Math.max(0, parseInt(argv[++i], 10));
         } else if (arg.startsWith('--deep-read=')) {
-            options.deepRead = Math.max(0, parseInt(arg.split('=')[1], 10));
+            options.deepRead = Math.max(0, parseInt(eqVal(arg), 10));
         } else if (arg === '--images' && argv[i + 1] !== undefined) {
             options.imageLimit = Math.max(0, parseInt(argv[++i], 10));
         } else if (arg.startsWith('--images=')) {
-            options.imageLimit = Math.max(0, parseInt(arg.split('=')[1], 10));
+            options.imageLimit = Math.max(0, parseInt(eqVal(arg), 10));
         } else if (arg === '--category' && argv[i + 1]) {
             options.category = argv[++i];
         } else if (arg.startsWith('--category=')) {
-            options.category = arg.split('=')[1];
+            options.category = eqVal(arg);
         } else if (arg === '--translate-fallback') {
             options.translateFallback = true;
         }

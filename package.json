@@ -25,7 +25,9 @@
     "clean": "rm -rf node_modules package-lock.json && npm install",
     "ag:harvest": "node scripts/ag-harvest.js",
     "ag:publish": "node scripts/ag-publish.js",
+    "ag:publish:github": "node scripts/ag-publish.js --github --local-only",
     "ag:auto": "node scripts/ag-auto-update.js",
+    "ag:auto:github": "node scripts/ag-auto-update.js --github",
     "test": "node --test tests/ag_pipeline.test.js tests/deploy_router.test.js"
   },
   "dependencies": {

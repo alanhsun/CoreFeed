@@ -10,6 +10,8 @@
  *   - Stage 4 (Verify)  : 校验目标站点 `/api/health` 与 `/api/news` 在线健康状态，确保闭环更新成功。
  */
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config();
 const axios = require('axios');
 const https = require('https');
 const config = require('../config');
@@ -23,7 +25,9 @@ const { runPublish } = require('./ag-publish');
 const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: false });
 
 function parseArgs(argv = process.argv.slice(2)) {
+    const eqVal = (a) => a.slice(a.indexOf('=') + 1);
     const defaultPort = config.server?.port || 3120;
+    const defaultGithubSync = String(process.env.AG_GITHUB_SYNC || '').toLowerCase() === 'true';
     const options = {
         candidates: process.env.AG_CANDIDATES_FILE || path.join(config.storage.dataDir, 'ag_candidates.json'),
         compiled: process.env.AG_COMPILED_FILE || path.join(config.storage.dataDir, 'ag_compiled.json'),
@@ -36,43 +40,51 @@ function parseArgs(argv = process.argv.slice(2)) {
         skipHarvest: false,
         useExistingCompiled: false,
         fallbackCompile: false,
-        localOnly: false
+        localOnly: false,
+        githubSync: defaultGithubSync,
+        github: defaultGithubSync,
+        githubBranch: process.env.AG_GITHUB_BRANCH || config.githubSync?.branch || 'ag-snapshot',
+        githubRemote: process.env.AG_GITHUB_REMOTE || config.githubSync?.remote || 'origin',
+        snapshotOut: process.env.AG_SNAPSHOT_OUT || null,
+        targetExplicit: Boolean(process.env.COREFEED_SITE_URL)
     };
 
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
-        if (arg === '--candidates' && argv[i + 1]) {
+        if ((arg === '--candidates' || arg === '--raw') && argv[i + 1]) {
             options.candidates = path.resolve(argv[++i]);
-        } else if (arg.startsWith('--candidates=')) {
-            options.candidates = path.resolve(arg.split('=')[1]);
-        } else if (arg === '--compiled' && argv[i + 1]) {
+        } else if (arg.startsWith('--candidates=') || arg.startsWith('--raw=')) {
+            options.candidates = path.resolve(eqVal(arg));
+        } else if ((arg === '--compiled' || arg === '--file') && argv[i + 1]) {
             options.compiled = path.resolve(argv[++i]);
-        } else if (arg.startsWith('--compiled=')) {
-            options.compiled = path.resolve(arg.split('=')[1]);
-        } else if (arg === '--target' && argv[i + 1]) {
+        } else if (arg.startsWith('--compiled=') || arg.startsWith('--file=')) {
+            options.compiled = path.resolve(eqVal(arg));
+        } else if ((arg === '--target' || arg === '--site' || arg === '--url') && argv[i + 1]) {
             options.target = argv[++i];
-        } else if (arg.startsWith('--target=')) {
-            options.target = arg.split('=')[1];
+            options.targetExplicit = true;
+        } else if (arg.startsWith('--target=') || arg.startsWith('--site=') || arg.startsWith('--url=')) {
+            options.target = eqVal(arg);
+            options.targetExplicit = true;
         } else if (arg === '--secret' && argv[i + 1] !== undefined) {
             options.secret = argv[++i];
         } else if (arg.startsWith('--secret=')) {
-            options.secret = arg.split('=')[1];
+            options.secret = eqVal(arg);
         } else if (arg === '--limit' && argv[i + 1]) {
             options.limit = Math.max(1, parseInt(argv[++i], 10) || 30);
         } else if (arg.startsWith('--limit=')) {
-            options.limit = Math.max(1, parseInt(arg.split('=')[1], 10) || 30);
+            options.limit = Math.max(1, parseInt(eqVal(arg), 10) || 30);
         } else if (arg === '--deep-read' && argv[i + 1] !== undefined) {
             options.deepRead = Math.max(0, parseInt(argv[++i], 10));
         } else if (arg.startsWith('--deep-read=')) {
-            options.deepRead = Math.max(0, parseInt(arg.split('=')[1], 10));
+            options.deepRead = Math.max(0, parseInt(eqVal(arg), 10));
         } else if (arg === '--images' && argv[i + 1] !== undefined) {
             options.imageLimit = Math.max(0, parseInt(argv[++i], 10));
         } else if (arg.startsWith('--images=')) {
-            options.imageLimit = Math.max(0, parseInt(arg.split('=')[1], 10));
+            options.imageLimit = Math.max(0, parseInt(eqVal(arg), 10));
         } else if (arg === '--category' && argv[i + 1]) {
             options.category = argv[++i];
         } else if (arg.startsWith('--category=')) {
-            options.category = arg.split('=')[1];
+            options.category = eqVal(arg);
         } else if (arg === '--skip-harvest') {
             options.skipHarvest = true;
         } else if (arg === '--use-existing-compiled') {
@@ -81,6 +93,21 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.fallbackCompile = true;
         } else if (arg === '--local-only' || arg === '--no-push') {
             options.localOnly = true;
+        } else if (arg === '--github' || arg === '--github-sync') {
+            options.githubSync = true;
+            options.github = true;
+        } else if (arg === '--github-branch' && argv[i + 1]) {
+            options.githubBranch = argv[++i];
+        } else if (arg.startsWith('--github-branch=')) {
+            options.githubBranch = eqVal(arg);
+        } else if (arg === '--github-remote' && argv[i + 1]) {
+            options.githubRemote = argv[++i];
+        } else if (arg.startsWith('--github-remote=')) {
+            options.githubRemote = eqVal(arg);
+        } else if (arg === '--snapshot-out' && argv[i + 1]) {
+            options.snapshotOut = path.resolve(argv[++i]);
+        } else if (arg.startsWith('--snapshot-out=')) {
+            options.snapshotOut = path.resolve(eqVal(arg));
         }
     }
 
@@ -226,16 +253,23 @@ async function runAutoUpdate(customOptions = {}) {
         logger.success('AG-AUTO', `[Stage 2/4] 编译结果已写入 ${opts.compiled} (mode=${compilationMode}, count=${compiledData.articles.length})`);
     }
 
-    // Stage 3: Publish to local files & target server
+    // Stage 3: Publish to local files, GitHub snapshot branch (if enabled), & target server
     logger.info('AG-AUTO', `[Stage 3/4] 正在发布精编新闻与综述至 ${opts.localOnly ? '本地存储' : opts.target}...`);
     const publishResult = await runPublish({
         candidates: opts.candidates,
         compiled: opts.compiled,
         target: opts.target,
+        targetExplicit: opts.targetExplicit,
         secret: opts.secret,
         limit: opts.limit,
         fallbackCompile: true,
-        localOnly: opts.localOnly
+        localOnly: opts.localOnly,
+        githubSync: Boolean(opts.github || opts.githubSync),
+        githubBranch: opts.githubBranch,
+        githubRemote: opts.githubRemote,
+        snapshotOut: opts.snapshotOut,
+        repoDir: opts.repoDir,
+        skipGitPush: opts.skipGitPush
     });
 
     // Stage 4: Verify target website /api/health
@@ -266,10 +300,12 @@ async function runAutoUpdate(customOptions = {}) {
         displayedCount: publishResult.displayedCount,
         totalPoolCount: publishResult.totalPoolCount,
         summaryWordCount: publishResult.summaryArticle?.wordCount || 0,
+        publishedAt: publishResult.publishedAt || publishResult.lastUpdated,
         lastUpdated: publishResult.lastUpdated,
         target: opts.localOnly ? 'local-only' : opts.target,
         healthVerified,
         healthStatus,
+        githubSync: publishResult.githubSync || null,
         remoteResponse: publishResult.remoteResponse,
         elapsedSeconds: Number(((Date.now() - startTime) / 1000).toFixed(1))
     };

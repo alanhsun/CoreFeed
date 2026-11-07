@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('dotenv').config();
 
 const SETTINGS_FILE_PATH = path.join(__dirname, '..', 'data', 'settings.json');
@@ -138,7 +139,29 @@ function buildConfig() {
             enableGoogleNewsFallback: getBooleanConfig('AGENT_GNEWS_PROXY_FALLBACK', true),
             freshnessHours: getNumberConfig('AGENT_FRESHNESS_HOURS', 48),
             publishSecret: getConfig('PUBLISH_SECRET', getConfig('PUBLISH_API_KEY', '')),
-            siteUrl: getConfig('COREFEED_SITE_URL', `http://localhost:${getNumberConfig('PORT', 3120)}`)
+            siteUrl: getConfig('COREFEED_SITE_URL', `http://localhost:${getNumberConfig('PORT', 3120)}`),
+            githubSyncEnabled: getBooleanConfig('GITHUB_SYNC_ENABLED', true),
+            githubSnapshotUrl: getConfig(
+                'GITHUB_SNAPSHOT_URL',
+                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
+            ),
+            githubSyncIntervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 15),
+            githubBranch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),
+            githubRemote: getConfig('AG_GITHUB_REMOTE', 'origin'),
+            syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)
+        },
+
+        // GitHub 快照中转同步配置 (云端 Antigravity -> GitHub ag-snapshot -> 软路由)
+        githubSync: {
+            enabled: getBooleanConfig('GITHUB_SYNC_ENABLED', true),
+            snapshotUrl: getConfig(
+                'GITHUB_SNAPSHOT_URL',
+                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
+            ),
+            intervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 15),
+            branch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),
+            remote: getConfig('AG_GITHUB_REMOTE', 'origin'),
+            syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)
         },
 
         // 新闻API与源配置

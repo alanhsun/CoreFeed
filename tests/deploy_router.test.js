@@ -231,6 +231,8 @@ exit 0
         assert.equal(envMap.AUTO_UPDATE_ENABLED, 'true');
         assert.equal(envMap.UPDATE_TIMES, '08:00,12:30,19:30');
         assert.equal(envMap.SCHEDULE_TIMEZONE, 'Asia/Shanghai');
+        assert.equal(envMap.GITHUB_SYNC_ENABLED, 'true');
+        assert.equal(envMap.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
 
         // Verify data/settings.json was created/synced
         const settings = JSON.parse(fs.readFileSync(path.join(remoteDir, 'data', 'settings.json'), 'utf8'));
@@ -238,6 +240,8 @@ exit 0
         assert.equal(settings.UPDATE_TIMES, '08:00,12:30,19:30');
         assert.deepEqual(settings.scheduleTimes, ['08:00', '12:30', '19:30']);
         assert.equal(settings.timezone, 'Asia/Shanghai');
+        assert.equal(settings.GITHUB_SYNC_ENABLED, true);
+        assert.equal(settings.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
 
         // Verify live POST /api/schedule/config was called
         assert.equal(schedulePostRequests.length, 1);
@@ -257,7 +261,7 @@ exit 0
         fs.mkdirSync(path.join(remoteDir, 'data'), { recursive: true });
         fs.mkdirSync(binDir, { recursive: true });
 
-        // Pre-populate .env with custom AI_BASE_URL & AI_MODEL, empty AI_API_KEY & PUBLISH_SECRET, and legacy UPDATE_TIMES
+        // Pre-populate .env with custom AI_BASE_URL, AI_MODEL & GITHUB_SNAPSHOT_URL, empty AI_API_KEY & PUBLISH_SECRET, and legacy UPDATE_TIMES
         fs.writeFileSync(
             path.join(remoteDir, '.env'),
             [
@@ -266,6 +270,7 @@ exit 0
                 'AI_API_KEY=',
                 'AI_MODEL=user-custom-model',
                 'PUBLISH_SECRET=',
+                'GITHUB_SNAPSHOT_URL=https://custom.mirror.example/ag-snapshot/latest.json',
                 'AUTO_UPDATE_ENABLED=false',
                 'UPDATE_TIMES=06:00,16:30',
                 'SCHEDULE_TIMEZONE=UTC'
@@ -315,6 +320,8 @@ exit 0
         // Non-empty custom values in .env must be preserved
         assert.equal(envMap.AI_BASE_URL, 'https://custom.user.ai/v1');
         assert.equal(envMap.AI_MODEL, 'user-custom-model');
+        assert.equal(envMap.GITHUB_SNAPSHOT_URL, 'https://custom.mirror.example/ag-snapshot/latest.json');
+        assert.equal(envMap.GITHUB_SYNC_ENABLED, 'true');
         // Empty keys in .env must be backfilled verbatim without sed escaping corruption
         assert.equal(envMap.AI_API_KEY, 'sk-special/key&123|456=789?abc');
         assert.equal(envMap.PUBLISH_SECRET, 'pub-sec&999|xyz=1');
@@ -342,6 +349,8 @@ exit 0
         assert.deepEqual(settings.scheduleTimes, ['08:00', '12:30', '19:30']);
         assert.equal(settings.SCHEDULE_TIMEZONE, 'Asia/Shanghai');
         assert.equal(settings.timezone, 'Asia/Shanghai');
+        assert.equal(settings.GITHUB_SYNC_ENABLED, true);
+        assert.equal(settings.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
 
         assert.equal(schedulePostRequests.length, 1);
     });
@@ -380,6 +389,8 @@ exit 0
         assert.equal(envMap.AUTO_UPDATE_ENABLED, 'true');
         assert.equal(envMap.UPDATE_TIMES, '08:00,12:30,19:30');
         assert.equal(envMap.SCHEDULE_TIMEZONE, 'Asia/Shanghai');
+        assert.equal(envMap.GITHUB_SYNC_ENABLED, 'true');
+        assert.equal(envMap.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
 
         const dockerCommands = fs.readFileSync(dockerLog, 'utf8').trim().split('\n');
         assert.ok(

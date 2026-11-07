@@ -15,8 +15,10 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
+const http = require('node:http');
+const { execFile, execFileSync } = require('node:child_process');
 const { promisify } = require('node:util');
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +32,7 @@ const { app, server, io, services } = require('../server');
 const { parseArgs: parseHarvestArgs, runHarvest } = require('../scripts/ag-harvest');
 const { parseArgs: parsePublishArgs, runPublish } = require('../scripts/ag-publish');
 const { parseArgs: parseAutoArgs, runAutoUpdate } = require('../scripts/ag-auto-update');
+const { publishSnapshotToGitHub } = require('../utils/github_sync');
 
 const DATA_DIR = config.storage.dataDir || path.join(__dirname, '..', 'data');
 const TRACKED_DATA_FILES = [
@@ -669,5 +672,354 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.equal(resFallback.displayedCount, 3);
         assert.ok(resFallback.summaryWordCount > 50, 'Fallback compilation must generate a Chinese summary article');
         assert.equal(resFallback.healthVerified, true);
+    });
+
+    it('8. LAN Push Ergonomics: --site/--url/--file CLI flags, safe = secret parsing, X-Publish-Secret header, and standalone ag_compiled.json without ag_candidates.json', async () => {
+        const pArgs = parsePublishArgs([
+            '--site', 'http://10.10.20.10:3120',
+            '--file', 'data/ag_compiled.json',
+            '--secret=sec=with=equals==',
+            '--github',
+            '--github-branch=ag-snapshot',
+            '--github-remote=origin',
+            '--snapshot-out=/tmp/snap-test.json'
+        ]);
+        assert.equal(pArgs.target, 'http://10.10.20.10:3120');
+        assert.equal(pArgs.compiled, path.resolve('data/ag_compiled.json'));
+        assert.equal(pArgs.secret, 'sec=with=equals==');
+        assert.equal(pArgs.githubSync, true);
+        assert.equal(pArgs.githubBranch, 'ag-snapshot');
+        assert.equal(pArgs.githubRemote, 'origin');
+        assert.equal(pArgs.snapshotOut, path.resolve('/tmp/snap-test.json'));
+
+        const aArgs = parseAutoArgs([
+            '--site=http://10.10.20.10:3120',
+            '--file=data/ag_compiled.json',
+            '--secret=my=token==',
+            '--github'
+        ]);
+        assert.equal(aArgs.target, 'http://10.10.20.10:3120');
+        assert.equal(aArgs.compiled, path.resolve('data/ag_compiled.json'));
+        assert.equal(aArgs.secret, 'my=token==');
+        assert.equal(aArgs.githubSync, true);
+
+        // Verify POST /api/agent/publish accepts X-Publish-Secret header and { news, summary, publishedAt } payload
+        process.env.PUBLISH_SECRET = 'lan-secret-10=20==';
+        const customPublishedAt = '2026-11-07T06:30:00.000Z';
+        const resHeaderAuth = await fetch(`${baseUrl}/api/agent/publish`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Publish-Secret': 'lan-secret-10=20=='
+            },
+            body: JSON.stringify({
+                publishedAt: customPublishedAt,
+                news: [
+                    {
+                        id: 'lan-push-1',
+                        title: 'Router Direct Push Test Article',
+                        translatedTitle: '局域网软路由直推测试文章：全球算力网络升级',
+                        summary: '本机通过局域网向 10.10.20.10:3120 发起直接推送并触发实时落盘与广播。',
+                        url: 'https://www.reuters.com/technology/lan-push-test-2026',
+                        region: '国际',
+                        category: '科技',
+                        source: { name: 'Reuters (路透社)' }
+                    }
+                ],
+                summary: '### 算力基础设施动态\n全球算力网络迎来新一轮架构升级 [NEWS_1]。'
+            })
+        });
+        assert.equal(resHeaderAuth.status, 200);
+        const headerAuthBody = await resHeaderAuth.json();
+        assert.equal(headerAuthBody.success, true);
+        assert.equal(headerAuthBody.displayedCount, 1);
+        assert.equal(headerAuthBody.hasSummary, true);
+        assert.equal(headerAuthBody.publishedAt, customPublishedAt);
+        assert.equal(headerAuthBody.lastUpdated, customPublishedAt);
+
+        // Verify standalone ag_compiled.json publishing when ag_candidates.json is absent
+        const missingCandidatesPath = path.join(DATA_DIR, 'non_existent_candidates_999.json');
+        if (fs.existsSync(missingCandidatesPath)) {
+            fs.unlinkSync(missingCandidatesPath);
+        }
+        const standaloneCompiledPath = path.join(DATA_DIR, 'ag_compiled.json');
+        fs.writeFileSync(standaloneCompiledPath, JSON.stringify({
+            publishedAt: '2026-11-07T06:35:00.000Z',
+            news: [
+                {
+                    id: 'standalone-1',
+                    title: 'Standalone Compiled Snapshot Item 1',
+                    translatedTitle: '独立自包含精编快照条目一：欧洲央行维持关键利率不变',
+                    summary: '欧洲央行在最新货币政策会议上决定维持基准利率不变，并继续评估通胀走势。',
+                    url: 'https://www.ft.com/content/ecb-rate-2026',
+                    region: '欧洲',
+                    category: '财经',
+                    keyPoints: ['维持基准利率不变', '持续评估核心通胀'],
+                    source: { name: 'Financial Times (金融时报)' }
+                }
+            ],
+            summary: {
+                title: '2026年全球要闻深度综述（独立快照版）',
+                content: '### 欧洲货币政策\n欧洲央行宣布维持基准利率不变 [NEWS_1]。'
+            }
+        }, null, 2), 'utf8');
+
+        const standaloneRes = await runPublish({
+            candidates: missingCandidatesPath,
+            file: standaloneCompiledPath,
+            site: baseUrl,
+            secret: 'lan-secret-10=20=='
+        });
+        assert.equal(standaloneRes.success, true);
+        assert.equal(standaloneRes.displayedCount, 1);
+        assert.equal(standaloneRes.publishedAt, '2026-11-07T06:35:00.000Z');
+        assert.ok(standaloneRes.summaryArticle.htmlContent.includes('class="news-ref-link"'));
+    });
+
+    it('9. GitHub Snapshot Relay Publisher (publishSnapshotToGitHub): commits latest.json to orphan branch ag-snapshot via Git plumbing without touching working tree or HEAD', async () => {
+        const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'corefeed-git-plumbing-'));
+        const bareRemoteDir = path.join(tmpRoot, 'remote.git');
+        const workRepoDir = path.join(tmpRoot, 'work');
+        const snapOutPath = path.join(tmpRoot, 'exported_latest.json');
+
+        try {
+            fs.mkdirSync(bareRemoteDir, { recursive: true });
+            fs.mkdirSync(workRepoDir, { recursive: true });
+
+            execFileSync('git', ['init', '--bare', bareRemoteDir], { stdio: 'ignore' });
+            execFileSync('git', ['init', workRepoDir], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'config', 'user.name', 'Test User'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'remote', 'add', 'origin', bareRemoteDir], { stdio: 'ignore' });
+
+            fs.writeFileSync(path.join(workRepoDir, 'README.md'), '# CoreFeed Test Repo\n', 'utf8');
+            execFileSync('git', ['-C', workRepoDir, 'add', 'README.md'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'commit', '-m', 'initial main commit'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'branch', '-M', 'main'], { stdio: 'ignore' });
+
+            const mainHeadBefore = execFileSync('git', ['-C', workRepoDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+
+            const snapPayload1 = {
+                publishedAt: '2026-11-07T06:40:00.000Z',
+                news: [
+                    {
+                        id: 'gh-snap-1',
+                        title: 'Global Clean Energy Investment Hits Record High',
+                        translatedTitle: '全球清洁能源年度投资创历史新高',
+                        summary: '国际能源署最新报告指出，全球清洁能源与电网基础设施投资规模再创新高。',
+                        url: 'https://www.reuters.com/sustainability/clean-energy-2026',
+                        region: '国际',
+                        category: '能源',
+                        source: { name: 'Reuters (路透社)' }
+                    }
+                ],
+                summary: {
+                    title: '2026年全球能源要闻综述',
+                    content: '### 绿色能源投资\n全球清洁能源与电网基础设施投资创历史新高 [NEWS_1]。'
+                }
+            };
+
+            const pub1 = publishSnapshotToGitHub(snapPayload1, {
+                repoDir: workRepoDir,
+                remote: 'origin',
+                branch: 'ag-snapshot',
+                snapshotOut: snapOutPath
+            });
+            assert.equal(pub1.success, true);
+            assert.equal(pub1.branch, 'ag-snapshot');
+            assert.equal(pub1.pushed, true);
+            assert.ok(fs.existsSync(snapOutPath), 'snapshotOut file should be written');
+
+            // Publish a second snapshot to verify ag-snapshot stays a 1-commit orphan branch
+            const snapPayload2 = {
+                ...snapPayload1,
+                publishedAt: '2026-11-07T06:45:00.000Z'
+            };
+            const pub2 = publishSnapshotToGitHub(snapPayload2, {
+                repoDir: workRepoDir,
+                remote: 'origin',
+                branch: 'ag-snapshot'
+            });
+            assert.equal(pub2.success, true);
+            assert.notEqual(pub2.commitSha, pub1.commitSha);
+
+            // Verify working tree and HEAD on main were completely untouched
+            const mainHeadAfter = execFileSync('git', ['-C', workRepoDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+            const currentBranch = execFileSync('git', ['-C', workRepoDir, 'symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
+            const statusPorcelain = execFileSync('git', ['-C', workRepoDir, 'status', '--porcelain'], { encoding: 'utf8' }).trim();
+            assert.equal(mainHeadAfter, mainHeadBefore, 'HEAD on main must not change');
+            assert.equal(currentBranch, 'main', 'Checked-out branch must remain main');
+            assert.equal(statusPorcelain, '', 'Working tree must remain 100% clean');
+
+            // Verify remote bare repo has ag-snapshot with exactly 1 orphan commit containing latest.json
+            const commitCount = execFileSync('git', ['--git-dir', bareRemoteDir, 'rev-list', '--count', 'refs/heads/ag-snapshot'], { encoding: 'utf8' }).trim();
+            assert.equal(commitCount, '1', 'ag-snapshot must be a single-commit orphan branch without history bloat');
+
+            const remoteJsonRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:latest.json'], { encoding: 'utf8' });
+            const remoteSnap = JSON.parse(remoteJsonRaw);
+            assert.equal(remoteSnap.publishedAt, '2026-11-07T06:45:00.000Z');
+            assert.equal(remoteSnap.news.length, 1);
+            assert.equal(remoteSnap.news[0].translatedTitle, '全球清洁能源年度投资创历史新高');
+        } finally {
+            fs.rmSync(tmpRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('10. Router GitHub Snapshot Puller E2E: POST /api/agent/pull-github, GET /api/agent/sync-status, deduplication guard, force override & ScheduleManager pre-check', async () => {
+        const snapshotTimestamp = '2026-11-07T07:00:00.000Z';
+        let mockSnapshotPayload = {
+            version: '2.0',
+            publishedAt: snapshotTimestamp,
+            lastUpdated: snapshotTimestamp,
+            news: [
+                {
+                    id: 'gh-pull-1',
+                    title: 'Quantum Communication Link Operational Across European Capitals',
+                    translatedTitle: '欧洲多国首都间量子通信骨干链路正式投入运行',
+                    summary: '欧洲量子通信基础设施项目宣布跨国光纤量子密钥分发骨干网正式贯通。',
+                    url: 'https://www.bbc.com/news/science-quantum-link-2026',
+                    region: '欧洲',
+                    category: '科技',
+                    keyPoints: ['跨国量子通信骨干网贯通', '支持政务与金融高安全传输'],
+                    source: { id: 'bbc', name: 'BBC News (英国广播公司)' }
+                },
+                {
+                    id: 'gh-pull-2',
+                    title: 'Global Maritime Trade Volume Rises 6.2% in Q3',
+                    translatedTitle: '第三季度全球海运贸易总量同比增长6.2%',
+                    summary: '港口自动化效率提升与亚欧航线复苏推动全球集装箱吞吐量稳步增长。',
+                    url: 'https://www.reuters.com/markets/maritime-trade-q3-2026',
+                    region: '国际',
+                    category: '财经',
+                    keyPoints: ['海运贸易量同比增长6.2%', '亚欧航线集装箱吞吐量回升'],
+                    source: { id: 'reuters', name: 'Reuters (路透社)' }
+                }
+            ],
+            summary: {
+                title: '2026年全球要闻深度综述（GitHub 快照同步验证）',
+                content: '### 科技前沿\n欧洲多国首都间量子通信骨干链路正式投运 [NEWS_1]。\n\n### 全球贸易\n第三季度全球海运贸易总量同比增长6.2% [NEWS_2]。'
+            },
+            sourceStats: [{ id: 'bbc', name: 'BBC News', count: 2, status: 'ok' }]
+        };
+
+        const mockGhServer = http.createServer((req, res) => {
+            if (req.url && req.url.startsWith('/alanhsun/CoreFeed/ag-snapshot/latest.json')) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(mockSnapshotPayload));
+                return;
+            }
+            res.writeHead(404);
+            res.end('Not Found');
+        });
+
+        await new Promise((resolve, reject) => {
+            mockGhServer.listen(0, '127.0.0.1', (err) => (err ? reject(err) : resolve()));
+        });
+        const ghPort = mockGhServer.address().port;
+        const mockSnapshotUrl = `http://127.0.0.1:${ghPort}/alanhsun/CoreFeed/ag-snapshot/latest.json`;
+
+        try {
+            process.env.PUBLISH_SECRET = 'router-sync-sec-123';
+            process.env.GITHUB_SNAPSHOT_URL = mockSnapshotUrl;
+            stateManager.reset();
+
+            // 10a. Unauthorized POST /api/agent/pull-github -> 401
+            const resUnauth = await fetch(`${baseUrl}/api/agent/pull-github`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ snapshotUrl: mockSnapshotUrl })
+            });
+            assert.equal(resUnauth.status, 401);
+
+            // 10b. Authorized POST /api/agent/pull-github -> pulls & applies snapshot
+            const resPull1 = await fetch(`${baseUrl}/api/agent/pull-github`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Publish-Secret': 'router-sync-sec-123'
+                },
+                body: JSON.stringify({ snapshotUrl: mockSnapshotUrl })
+            });
+            assert.equal(resPull1.status, 200);
+            const pullBody1 = await resPull1.json();
+            assert.equal(pullBody1.success, true);
+            assert.equal(pullBody1.updated, true);
+            assert.equal(pullBody1.applied, true);
+            assert.equal(pullBody1.skipped, false);
+            assert.equal(pullBody1.displayedCount, 2);
+            assert.equal(pullBody1.hasSummary, true);
+            assert.equal(pullBody1.publishedAt, snapshotTimestamp);
+
+            // Verify router GET /api/news and GET /api/summary reflect pulled snapshot
+            const resNews = await fetch(`${baseUrl}/api/news`);
+            const newsData = await resNews.json();
+            assert.equal(newsData.news.length, 2);
+            assert.equal(newsData.news[0].translatedTitle, '欧洲多国首都间量子通信骨干链路正式投入运行');
+
+            const resSum = await fetch(`${baseUrl}/api/summary`);
+            const sumData = await resSum.json();
+            assert.ok(sumData.article.htmlContent.includes('class="news-ref-link"'));
+            assert.ok(sumData.article.htmlContent.includes('https://www.bbc.com/news/science-quantum-link-2026'));
+
+            // Verify disk files match pulled snapshot
+            const diskNews = JSON.parse(fs.readFileSync(config.storage.newsFile, 'utf8'));
+            assert.equal(diskNews.news.length, 2);
+
+            // 10c. Calling POST /api/agent/pull-github again with unchanged publishedAt skips re-application
+            const resPull2 = await fetch(`${baseUrl}/api/agent/pull-github`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Publish-Secret': 'router-sync-sec-123'
+                },
+                body: JSON.stringify({ snapshotUrl: mockSnapshotUrl })
+            });
+            assert.equal(resPull2.status, 200);
+            const pullBody2 = await resPull2.json();
+            assert.equal(pullBody2.success, true);
+            assert.equal(pullBody2.updated, false);
+            assert.equal(pullBody2.applied, false);
+            assert.equal(pullBody2.skipped, true);
+            assert.equal(pullBody2.reason, 'already-up-to-date');
+
+            // 10d. Calling POST /api/agent/pull-github with force: true re-applies
+            const resPullForce = await fetch(`${baseUrl}/api/agent/pull-github`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Publish-Secret': 'router-sync-sec-123'
+                },
+                body: JSON.stringify({ snapshotUrl: mockSnapshotUrl, force: true })
+            });
+            assert.equal(resPullForce.status, 200);
+            const pullBodyForce = await resPullForce.json();
+            assert.equal(pullBodyForce.success, true);
+            assert.equal(pullBodyForce.updated, true);
+            assert.equal(pullBodyForce.applied, true);
+
+            // 10e. Verify GET /api/agent/sync-status
+            const resSyncStatus = await fetch(`${baseUrl}/api/agent/sync-status`);
+            assert.equal(resSyncStatus.status, 200);
+            const syncStatusBody = await resSyncStatus.json();
+            assert.equal(syncStatusBody.success, true);
+            assert.equal(syncStatusBody.enabled, true);
+            assert.equal(syncStatusBody.lastSyncStatus, 'synced');
+            assert.equal(syncStatusBody.lastSyncedPublishedAt, snapshotTimestamp);
+
+            // 10f. Verify ScheduleManager.executeUpdate() pulls newer GitHub snapshot and skips local patrol
+            const newerTimestamp = '2026-11-07T08:00:00.000Z';
+            mockSnapshotPayload = {
+                ...mockSnapshotPayload,
+                publishedAt: newerTimestamp,
+                lastUpdated: newerTimestamp
+            };
+            // Set stateManager.lastUpdated to 30 minutes ago so 10-minute guard allows executeUpdate() to run
+            stateManager.set('lastUpdated', new Date(Date.now() - 30 * 60 * 1000).toISOString(), false);
+            await services.scheduleManager.executeUpdate();
+            assert.equal(stateManager.get('lastUpdated'), newerTimestamp, 'ScheduleManager.executeUpdate() should apply newer GitHub snapshot');
+        } finally {
+            delete process.env.GITHUB_SNAPSHOT_URL;
+            await new Promise((resolve) => mockGhServer.close(() => resolve()));
+        }
     });
 });

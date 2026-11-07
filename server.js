@@ -20,6 +20,7 @@ const NewsService = require('./services/news_service');
 const AIService = require('./services/ai_service');
 const NewsAgentService = require('./services/news_agent_service');
 const ScheduleManager = require('./utils/schedule_manager');
+const { GitHubSyncManager } = require('./utils/github_sync');
 const initializeApiRoutes = require('./routes/api');
 const { getGlobalSourceMatrix } = require('./config/global_sources');
 
@@ -92,7 +93,8 @@ app.use('/api', (req, res, next) => {
 const newsService = new NewsService(io, stateManager);
 const aiService = new AIService(io, stateManager);
 const newsAgentService = new NewsAgentService(io, stateManager, aiService, newsService);
-const scheduleManager = new ScheduleManager(newsService, io, stateManager, newsAgentService, aiService);
+const githubSyncManager = new GitHubSyncManager({ newsService, aiService, newsAgentService }, io, stateManager);
+const scheduleManager = new ScheduleManager(newsService, io, stateManager, newsAgentService, aiService, githubSyncManager);
 
 app.locals.stateManager = stateManager;
 
@@ -123,7 +125,8 @@ const services = {
     newsService,
     aiService,
     newsAgentService,
-    scheduleManager
+    scheduleManager,
+    githubSyncManager
 };
 
 // 健康与版本端点
@@ -291,6 +294,23 @@ async function startServer() {
 
             app.locals.services = services;
             scheduleManager.start();
+
+            if (
+                (config.githubSync?.enabled ?? config.agent?.githubSyncEnabled) &&
+                (config.githubSync?.syncOnStartup ?? true) &&
+                process.env.NODE_ENV !== 'test'
+            ) {
+                setImmediate(async () => {
+                    try {
+                        const syncRes = await githubSyncManager.pullAndApply({ force: false, trigger: 'startup' });
+                        if (syncRes && syncRes.applied) {
+                            logger.success('SYSTEM', `启动时已从 GitHub 快照分支同步最新新闻 (${syncRes.displayedCount} 条)`);
+                        }
+                    } catch (err) {
+                        logger.debug('SYSTEM', `启动时检查 GitHub 快照跳过: ${err.message}`);
+                    }
+                });
+            }
 
             // 启动自愈：仅当本地缓存的新闻存在未翻译条目或缺失配图时，才在后台执行自动补全
             if (Array.isArray(finalNewsData) && finalNewsData.length > 0 && services.aiService && services.newsAgentService) {

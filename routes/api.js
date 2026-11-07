@@ -14,7 +14,33 @@ const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
  */
 function initializeApiRoutes(services, io, stateManager) {
     const router = express.Router();
-    const { newsService, aiService, scheduleManager, newsAgentService } = services;
+    const { newsService, aiService, scheduleManager, newsAgentService, githubSyncManager } = services;
+
+    const verifyPublishSecret = (req) => {
+        const expectedSecret = String(
+            process.env.PUBLISH_SECRET !== undefined
+                ? process.env.PUBLISH_SECRET
+                : (process.env.PUBLISH_API_KEY !== undefined
+                    ? process.env.PUBLISH_API_KEY
+                    : (config.agent?.publishSecret || ''))
+        ).trim();
+
+        if (!expectedSecret) {
+            return { authorized: true };
+        }
+
+        const authHeader = String(req.get('Authorization') || req.headers?.authorization || '').trim();
+        const bearerToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+        const publishSecretHeader = String(req.get('x-publish-secret') || req.headers?.['x-publish-secret'] || '').trim();
+        const apiKeyHeader = String(req.get('x-api-key') || req.headers?.['x-api-key'] || '').trim();
+        const bodySecret = String(req.body?.secret || '').trim();
+        const providedToken = bearerToken || publishSecretHeader || apiKeyHeader || bodySecret;
+
+        if (!providedToken || providedToken !== expectedSecret) {
+            return { authorized: false };
+        }
+        return { authorized: true };
+    };
 
     // 启动时加载持久化的今日综述数据
     (async () => {
@@ -124,8 +150,56 @@ function initializeApiRoutes(services, io, stateManager) {
             aiModel: aiService.getCurrentModelInfo(),
             jinaReaderEnabled: config.agent.jinaReaderEnabled,
             sourceStats: stateManager.get('sourceStats') || newsAgentService.getLastSourceStats() || [],
-            recentLogs: newsAgentService.getRecentAgentLogs()
+            recentLogs: newsAgentService.getRecentAgentLogs(),
+            githubSync: githubSyncManager ? githubSyncManager.getStatus() : null
         });
+    });
+
+    /**
+     * 获取 GitHub 快照中转同步状态
+     */
+    router.get('/agent/sync-status', (req, res) => {
+        res.json({
+            success: true,
+            ...(githubSyncManager ? githubSyncManager.getStatus() : { enabled: false })
+        });
+    });
+
+    /**
+     * 从 GitHub 快照分支 (默认 ag-snapshot/latest.json) 拉取最新精编新闻并应用至软路由
+     */
+    router.post('/agent/pull-github', async (req, res) => {
+        try {
+            const auth = verifyPublishSecret(req);
+            if (!auth.authorized) {
+                return res.status(401).json({
+                    success: false,
+                    message: '未授权的同步请求 (Invalid PUBLISH_SECRET)'
+                });
+            }
+
+            if (!githubSyncManager) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'GitHubSyncManager 未初始化'
+                });
+            }
+
+            const result = await githubSyncManager.pullAndApply({
+                snapshotUrl: req.body?.snapshotUrl || null,
+                force: Boolean(req.body?.force),
+                trigger: 'api'
+            });
+
+            res.json(result);
+        } catch (error) {
+            logger.error('API', '从 GitHub 拉取快照失败', error.message);
+            const statusCode = error.statusCode || 502;
+            res.status(statusCode).json({
+                success: false,
+                message: '从 GitHub 同步快照失败: ' + error.message
+            });
+        }
     });
 
     /**
@@ -199,37 +273,27 @@ function initializeApiRoutes(services, io, stateManager) {
      */
     router.post('/agent/publish', async (req, res) => {
         try {
-            const expectedSecret = String(
-                process.env.PUBLISH_SECRET !== undefined
-                    ? process.env.PUBLISH_SECRET
-                    : (process.env.PUBLISH_API_KEY !== undefined
-                        ? process.env.PUBLISH_API_KEY
-                        : (config.agent?.publishSecret || ''))
-            ).trim();
-
-            if (expectedSecret) {
-                const authHeader = String(req.get('Authorization') || req.headers?.authorization || '').trim();
-                const bearerToken = authHeader.replace(/^Bearer\s+/i, '').trim();
-                const apiKeyHeader = String(req.get('x-api-key') || req.headers?.['x-api-key'] || '').trim();
-                const bodySecret = String(req.body?.secret || '').trim();
-                const providedToken = bearerToken || apiKeyHeader || bodySecret;
-
-                if (!providedToken || providedToken !== expectedSecret) {
-                    return res.status(401).json({
-                        success: false,
-                        message: '未授权的发布请求 (Invalid PUBLISH_SECRET)'
-                    });
-                }
+            const auth = verifyPublishSecret(req);
+            if (!auth.authorized) {
+                return res.status(401).json({
+                    success: false,
+                    message: '未授权的发布请求 (Invalid PUBLISH_SECRET)'
+                });
             }
 
             const {
                 news,
                 allEnhancedNews = null,
-                summaryArticle = null,
+                summaryArticle: rawSummaryArticle = null,
+                summary = null,
                 summaryMarkdown = null,
                 sourceStats = [],
-                lastUpdated = null
+                lastUpdated = null,
+                publishedAt = null
             } = req.body || {};
+
+            const summaryArticle = rawSummaryArticle || summary || null;
+            const effectiveLastUpdated = lastUpdated || publishedAt || null;
 
             if (!Array.isArray(news) || news.length === 0) {
                 return res.status(400).json({
@@ -238,7 +302,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 });
             }
 
-            const parsedDate = lastUpdated ? new Date(lastUpdated) : new Date();
+            const parsedDate = effectiveLastUpdated ? new Date(effectiveLastUpdated) : new Date();
             const timestamp = isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
             const nowIso = timestamp.toISOString();
 
@@ -380,6 +444,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 displayedCount: normalizedNews.length,
                 totalPoolCount: normalizedFullPool.length,
                 hasSummary: Boolean(finalSummary),
+                publishedAt: nowIso,
                 lastUpdated: nowIso
             });
         } catch (error) {
