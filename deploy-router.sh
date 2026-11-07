@@ -1,12 +1,12 @@
 #!/bin/sh
 # ============================================================================
 # 聚核 CoreFeed v2.0 — OpenWrt / iStoreOS / Linux 软路由秒级热更新与部署脚本
-# 支持在 Windows CMD 直接远程调用:
-#   ssh root@10.10.20.10 "wget -qO- https://raw.githubusercontent.com/alanhsun/CoreFeed/main/deploy-router.sh | sh"
+# 支持在终端或 Windows CMD 远程调用 (将 <YOUR_ROUTER_IP> 替换为软路由实际 IP):
+#   ssh root@<YOUR_ROUTER_IP> "wget -qO- https://raw.githubusercontent.com/alanhsun/CoreFeed/main/deploy-router.sh | sh"
 # 若首次安装后后续只需秒级热更新代码:
-#   ssh root@10.10.20.10 "sh /opt/corefeed/deploy-router.sh"
+#   ssh root@<YOUR_ROUTER_IP> "sh /opt/corefeed/deploy-router.sh"
 # 若修改了 package.json 需要强制重新构建镜像:
-#   ssh root@10.10.20.10 "sh /opt/corefeed/deploy-router.sh --rebuild"
+#   ssh root@<YOUR_ROUTER_IP> "sh /opt/corefeed/deploy-router.sh --rebuild"
 # ============================================================================
 
 set -e
@@ -50,7 +50,7 @@ cd "${REMOTE_DIR}"
 
 if [ ! -f .env ] && [ -f .env.example ]; then
   cp .env.example .env
-  echo "📝 已生成默认 .env 配置文件 (内置 ag/gemini-4-argon-high 模型配置)"
+  echo "📝 已生成默认 .env 配置文件 (可在 ${REMOTE_DIR}/.env 中配置 AI_API_KEY)"
 fi
 
 if [ "${FORCE_REBUILD}" = "1" ] || ! docker image inspect corefeed:2.0 >/dev/null 2>&1; then
@@ -70,9 +70,6 @@ docker run -d \
   -e NODE_ENV=production \
   -e PORT=3120 \
   -e TZ=Asia/Shanghai \
-  -e AI_BASE_URL="https://nl.alansun.host:9443/v1" \
-  -e AI_API_KEY="sk-67a4e5e2baba0b27-666i7t-0f8052ff" \
-  -e AI_MODEL="ag/gemini-4-argon-high" \
   --env-file "${REMOTE_DIR}/.env" \
   -v "${REMOTE_DIR}/data:/app/data" \
   -v "${REMOTE_DIR}/logs:/app/logs" \
@@ -83,13 +80,15 @@ docker run -d \
   -v "${REMOTE_DIR}/routes:/app/routes" \
   -v "${REMOTE_DIR}/middleware:/app/middleware" \
   -v "${REMOTE_DIR}/utils:/app/utils" \
+  -v "${REMOTE_DIR}/scripts:/app/scripts" \
   -v "${REMOTE_DIR}/server.js:/app/server.js" \
   corefeed:2.0
 
 sleep 2
+ROUTER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo "========================================================"
 echo "✅ CoreFeed v2.0 已完成秒级热更新并启动！"
 docker ps --filter "name=corefeed"
-echo "🌐 请在浏览器打开: http://10.10.20.10:${APP_PORT}"
-echo "💡 后续更新只需执行: ssh root@10.10.20.10 \"sh /opt/corefeed/deploy-router.sh\""
+echo "🌐 请在浏览器打开: http://${ROUTER_IP:-<YOUR_ROUTER_IP>}:${APP_PORT}"
+echo "💡 后续更新只需执行: ssh root@${ROUTER_IP:-<YOUR_ROUTER_IP>} \"sh /opt/corefeed/deploy-router.sh\""
 echo "========================================================"

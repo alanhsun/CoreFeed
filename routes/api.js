@@ -194,6 +194,203 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
+    /**
+     * 接收由外部 Agent (如 Antigravity 客户端) 采集、聚类并精编完成的全球新闻与综述数据包
+     */
+    router.post('/agent/publish', async (req, res) => {
+        try {
+            const expectedSecret = String(
+                process.env.PUBLISH_SECRET !== undefined
+                    ? process.env.PUBLISH_SECRET
+                    : (process.env.PUBLISH_API_KEY !== undefined
+                        ? process.env.PUBLISH_API_KEY
+                        : (config.agent?.publishSecret || ''))
+            ).trim();
+
+            if (expectedSecret) {
+                const authHeader = String(req.get('Authorization') || req.headers?.authorization || '').trim();
+                const bearerToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+                const apiKeyHeader = String(req.get('x-api-key') || req.headers?.['x-api-key'] || '').trim();
+                const bodySecret = String(req.body?.secret || '').trim();
+                const providedToken = bearerToken || apiKeyHeader || bodySecret;
+
+                if (!providedToken || providedToken !== expectedSecret) {
+                    return res.status(401).json({
+                        success: false,
+                        message: '未授权的发布请求 (Invalid PUBLISH_SECRET)'
+                    });
+                }
+            }
+
+            const {
+                news,
+                allEnhancedNews = null,
+                summaryArticle = null,
+                summaryMarkdown = null,
+                sourceStats = [],
+                lastUpdated = null
+            } = req.body || {};
+
+            if (!Array.isArray(news) || news.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: '推送的 news 数组不能为空'
+                });
+            }
+
+            const parsedDate = lastUpdated ? new Date(lastUpdated) : new Date();
+            const timestamp = isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
+            const nowIso = timestamp.toISOString();
+
+            const normalizeArticle = (item, idx) => {
+                const rawTitle = String(item?.title || item?.translatedTitle || `News #${idx + 1}`).trim();
+                const zhTitle = String(item?.translatedTitle || rawTitle).trim();
+                const rawDesc = String(item?.description || item?.summary || item?.translatedDescription || item?.content || rawTitle).trim();
+                const zhSummary = String(item?.summary || item?.translatedDescription || rawDesc).trim();
+                const sourceObj = (item?.source && typeof item.source === 'object')
+                    ? { ...item.source, name: String(item.source.name || 'Global Media').trim() }
+                    : { id: 'external', name: String(item?.source || item?.sourceName || 'Global Media').trim(), strategy: 'agent_publish' };
+                const relatedSources = Array.isArray(item?.relatedSources) ? item.relatedSources : [];
+                const keyPoints = Array.isArray(item?.keyPoints) ? item.keyPoints.filter(Boolean).map(String) : [];
+                const region = item?.region || aiService.determineNewsRegionSync(`${rawTitle} ${zhTitle}`, `${rawDesc} ${zhSummary}`, sourceObj.name, '国际');
+                const category = item?.category || aiService.determineNewsCategorySync(`${rawTitle} ${zhTitle}`, `${rawDesc} ${zhSummary}`, sourceObj.category || '', '国际');
+
+                return {
+                    ...item,
+                    id: item?.id || `ag-${Date.now()}-${idx + 1}`,
+                    title: rawTitle,
+                    translatedTitle: zhTitle,
+                    description: rawDesc,
+                    translatedDescription: zhSummary,
+                    summary: zhSummary,
+                    content: String(item?.content || item?.fullTextContent || rawDesc).trim(),
+                    fullTextContent: item?.fullTextContent || null,
+                    url: item?.url || '',
+                    urlToImage: item?.urlToImage || null,
+                    publishedAt: item?.publishedAt || nowIso,
+                    processedAt: item?.processedAt || nowIso,
+                    region,
+                    category,
+                    keyPoints,
+                    aiCompiled: item?.aiCompiled !== undefined ? Boolean(item.aiCompiled) : true,
+                    qualityScore: Number(item?.qualityScore) || 88,
+                    source: sourceObj,
+                    relatedSources,
+                    sourceCount: Number(item?.sourceCount) || (1 + relatedSources.length)
+                };
+            };
+
+            const normalizedNews = news.filter(Boolean).map((item, idx) => normalizeArticle(item, idx));
+            if (normalizedNews.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: '推送的 news 数组不包含有效新闻对象'
+                });
+            }
+
+            const normalizedFullPool = Array.isArray(allEnhancedNews) && allEnhancedNews.length > 0
+                ? allEnhancedNews.filter(Boolean).map((item, idx) => normalizeArticle(item, idx))
+                : normalizedNews;
+            const normalizedStats = Array.isArray(sourceStats) ? sourceStats : [];
+
+            // 1. 同步更新 NewsService、StateManager、写入 data/news.json 并广播 news-updated
+            newsAgentService.lastSourceStats = normalizedStats;
+            await newsAgentService._publishNewsSnapshot(
+                normalizedNews,
+                normalizedFullPool,
+                normalizedStats,
+                timestamp,
+                'completed'
+            );
+            stateManager.set('lastUpdated', nowIso, false);
+
+            // 2. 处理并持久化今日深度综述 (支持完整对象、仅含 content 的对象或 Markdown 字符串)
+            let finalSummary = null;
+            const currentDate = timestamp.toLocaleDateString('zh-CN', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                weekday: 'long',
+                timeZone: 'Asia/Shanghai'
+            });
+
+            const rawMdInput = typeof summaryArticle === 'string'
+                ? summaryArticle.trim()
+                : (typeof summaryMarkdown === 'string' ? summaryMarkdown.trim() : '');
+
+            if (rawMdInput) {
+                const firstLine = rawMdInput.split('\n').map(l => l.trim()).find(Boolean) || '';
+                const mdWithTitle = /^(#{2,4}\s|【)/.test(firstLine)
+                    ? `${currentDate} 全球要闻深度综述\n\n${rawMdInput}`
+                    : rawMdInput;
+                finalSummary = aiService.createSummaryArticleObject(mdWithTitle, normalizedNews, currentDate);
+            } else if (summaryArticle && typeof summaryArticle === 'object') {
+                const rawBody = String(summaryArticle.content || summaryArticle.markdown || '').trim();
+                const normalizedBody = rawBody
+                    ? rawBody.split('\n').map(l => l.trim()).filter(Boolean).join('\n\n')
+                    : '';
+                const htmlContent = summaryArticle.htmlContent
+                    || (normalizedBody ? aiService.convertSummaryToRichHtml(normalizedBody, normalizedNews) : '');
+
+                if (htmlContent || normalizedBody) {
+                    const plainForSummary = normalizedBody.replace(/\[NEWS_\d+\]/g, '').replace(/#+\s*/g, '');
+                    finalSummary = {
+                        title: summaryArticle.title || `${currentDate} 全球要闻深度综述`,
+                        content: normalizedBody || rawBody,
+                        htmlContent,
+                        newsCount: Number(summaryArticle.newsCount) || normalizedNews.length,
+                        regions: Array.isArray(summaryArticle.regions) && summaryArticle.regions.length > 0
+                            ? summaryArticle.regions
+                            : [...new Set(normalizedNews.map(n => n.region || '国际'))],
+                        generatedAt: summaryArticle.generatedAt || nowIso,
+                        summary: summaryArticle.summary || plainForSummary.slice(0, 160),
+                        wordCount: Number(summaryArticle.wordCount) || (normalizedBody || htmlContent).length
+                    };
+                }
+            }
+
+            if (finalSummary) {
+                stateManager.updateSummaryArticle(finalSummary);
+                await writeJsonFile(config.storage.summaryFile, {
+                    article: finalSummary,
+                    savedAt: new Date().toISOString(),
+                    version: '2.0'
+                });
+                if (io) {
+                    io.emit('summary-completed', {
+                        success: true,
+                        article: finalSummary
+                    });
+                }
+            }
+
+            // 3. 立即将内存状态持久化至 data/state.json，防止 5 分钟定时器覆盖
+            await stateManager.saveToFile();
+
+            newsAgentService.emitAgentEvent(
+                'Antigravity 客户端',
+                'completed',
+                `已同步发布 ${normalizedNews.length} 条精选新闻${finalSummary ? '及今日全球要闻深度综述' : ''}`,
+                { progress: 100, current: normalizedNews.length, total: normalizedFullPool.length }
+            );
+
+            res.json({
+                success: true,
+                message: `成功发布 ${normalizedNews.length} 条全球精选新闻${finalSummary ? '与今日深度综述' : ''}`,
+                displayedCount: normalizedNews.length,
+                totalPoolCount: normalizedFullPool.length,
+                hasSummary: Boolean(finalSummary),
+                lastUpdated: nowIso
+            });
+        } catch (error) {
+            logger.error('API', '接收外部发布新闻数据失败', error.message);
+            res.status(500).json({
+                success: false,
+                message: '发布失败: ' + error.message
+            });
+        }
+    });
+
     // ==================== 2. 全球知名信源矩阵管理接口 ====================
 
     router.get('/sources/matrix', (req, res) => {
@@ -428,7 +625,12 @@ function initializeApiRoutes(services, io, stateManager) {
             const updates = req.body || {};
             config.saveDynamicSettings(updates);
             aiService.refreshConfig();
-            if (scheduleManager && (updates.AUTO_UPDATE_ENABLED !== undefined || updates.UPDATE_TIMES !== undefined)) {
+            if (
+                scheduleManager &&
+                (updates.AUTO_UPDATE_ENABLED !== undefined ||
+                    updates.UPDATE_TIMES !== undefined ||
+                    updates.scheduleTimes !== undefined)
+            ) {
                 scheduleManager.restart();
             }
             res.json({
@@ -483,23 +685,37 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    router.get('/schedule/config', (req, res) => {
+    const handleScheduleStatus = (req, res) => {
+        const status = scheduleManager ? scheduleManager.getStatus() : {
+            isRunning: false,
+            enabled: config.news.autoUpdateEnabled,
+            updateTimes: config.news.updateTimes,
+            scheduleTimes: config.news.scheduleTimes || config.news.updateTimes,
+            timezone: config.news.timezone || 'Asia/Shanghai',
+            tasksCount: 0,
+            nextExecution: '未设置'
+        };
         res.json({
             success: true,
-            schedule: scheduleManager ? scheduleManager.getStatus() : {
-                enabled: config.news.autoUpdateEnabled,
-                updateTimes: config.news.updateTimes
-            }
+            ...status,
+            schedule: status
         });
-    });
+    };
+
+    router.get('/schedule/config', handleScheduleStatus);
+    router.get('/schedule/status', handleScheduleStatus);
 
     router.post('/schedule/config', (req, res) => {
         try {
-            const { enabled, updateTimes } = req.body || {};
-            const timesStr = Array.isArray(updateTimes) ? updateTimes.join(',') : String(updateTimes || '06:00,16:30');
+            const body = req.body || {};
+            const rawTimes = body.updateTimes !== undefined ? body.updateTimes : body.scheduleTimes;
+            const timesStr = Array.isArray(rawTimes)
+                ? rawTimes.join(',')
+                : String(rawTimes || '08:00,12:30,19:30');
+            const enabled = body.enabled !== undefined ? Boolean(body.enabled) : true;
 
             config.saveDynamicSettings({
-                AUTO_UPDATE_ENABLED: Boolean(enabled),
+                AUTO_UPDATE_ENABLED: enabled,
                 UPDATE_TIMES: timesStr
             });
 
@@ -507,10 +723,19 @@ function initializeApiRoutes(services, io, stateManager) {
                 scheduleManager.restart();
             }
 
+            const status = scheduleManager ? scheduleManager.getStatus() : {
+                isRunning: false,
+                enabled: config.news.autoUpdateEnabled,
+                updateTimes: config.news.updateTimes,
+                scheduleTimes: config.news.scheduleTimes || config.news.updateTimes,
+                timezone: config.news.timezone || 'Asia/Shanghai'
+            };
+
             res.json({
                 success: true,
                 message: '定时巡检配置已更新',
-                schedule: scheduleManager ? scheduleManager.getStatus() : null
+                ...status,
+                schedule: status
             });
         } catch (error) {
             res.status(500).json({

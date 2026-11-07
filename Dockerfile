@@ -9,7 +9,7 @@ LABEL maintainer="Alan Sun"
 LABEL version="2.0.0"
 LABEL description="CoreFeed v2.0 - Global News Intelligence & Progressive Compilation Platform"
 
-# 安装系统依赖与时区数据（确保 06:00 / 16:30 定时采集按北京时间触发）
+# 安装系统依赖与时区数据（确保 08:00 / 12:30 / 19:30 定时采集按北京时间触发）
 RUN apk add --no-cache \
     wget \
     curl \

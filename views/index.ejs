@@ -46,7 +46,7 @@
                 <div class="flex flex-wrap items-center gap-3">
                     <div class="flex items-center gap-2">
                         <span id="socketStatusDot" class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                        <span id="aiModelBadge" class="font-medium"><%= config.aiModel || 'ag/gemini-4-argon-high' %></span>
+                        <span id="aiModelBadge" class="font-medium"><%= config.aiModel || 'gpt-4o-mini' %></span>
                         <span>·</span>
                         <span>已启用 <strong id="enabledSourcesCount" style="color: var(--brand); font-variant-numeric: tabular-nums;"><%= (sourceMatrix || []).filter(s => s.enabled).length %></strong> 家全球名媒</span>
                     </div>
@@ -386,8 +386,8 @@
                 <div class="space-y-3 pt-4" style="border-top: 1px solid var(--border);">
                     <h4 class="text-base" style="color: var(--brand); margin: 0;">三 · 定时自动采集任务</h4>
                     <div>
-                        <label class="block text-xs mb-1" style="color: var(--stone);">每日自动采集时间 (逗号分隔，如 06:00,16:30，北京时间)</label>
-                        <input id="cfgUpdateTimes" type="text" placeholder="06:00,16:30" class="kami-input w-full text-xs">
+                        <label class="block text-xs mb-1" style="color: var(--stone);">每日自动采集时间 (逗号分隔，如 08:00,12:30,19:30 早中晚三次，北京时间)</label>
+                        <input id="cfgUpdateTimes" type="text" placeholder="08:00,12:30,19:30" class="kami-input w-full text-xs">
                     </div>
                 </div>
             </div>

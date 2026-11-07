@@ -1,0 +1,387 @@
+#!/usr/bin/env node
+/**
+ * CoreFeed v2.0 — Antigravity Path A: 阶段二新闻合入、二次聚类与远程发布工具 (ag-publish.js)
+ *
+ * 功能说明：
+ *   读取 `data/ag_candidates.json` 与编译结果 `data/ag_compiled.json`，将中文精编标题、摘要、
+ *   要点、分类标签及单篇深读内容合入候选文章，支持通过 `duplicateGroups` 并查集 (Union-Find)
+ *   执行二次语义去重与 `relatedSources` 多媒交叉印证合并，自动将综述中的 `[NEWS_k]` 引用渲染为
+ *   可点击的原文锚点，并通过 `POST /api/agent/publish` 推送至目标 CoreFeed 站点。
+ *
+ * 常用参数：
+ *   --candidates <path>    候选新闻输入路径 (默认: data/ag_candidates.json)
+ *   --compiled <path>      编译结果输入路径 (默认: data/ag_compiled.json)
+ *   --target <url>         目标 CoreFeed 服务地址 (默认: http://localhost:3120)
+ *   --secret <token>       发布鉴权密钥 (对应 PUBLISH_SECRET)
+ *   --limit <number>       最终精选发布条数 (默认: 30)
+ *   --fallback-compile     当缺少预编译文件时自动使用内置编译/翻译兜底生成
+ *   --local-only           仅写入本地 data/*.json，不发起远程 HTTP 推送
+ */
+const path = require('path');
+const axios = require('axios');
+const https = require('https');
+const config = require('../config');
+const logger = require('../utils/logger');
+const { readJsonFile, writeJsonFile } = require('../utils/helpers');
+const AIService = require('../services/ai_service');
+const stateManager = require('../services/state_manager');
+
+const VALID_REGIONS = ['中国', '美国', '欧洲', '日本', '韩国', '东南亚', '中东', '非洲', '拉美', '澳洲', '亚洲', '国际'];
+const VALID_CATEGORIES = ['政经', '外交', '科技', '财经', '军事', '社会', '能源', '国际'];
+const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: false });
+
+function parseArgs(argv = process.argv.slice(2)) {
+    const defaultPort = config.server?.port || 3120;
+    const options = {
+        candidates: process.env.AG_CANDIDATES_FILE || path.join(config.storage.dataDir, 'ag_candidates.json'),
+        compiled: process.env.AG_COMPILED_FILE || path.join(config.storage.dataDir, 'ag_compiled.json'),
+        target: process.env.COREFEED_SITE_URL || config.agent?.siteUrl || `http://localhost:${defaultPort}`,
+        secret: process.env.PUBLISH_SECRET || process.env.PUBLISH_API_KEY || config.agent?.publishSecret || '',
+        limit: config.agent?.maxCuratedArticles || 30,
+        fallbackCompile: false,
+        localOnly: false
+    };
+
+    for (let i = 0; i < argv.length; i++) {
+        const arg = argv[i];
+        if (arg === '--candidates' && argv[i + 1]) {
+            options.candidates = path.resolve(argv[++i]);
+        } else if (arg.startsWith('--candidates=')) {
+            options.candidates = path.resolve(arg.split('=')[1]);
+        } else if (arg === '--compiled' && argv[i + 1]) {
+            options.compiled = path.resolve(argv[++i]);
+        } else if (arg.startsWith('--compiled=')) {
+            options.compiled = path.resolve(arg.split('=')[1]);
+        } else if (arg === '--target' && argv[i + 1]) {
+            options.target = argv[++i];
+        } else if (arg.startsWith('--target=')) {
+            options.target = arg.split('=')[1];
+        } else if (arg === '--secret' && argv[i + 1] !== undefined) {
+            options.secret = argv[++i];
+        } else if (arg.startsWith('--secret=')) {
+            options.secret = arg.split('=')[1];
+        } else if (arg === '--limit' && argv[i + 1]) {
+            options.limit = Math.max(1, parseInt(argv[++i], 10) || 30);
+        } else if (arg.startsWith('--limit=')) {
+            options.limit = Math.max(1, parseInt(arg.split('=')[1], 10) || 30);
+        } else if (arg === '--fallback-compile') {
+            options.fallbackCompile = true;
+        } else if (arg === '--local-only' || arg === '--no-push') {
+            options.localOnly = true;
+        }
+    }
+
+    return options;
+}
+
+function normalizeRegion(rawRegion, fallback = '国际') {
+    if (!rawRegion) return VALID_REGIONS.includes(fallback) ? fallback : '国际';
+    return VALID_REGIONS.find(r => String(rawRegion).includes(r)) || (VALID_REGIONS.includes(fallback) ? fallback : '国际');
+}
+
+function normalizeCategory(rawCategory, fallback = '国际') {
+    if (!rawCategory) return VALID_CATEGORIES.includes(fallback) ? fallback : '国际';
+    return VALID_CATEGORIES.find(c => String(rawCategory).includes(c)) || (VALID_CATEGORIES.includes(fallback) ? fallback : '国际');
+}
+
+async function runPublish(customOptions = {}) {
+    const opts = { ...parseArgs([]), ...customOptions };
+    const aiService = new AIService(null, stateManager);
+
+    const harvestData = await readJsonFile(opts.candidates);
+    if (!harvestData || !Array.isArray(harvestData.fullCandidates) || harvestData.fullCandidates.length === 0) {
+        throw new Error(`无法读取有效候选新闻集: ${opts.candidates}`);
+    }
+
+    let compiledData = await readJsonFile(opts.compiled, null);
+    if (!compiledData) {
+        if (opts.fallbackCompile) {
+            logger.warn('AG-PUBLISH', `未找到 ${opts.compiled}，启用 --fallback-compile 自动汉化与综述生成...`);
+            const translated = await aiService.ensureBatchInChinese(harvestData.fullCandidates, 8);
+            compiledData = {
+                duplicateGroups: [],
+                articles: translated.map((item, idx) => ({
+                    index: idx + 1,
+                    id: item.id,
+                    translatedTitle: item.translatedTitle || item.title,
+                    summary: item.summary || item.description,
+                    region: item.region || '国际',
+                    category: item.category || '国际',
+                    keyPoints: item.keyPoints || []
+                })),
+                summaryMarkdown: null
+            };
+        } else {
+            throw new Error(`缺少编译结果文件: ${opts.compiled}（可使用 --fallback-compile 启用自动兜底编译）`);
+        }
+    }
+
+    const rawCandidates = harvestData.fullCandidates;
+    const nowIso = new Date().toISOString();
+
+    // 1. 先按原始候选列表索引 (1-based index) 和 id 关联 Agent 编译字段，防止后续去重改变下标导致错位
+    const byId = new Map();
+    const byIndex = new Map();
+    if (Array.isArray(compiledData.articles)) {
+        compiledData.articles.forEach((entry, idx) => {
+            if (!entry || typeof entry !== 'object') return;
+            if (entry.id) byId.set(String(entry.id), entry);
+            const numIdx = typeof entry.index === 'number'
+                ? entry.index
+                : (typeof entry.id === 'number' ? entry.id : idx + 1);
+            if (!isNaN(numIdx) && numIdx >= 1) {
+                byIndex.set(numIdx, entry);
+            }
+        });
+    }
+
+    let annotatedCandidates = rawCandidates.map((article, idx) => {
+        const comp = (article.id && byId.get(String(article.id))) || byIndex.get(idx + 1) || null;
+        if (!comp) {
+            return {
+                ...article,
+                _hasAgentCompilation: false
+            };
+        }
+
+        const zhTitle = (comp.translatedTitle || comp.title || article.translatedTitle || article.title || '').trim();
+        const zhSummary = (comp.summary || comp.translatedDescription || comp.description || article.summary || article.description || '').trim();
+        const region = normalizeRegion(comp.region, article.region);
+        const category = normalizeCategory(comp.category, article.category);
+        const keyPoints = Array.isArray(comp.keyPoints)
+            ? comp.keyPoints.map(k => String(k).trim()).filter(Boolean).slice(0, 4)
+            : (Array.isArray(article.keyPoints) ? article.keyPoints : []);
+
+        return {
+            ...article,
+            translatedTitle: zhTitle,
+            translatedDescription: zhSummary,
+            summary: zhSummary,
+            region,
+            category,
+            keyPoints,
+            deepReadHtml: comp.deepReadHtml || article.deepReadHtml || undefined,
+            deepReadAnalysisHtml: comp.deepReadAnalysisHtml || article.deepReadAnalysisHtml || undefined,
+            deepReadAnalysis: comp.deepReadAnalysis || article.deepReadAnalysis || undefined,
+            aiCompiled: true,
+            processedAt: nowIso,
+            _hasAgentCompilation: true
+        };
+    });
+
+    // 2. 应用 Agent 识别出的同事件去重分组 (duplicateGroups) — 使用并查集 (Union-Find) 支持传递闭包并保持原序
+    const rawGroups = Array.isArray(compiledData.duplicateGroups) ? compiledData.duplicateGroups : [];
+    if (rawGroups.length > 0 && annotatedCandidates.length > 1) {
+        const n = annotatedCandidates.length;
+        const parent = Array.from({ length: n }, (_, i) => i);
+        const find = (x) => {
+            while (parent[x] !== x) {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            return x;
+        };
+        const union = (a, b) => {
+            const ra = find(a);
+            const rb = find(b);
+            if (ra !== rb) {
+                if (ra < rb) parent[rb] = ra;
+                else parent[ra] = rb;
+            }
+        };
+
+        for (const grp of rawGroups) {
+            if (!Array.isArray(grp) || grp.length < 2) continue;
+            const validIndices = grp
+                .map(v => parseInt(String(v).replace(/\D+/g, ''), 10) - 1)
+                .filter(idx => !isNaN(idx) && idx >= 0 && idx < n);
+            if (validIndices.length >= 2) {
+                const first = validIndices[0];
+                for (let k = 1; k < validIndices.length; k++) {
+                    union(first, validIndices[k]);
+                }
+            }
+        }
+
+        const clusterMap = new Map();
+        for (let i = 0; i < n; i++) {
+            const root = find(i);
+            if (!clusterMap.has(root)) clusterMap.set(root, []);
+            clusterMap.get(root).push(annotatedCandidates[i]);
+        }
+
+        const mergedList = [];
+        for (const group of clusterMap.values()) {
+            const merged = aiService._mergeArticleCluster(group);
+            // 若 _mergeArticleCluster 因分数重排选了未直接编译的条目作为 primary，把同簇已编译条目的中文精编字段继承过来
+            const compiledMember = group.find(m => m._hasAgentCompilation);
+            if (merged && compiledMember && !merged._hasAgentCompilation) {
+                merged.translatedTitle = compiledMember.translatedTitle;
+                merged.translatedDescription = compiledMember.translatedDescription;
+                merged.summary = compiledMember.summary;
+                merged.region = compiledMember.region;
+                merged.category = compiledMember.category;
+                if (!Array.isArray(merged.keyPoints) || merged.keyPoints.length === 0) {
+                    merged.keyPoints = compiledMember.keyPoints || [];
+                }
+                if (compiledMember.deepReadHtml && !merged.deepReadHtml) {
+                    merged.deepReadHtml = compiledMember.deepReadHtml;
+                }
+                if (compiledMember.deepReadAnalysis && !merged.deepReadAnalysis) {
+                    merged.deepReadAnalysis = compiledMember.deepReadAnalysis;
+                }
+                merged.aiCompiled = true;
+                merged.processedAt = nowIso;
+            }
+            if (merged) {
+                delete merged._hasAgentCompilation;
+                mergedList.push(merged);
+            }
+        }
+        annotatedCandidates = mergedList;
+    } else {
+        annotatedCandidates.forEach(item => {
+            delete item._hasAgentCompilation;
+        });
+    }
+
+    // 3. 若 compiledData 仅按去重后顺序提供 articles，或部分条目未命中中文翻译，确保最终列表全部拥有合规中文元数据
+    const needFallbackChinese = annotatedCandidates.some(a => !aiService.isChineseText(a.translatedTitle || '') || !aiService.isChineseText(a.summary || ''));
+    if (needFallbackChinese && opts.fallbackCompile) {
+        annotatedCandidates = await aiService.ensureBatchInChinese(annotatedCandidates, 6);
+    }
+
+    const allEnhancedNews = annotatedCandidates.map(article => ({
+        ...article,
+        translatedTitle: article.translatedTitle || article.title,
+        translatedDescription: article.translatedDescription || article.summary || article.description || article.title,
+        summary: article.summary || article.translatedDescription || article.description || article.title,
+        region: normalizeRegion(article.region, '国际'),
+        category: normalizeCategory(article.category, '国际'),
+        keyPoints: Array.isArray(article.keyPoints) ? article.keyPoints : [],
+        aiCompiled: Boolean(article.aiCompiled || aiService.isChineseText(article.translatedTitle || '')),
+        processedAt: article.processedAt || nowIso
+    }));
+
+    const finalNews = allEnhancedNews.slice(0, opts.limit);
+
+    // 4. 构建《今日全球要闻深度综述》并渲染 [NEWS_k] 引用链接
+    const currentDate = new Date().toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        weekday: 'long',
+        timeZone: 'Asia/Shanghai'
+    });
+
+    let summaryArticle = null;
+    if (compiledData.summaryArticle && typeof compiledData.summaryArticle === 'object') {
+        const rawSummary = compiledData.summaryArticle;
+        const content = rawSummary.content || compiledData.summaryMarkdown || '';
+        const htmlContent = rawSummary.htmlContent || aiService.convertSummaryToRichHtml(content, finalNews);
+        summaryArticle = {
+            title: rawSummary.title || `${currentDate} 全球要闻深度综述`,
+            content,
+            htmlContent,
+            newsCount: rawSummary.newsCount || finalNews.length,
+            regions: Array.isArray(rawSummary.regions) && rawSummary.regions.length > 0
+                ? rawSummary.regions
+                : [...new Set(finalNews.map(n => n.region || '国际'))],
+            generatedAt: rawSummary.generatedAt || nowIso,
+            summary: rawSummary.summary || content.replace(/\[NEWS_\d+\]/g, '').replace(/#+\s*/g, '').trim().slice(0, 160),
+            wordCount: rawSummary.wordCount || content.length
+        };
+    } else if (typeof compiledData.summaryMarkdown === 'string' && compiledData.summaryMarkdown.trim().length > 0) {
+        const rawMd = compiledData.summaryMarkdown.trim();
+        const firstLine = rawMd.split('\n').map(l => l.trim()).find(Boolean) || '';
+        const mdWithTitle = /^(#{2,4}\s|【)/.test(firstLine)
+            ? `${currentDate} 全球要闻深度综述\n\n${rawMd}`
+            : rawMd;
+        summaryArticle = aiService.createSummaryArticleObject(mdWithTitle, finalNews, currentDate);
+    } else {
+        summaryArticle = aiService._buildFallbackSummaryObject(finalNews, currentDate);
+    }
+
+    const sourceStats = harvestData.sourceStats || [];
+
+    // 5. 先完成本地持久化 (data/news.json, data/summary.json, data/state.json)，避免与本地服务端并发写盘竞争
+    await writeJsonFile(config.storage.newsFile, {
+        news: finalNews,
+        lastUpdated: nowIso,
+        total: finalNews.length
+    });
+
+    await writeJsonFile(config.storage.summaryFile, {
+        article: summaryArticle,
+        savedAt: nowIso,
+        version: '2.0'
+    });
+
+    stateManager.set('collectionPhase', 'completed', false);
+    stateManager.set('sourceStats', sourceStats, false);
+    stateManager.updateNewsData(finalNews, allEnhancedNews);
+    stateManager.updateSummaryArticle(summaryArticle);
+    await stateManager.saveToFile(config.storage.stateFile);
+
+    logger.info(
+        'AG-PUBLISH',
+        `本地数据文件已更新: news=${finalNews.length} 条 (总池 ${allEnhancedNews.length} 条), summary=${summaryArticle.wordCount} 字`
+    );
+
+    // 6. 通过 HTTP POST 推送至网站 /api/agent/publish 接口
+    let remoteResponse = null;
+    if (!opts.localOnly && opts.target) {
+        const cleanTarget = opts.target.replace(/\/+$/, '');
+        const publishUrl = cleanTarget.endsWith('/api/agent/publish')
+            ? cleanTarget
+            : `${cleanTarget}/api/agent/publish`;
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (opts.secret) {
+            headers['Authorization'] = `Bearer ${opts.secret}`;
+            headers['x-api-key'] = opts.secret;
+        }
+
+        const response = await axios.post(
+            publishUrl,
+            {
+                news: finalNews,
+                allEnhancedNews,
+                summaryArticle,
+                sourceStats,
+                lastUpdated: nowIso
+            },
+            {
+                headers,
+                timeout: 20000,
+                httpsAgent: httpsAgentIgnoreTls
+            }
+        );
+
+        remoteResponse = response.data;
+        logger.success('AG-PUBLISH', `成功推送至网站 ${publishUrl}:`, remoteResponse);
+    }
+
+    return {
+        success: true,
+        displayedCount: finalNews.length,
+        totalPoolCount: allEnhancedNews.length,
+        summaryArticle,
+        lastUpdated: nowIso,
+        remoteResponse
+    };
+}
+
+if (require.main === module) {
+    const cliOpts = parseArgs(process.argv.slice(2));
+    runPublish(cliOpts)
+        .then(() => process.exit(0))
+        .catch(err => {
+            const status = err.response?.status ? ` (HTTP ${err.response.status})` : '';
+            const detail = err.response?.data?.message || err.message;
+            console.error(`[AG-PUBLISH] 发布失败${status}:`, detail);
+            process.exit(1);
+        });
+}
+
+module.exports = { runPublish, parseArgs };

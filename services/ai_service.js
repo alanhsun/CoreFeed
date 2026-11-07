@@ -20,6 +20,7 @@ class AIService {
         this.io = io;
         this.stateManager = stateManager;
         this.modelConfig = {};
+        this._endpointUnreachableUntil = 0;
         this.initializeServices();
         this._initRateLimiter();
     }
@@ -42,10 +43,14 @@ class AIService {
 
     initializeServices() {
         const minimaxConfig = config.minimax || {};
+        const nextBaseUrl = (minimaxConfig.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+        if (this.modelConfig && this.modelConfig.baseUrl && this.modelConfig.baseUrl !== nextBaseUrl) {
+            this._endpointUnreachableUntil = 0;
+        }
         this.modelConfig = {
             apiKey: minimaxConfig.apiKey || '',
-            baseUrl: (minimaxConfig.baseUrl || 'https://nl.alansun.host:9443/v1').replace(/\/+$/, ''),
-            model: minimaxConfig.model || 'ag/gemini-4-argon-high',
+            baseUrl: nextBaseUrl,
+            model: minimaxConfig.model || 'gpt-4o-mini',
             provider: 'OpenAI-Compatible'
         };
     }
@@ -84,7 +89,7 @@ class AIService {
     }
 
     /**
-     * 底层大模型调用 (使用 axios + TLS 容错，全面兼容自建反代与 OpenAI/Gemini 网关)
+     * 底层大模型调用 (使用 axios + TLS 容错 + 不可达快速熔断，全面兼容自建反代与 OpenAI/Gemini 网关)
      */
     async _callAI(messages, model = null, options = {}) {
         const { priority = 5, timeout = 90000, bypassRateLimiter = false, maxRetries = 2 } = options;
@@ -95,9 +100,17 @@ class AIService {
             throw new Error('AI_API_KEY 未配置');
         }
 
+        if (Date.now() < this._endpointUnreachableUntil) {
+            throw new Error('AI 端点连接超时熔断中');
+        }
+
         const modelToUse = model || this.modelConfig.model;
 
         const doRequest = async () => {
+            if (Date.now() < this._endpointUnreachableUntil) {
+                throw new Error('AI 端点连接超时熔断中');
+            }
+
             const headers = {
                 'Authorization': `Bearer ${this.modelConfig.apiKey}`,
                 'Content-Type': 'application/json',
@@ -117,15 +130,19 @@ class AIService {
             try {
                 response = await axios.post(`${this.modelConfig.baseUrl}/chat/completions`, requestBody, {
                     headers,
-                    timeout,
+                    timeout: Math.min(timeout, 15000),
                     httpsAgent: httpsAgentIgnoreTls,
                     validateStatus: () => true
                 });
             } catch (netErr) {
+                this._endpointUnreachableUntil = Date.now() + 180000;
                 throw new Error(`大模型网络请求失败: ${netErr.message}`);
             }
 
             if (response.status < 200 || response.status >= 300) {
+                if (response.status === 403 || response.status === 502 || response.status === 504) {
+                    this._endpointUnreachableUntil = Date.now() + 180000;
+                }
                 const errText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
                 throw new Error(`HTTP ${response.status}: ${errText.substring(0, 300)}`);
             }

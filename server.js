@@ -236,6 +236,8 @@ async function startServer() {
             stateManager.set('allEnhancedNews', currentNewsData, false);
         }
 
+        const preservedLastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
+        const preservedAllEnhanced = stateManager.get('allEnhancedNews');
         let finalNewsData = stateManager.get('newsData');
         if (Array.isArray(finalNewsData) && finalNewsData.length > 1 && aiService) {
             const fixedMeta = finalNewsData.map(item => ({
@@ -255,7 +257,13 @@ async function startServer() {
             }));
             const deduped = aiService.mergeDuplicateArticlesSync(fixedMeta);
             finalNewsData = deduped;
-            stateManager.updateNewsData(deduped, deduped);
+            const poolToKeep = Array.isArray(preservedAllEnhanced) && preservedAllEnhanced.length >= deduped.length
+                ? preservedAllEnhanced
+                : deduped;
+            stateManager.updateNewsData(deduped, poolToKeep);
+            if (preservedLastUpdated) {
+                stateManager.set('lastUpdated', preservedLastUpdated, false);
+            }
         }
         logger.info('SYSTEM', '本地新闻库加载完成', {
             count: finalNewsData?.length || 0
@@ -284,36 +292,38 @@ async function startServer() {
             app.locals.services = services;
             scheduleManager.start();
 
-            // 启动自愈：如果本地已缓存的新闻存在未翻译条目、同事件异题重复或缺失配图，后台自动补全汉化、AI语义去重与标题图
+            // 启动自愈：仅当本地缓存的新闻存在未翻译条目或缺失配图时，才在后台执行自动补全
             if (Array.isArray(finalNewsData) && finalNewsData.length > 0 && services.aiService && services.newsAgentService) {
                 const hasUntranslated = finalNewsData.some(item => !services.aiService.isChineseText(item.translatedTitle) || !services.aiService.isChineseText(item.summary));
                 const hasMissingImages = finalNewsData.some(item => !item.urlToImage);
-                setImmediate(async () => {
-                    try {
-                        let updatedList = [...finalNewsData];
-                        if (hasUntranslated) {
-                            logger.info('SYSTEM', '检测到本地缓存新闻包含未汉化条目，正在后台自动补全...');
-                            updatedList = await services.aiService.ensureBatchInChinese(updatedList, 6);
+                if (hasUntranslated || hasMissingImages) {
+                    setImmediate(async () => {
+                        try {
+                            let updatedList = [...finalNewsData];
+                            if (hasUntranslated) {
+                                logger.info('SYSTEM', '检测到本地缓存新闻包含未汉化条目，正在后台自动补全...');
+                                updatedList = await services.aiService.ensureBatchInChinese(updatedList, 6);
+                            }
+                            if (services.aiService.getCurrentModelInfo().apiKeyConfigured && updatedList.length > 1) {
+                                updatedList = await services.aiService.deduplicateWithLLM(updatedList, { maxInspect: 40, timeout: 25000 });
+                            } else {
+                                updatedList = services.aiService.mergeDuplicateArticlesSync(updatedList);
+                            }
+                            if (hasMissingImages) {
+                                await services.newsAgentService._enrichMissingArticleImages(updatedList);
+                            }
+                            await services.newsAgentService._publishNewsSnapshot(
+                                updatedList,
+                                updatedList,
+                                stateManager.get('sourceStats') || [],
+                                new Date(stateManager.get('lastUpdated') || Date.now()),
+                                'completed'
+                            );
+                        } catch (e) {
+                            logger.warn('SYSTEM', `缓存新闻自动补全异常: ${e.message}`);
                         }
-                        if (services.aiService.getCurrentModelInfo().apiKeyConfigured && updatedList.length > 1) {
-                            updatedList = await services.aiService.deduplicateWithLLM(updatedList, { maxInspect: 40, timeout: 25000 });
-                        } else {
-                            updatedList = services.aiService.mergeDuplicateArticlesSync(updatedList);
-                        }
-                        if (hasMissingImages) {
-                            await services.newsAgentService._enrichMissingArticleImages(updatedList);
-                        }
-                        await services.newsAgentService._publishNewsSnapshot(
-                            updatedList,
-                            updatedList,
-                            stateManager.get('sourceStats') || [],
-                            new Date(stateManager.get('lastUpdated') || Date.now()),
-                            'completed'
-                        );
-                    } catch (e) {
-                        logger.warn('SYSTEM', `缓存新闻自动补全异常: ${e.message}`);
-                    }
-                });
+                    });
+                }
             }
         });
 

@@ -252,7 +252,7 @@ class NewsAgentService {
 
             // ==================== STAGE 4: CHIEF EDITOR AGENT (生成今日要闻综述) ====================
             let summaryArticle = null;
-            if (shouldGenerateSummary && hasAiKey) {
+            if (shouldGenerateSummary) {
                 try {
                     this.emitAgentEvent(
                         'Chief Editor 主编',
@@ -316,6 +316,10 @@ class NewsAgentService {
      * 同步更新内存状态、本地磁盘缓存并向前端推送 Socket.IO 实时刷新事件
      */
     async _publishNewsSnapshot(displayList, fullPool, sourceStats, timestamp, phase = 'collected') {
+        if (phase === 'completed' && this.deepReadResultCache) {
+            this.deepReadResultCache.clear();
+        }
+
         if (this.newsService) {
             this.newsService.setNewsData(displayList);
             this.newsService.setLastUpdated(timestamp);
@@ -563,6 +567,30 @@ class NewsAgentService {
         const pool = this.stateManager?.get('allEnhancedNews') || this.stateManager?.get('newsData') || [];
         const matchedArticle = pool.find(a => a && (a.url === url || (title && (a.translatedTitle === title || a.title === title)))) || null;
 
+        // 若文章已由 Antigravity 客户端预生成了中文深读 HTML 或 Markdown，直接秒级返回
+        if (matchedArticle && (matchedArticle.deepReadHtml || matchedArticle.deepReadAnalysisHtml || matchedArticle.deepReadAnalysis)) {
+            const rawPrebuiltMd = String(matchedArticle.deepReadAnalysis || '').trim();
+            const normalizedPrebuiltMd = rawPrebuiltMd
+                ? rawPrebuiltMd.split('\n').map(l => l.trim()).filter(Boolean).join('\n\n')
+                : '';
+            const analysisHtml = matchedArticle.deepReadHtml
+                || matchedArticle.deepReadAnalysisHtml
+                || this.aiService.convertSummaryToRichHtml(normalizedPrebuiltMd, []);
+            const prebuiltRes = {
+                success: true,
+                url,
+                title: matchedArticle.translatedTitle || title || matchedArticle.title || '',
+                sourceName: matchedArticle.source?.name || sourceName,
+                extractionMethod: matchedArticle.deepReadMethod || 'ag_precompiled',
+                fullText: matchedArticle.fullTextContent || matchedArticle.content || matchedArticle.description || '',
+                analysisMarkdown: rawPrebuiltMd || undefined,
+                analysisHtml,
+                fromCache: true
+            };
+            this.deepReadResultCache.set(url, prebuiltRes);
+            return prebuiltRes;
+        }
+
         let extracted = null;
         let extractionMethod = 'cheerio_readability';
 
@@ -651,7 +679,7 @@ class NewsAgentService {
             return parts.join('\n');
         };
 
-        // 并发启动：1) Google GTX 多段落全文秒级直译；2) 若配置了 AI Key，发起不进队列的限时深度解读 (10秒超时)
+        // 并发启动：1) Google GTX 多段落全文秒级直译；2) 若配置了 AI Key，发起不进队列的限时深度解读 (11秒超时)
         const fastParagraphTranslationPromise = this.aiService.translateParagraphsToChinese(rawBody, 3200);
 
         if (!this.aiService.getCurrentModelInfo().apiKeyConfigured) {

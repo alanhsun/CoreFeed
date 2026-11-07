@@ -1,6 +1,6 @@
 module.exports = {
   apps: [{
-    name: 'news-aggregator',
+    name: 'corefeed',
     script: 'server.js',
     instances: 1,
     exec_mode: 'fork',
@@ -27,11 +27,11 @@ module.exports = {
     // 环境变量
     env: {
       NODE_ENV: 'development',
-      PORT: 3000
+      PORT: 3120
     },
     env_production: {
       NODE_ENV: 'production',
-      PORT: 3000
+      PORT: 3120
     },
     
     // 进程管理

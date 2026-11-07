@@ -79,15 +79,25 @@ function parseSourceArticleCounts(sourceArticleCounts, defaultCount = 5) {
 
 function parseUpdateTimes(updateTimesStr) {
     if (!updateTimesStr) return [];
-    if (Array.isArray(updateTimesStr)) return updateTimesStr;
-    if (typeof updateTimesStr !== 'string' || updateTimesStr.trim() === '') {
-        return [];
-    }
+    const rawList = Array.isArray(updateTimesStr)
+        ? updateTimesStr
+        : (typeof updateTimesStr === 'string' ? updateTimesStr.split(',') : []);
 
-    const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
-    const times = updateTimesStr.split(',').map(time => time.trim()).filter(time => {
-        return time && timeRegex.test(time);
-    });
+    const timeRegex = /^([01]?[0-9]|2[0-3]):([0-5][0-9])$/;
+    const times = [];
+    const seen = new Set();
+
+    for (const item of rawList) {
+        const trimmed = String(item || '').trim();
+        const match = trimmed.match(timeRegex);
+        if (match) {
+            const normalized = `${String(parseInt(match[1], 10)).padStart(2, '0')}:${match[2]}`;
+            if (!seen.has(normalized)) {
+                seen.add(normalized);
+                times.push(normalized);
+            }
+        }
+    }
 
     return times.sort();
 }
@@ -126,7 +136,9 @@ function buildConfig() {
             deepReadTopCount: getNumberConfig('AGENT_DEEP_READ_COUNT', 10),
             sourceConcurrency: getNumberConfig('AGENT_SOURCE_CONCURRENCY', 8),
             enableGoogleNewsFallback: getBooleanConfig('AGENT_GNEWS_PROXY_FALLBACK', true),
-            freshnessHours: getNumberConfig('AGENT_FRESHNESS_HOURS', 48)
+            freshnessHours: getNumberConfig('AGENT_FRESHNESS_HOURS', 48),
+            publishSecret: getConfig('PUBLISH_SECRET', getConfig('PUBLISH_API_KEY', '')),
+            siteUrl: getConfig('COREFEED_SITE_URL', `http://localhost:${getNumberConfig('PORT', 3120)}`)
         },
 
         // 新闻API与源配置
@@ -140,7 +152,9 @@ function buildConfig() {
             updateInterval: getConfig('NEWS_UPDATE_INTERVAL', '0 */2 * * *'),
             autoUpdateEnabled: getBooleanConfig('AUTO_UPDATE_ENABLED', true),
             updateTime: getConfig('UPDATE_TIME', '08:00'),
-            updateTimes: parseUpdateTimes(getConfig('UPDATE_TIMES', '06:00,16:30')),
+            updateTimes: parseUpdateTimes(getConfig('UPDATE_TIMES', getConfig('scheduleTimes', '08:00,12:30,19:30'))),
+            scheduleTimes: parseUpdateTimes(getConfig('UPDATE_TIMES', getConfig('scheduleTimes', '08:00,12:30,19:30'))),
+            timezone: getConfig('SCHEDULE_TIMEZONE', getConfig('timezone', 'Asia/Shanghai')),
             updateFrequency: getConfig('UPDATE_FREQUENCY', 'daily'),
             maxArticlesPerSource: getNumberConfig('MAX_ARTICLES_PER_SOURCE', 5),
             sourceArticleCounts: getConfig('SOURCE_ARTICLE_COUNTS', ''),
@@ -176,7 +190,6 @@ function buildConfig() {
             newsFile: path.join(__dirname, '..', 'data', 'news.json'),
             stateFile: path.join(__dirname, '..', 'data', 'state.json'),
             summaryFile: path.join(__dirname, '..', 'data', 'summary.json'),
-            sourcesFile: path.join(__dirname, '..', 'config', 'sources.json'),
             settingsFile: SETTINGS_FILE_PATH,
             newsDataPath: 'data/news.json'
         },
@@ -190,9 +203,9 @@ function buildConfig() {
 
         // 大模型配置 (OpenAI 兼容端点)
         minimax: {
-            baseUrl: getConfig('AI_BASE_URL', 'https://nl.alansun.host:9443/v1'),
-            apiKey: getConfig('AI_API_KEY', 'sk-67a4e5e2baba0b27-666i7t-0f8052ff'),
-            model: getConfig('AI_MODEL', 'ag/gemini-4-argon-high'),
+            baseUrl: getConfig('AI_BASE_URL', 'https://api.openai.com/v1'),
+            apiKey: getConfig('AI_API_KEY', ''),
+            model: getConfig('AI_MODEL', 'gpt-4o-mini'),
             rateLimitRpm: getNumberConfig('AI_RATE_LIMIT_RPM', 30),
             rateLimitBurst: getNumberConfig('AI_RATE_LIMIT_BURST', 5)
         },
@@ -254,7 +267,23 @@ const config = buildConfig();
  */
 config.saveDynamicSettings = function (updates = {}) {
     const current = loadSavedSettings();
-    const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
+    const normalizedUpdates = { ...updates };
+    if (normalizedUpdates.scheduleTimes !== undefined && normalizedUpdates.UPDATE_TIMES === undefined) {
+        normalizedUpdates.UPDATE_TIMES = Array.isArray(normalizedUpdates.scheduleTimes)
+            ? normalizedUpdates.scheduleTimes.join(',')
+            : String(normalizedUpdates.scheduleTimes);
+    }
+    if (normalizedUpdates.UPDATE_TIMES !== undefined) {
+        const parsed = parseUpdateTimes(normalizedUpdates.UPDATE_TIMES);
+        normalizedUpdates.UPDATE_TIMES = parsed.join(',');
+        normalizedUpdates.scheduleTimes = parsed;
+    }
+    const merged = {
+        timezone: 'Asia/Shanghai',
+        ...current,
+        ...normalizedUpdates,
+        updatedAt: new Date().toISOString()
+    };
     const dir = path.dirname(SETTINGS_FILE_PATH);
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -262,9 +291,9 @@ config.saveDynamicSettings = function (updates = {}) {
     fs.writeFileSync(SETTINGS_FILE_PATH, JSON.stringify(merged, null, 2), 'utf8');
 
     // 同时同步更新 process.env 以便子模块立即读取
-    for (const [k, v] of Object.entries(updates)) {
+    for (const [k, v] of Object.entries(normalizedUpdates)) {
         if (v !== undefined && v !== null) {
-            process.env[k] = String(v);
+            process.env[k] = Array.isArray(v) ? v.join(',') : String(v);
         }
     }
 
