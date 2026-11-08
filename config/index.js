@@ -150,7 +150,7 @@ function buildConfig() {
                 'GITHUB_SNAPSHOT_URL',
                 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
             ),
-            githubSyncIntervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 5),
+            githubSyncIntervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 60),
             githubCooldownMinutes: getNumberConfig('GITHUB_COOLDOWN_MINUTES', 30),
             clientId: defaultClientId,
             githubBranch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),
@@ -167,7 +167,7 @@ function buildConfig() {
                 'GITHUB_SNAPSHOT_URL',
                 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
             ),
-            intervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 5),
+            intervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 60),
             cooldownMinutes: getNumberConfig('GITHUB_COOLDOWN_MINUTES', 30),
             clientId: defaultClientId,
             branch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),

@@ -703,7 +703,7 @@ class GitHubSyncManager {
                 config.agent?.githubBranch ||
                 'ag-snapshot',
             intervalMinutes: Number(
-                config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 5
+                config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 60
             ),
             cooldownMinutes: Number(
                 config.githubSync?.cooldownMinutes ?? config.agent?.githubCooldownMinutes ?? 30

@@ -29,7 +29,7 @@
 
 ### 3. ⏰ 每天早、中、晚三次全自动更新机制 (`08:00, 12:30, 19:30` 北京时间)
 - 内置 `ScheduleManager` (`utils/schedule_manager.js`) 与外部定时任务双保险，默认锁定 `Asia/Shanghai` 时区，每天在 **早 (`08:00`)、中 (`12:30`)、晚 (`19:30`)** 三个黄金时段全自动采集、整理并更新网站新闻。
-- 内置 **多客户端 30 分钟冷却窗口防冲突与 5 分钟轻量级 ETag 同步**：任意客户端完成发布后，其他客户端及软路由在冷却窗口内自动拉取复用最新快照，避免多端重复采集覆盖。
+- 内置 **多客户端 30 分钟冷却窗口防冲突与 60 分钟轻量级 ETag 兜底同步**：任意客户端完成发布后，其他客户端在冷却窗口内自动拉取复用最新快照，软路由按每日三次定时点与每 60 分钟轻量级轮询自动同步，避免多端重复采集覆盖与频繁检测。
 
 ### 4. 📖 单篇外媒即时全文深读 (`/api/agent/deep-read`)
 - 点击任意新闻卡片底部的「全文深读」，即时穿透抓取外媒原文正文，并输出「核心导读 + 全文核心内容精译 + 背景与深层解读」及原文对照。
@@ -64,7 +64,7 @@ CoreFeed/
 │   └── error_handler.js           # 全局错误处理、异步包装与 API 速率限制中间件
 ├── utils/
 │   ├── github_sync.js             # GitHub 独立快照分支发布 (Plumbing)、多客户端冷却检查与 ETag 同步器
-│   ├── schedule_manager.js        # Cron 多时间点自动采集调度器 (08:00, 12:30, 19:30 + 5 分钟快照轮询)
+│   ├── schedule_manager.js        # Cron 多时间点自动采集调度器 (08:00, 12:30, 19:30 + 60 分钟快照兜底轮询)
 │   ├── rate_limiter.js            # 令牌桶 API 速率限制器
 │   ├── network_config.js          # 全局 HTTP Keep-Alive 连接池配置
 │   ├── logger.js                  # 彩色结构化日志与指标统计
@@ -85,7 +85,7 @@ CoreFeed/
 
 系统将 **方案 2B（以 GitHub `ag-snapshot/latest.json` 作为多客户端统一中枢与唯一事实源）** 设为全项目默认主流程，同时支持局域网 HTTP 直推：
 
-### 🌟 默认主流程（方案 2B）：GitHub `ag-snapshot/latest.json` 多客户端统一中枢 + 软路由 5 分钟无感同步
+### 🌟 默认主流程（方案 2B）：GitHub `ag-snapshot/latest.json` 多客户端统一中枢 + 软路由早中晚定时与 60 分钟轻量同步
 无论你有多少个不同的 Antigravity 客户端（如云端沙箱 VM、家里或公司的 Windows 电脑、MacBook），均可通过 GitHub `ag-snapshot` 分支实现免公网 IP、防冲突的自动协同：
 
 1. **开箱即用默认推送 GitHub (`GITHUB_PUSH_ENABLED=true`)**：
@@ -98,10 +98,10 @@ CoreFeed/
      - **若在 30 分钟冷却窗口内已被其他客户端更新过**（且未传 `--force`）：当前客户端自动跳过耗时的重复采集与编译，直接拉取远端最新快照同步至本地并退出，避免多客户端互相覆盖与重复消耗资源；
      - **若远端快照已超过 30 分钟或传入了 `--force`**：当前客户端执行完整采集、中文精编与综述生成，并推送最新快照至 `ag-snapshot/latest.json`。
 
-3. **软路由 (`10.10.20.10:3120`) 纯正方案 2B 接收端（每 5 分钟轻量轮询）**：
-   - 通过 `deploy-router.sh` 部署的软路由容器默认开启 `GITHUB_SYNC_ENABLED=true` 且配置 `GITHUB_SYNC_INTERVAL_MINUTES=5`。
-   - 软路由在**容器启动时**、**后台每 5 分钟轻量级轮询（支持 `If-None-Match` ETag / `304 Not Modified` 零流量比对与 `publishedAt` 校验）**以及**每日 `08:00, 12:30, 19:30` 定时点**自动检查 `ag-snapshot/latest.json`。
-   - 任意客户端一推送 GitHub，软路由在几分钟内即可无感拉取最新快照，更新内存 `stateManager`、写入 `/opt/corefeed/data/{news,summary,state}.json`，并通过 Socket.IO 实时刷新所有打开的网页。
+3. **软路由 (`10.10.20.10:3120`) 纯正方案 2B 接收端（早中晚定时拉取 + 每 60 分钟轻量兜底轮询）**：
+   - 通过 `deploy-router.sh` 部署的软路由容器默认开启 `GITHUB_SYNC_ENABLED=true` 且配置 `GITHUB_SYNC_INTERVAL_MINUTES=60`。
+   - 软路由在**容器启动时**、**每日 `08:00, 12:30, 19:30` 定时点**以及**后台每 60 分钟轻量级兜底轮询（支持 `If-None-Match` ETag / `304 Not Modified` 零流量比对与 `publishedAt` 校验）**自动检查 `ag-snapshot/latest.json`。
+   - 任意客户端推送 GitHub 后，软路由会在定时点或兜底轮询周期内无感拉取最新快照，更新内存 `stateManager`、写入 `/opt/corefeed/data/{news,summary,state}.json`，并通过 Socket.IO 实时刷新所有打开的网页。
    - 也可随时手动触发软路由立即拉取：
      ```bash
      curl -X POST http://10.10.20.10:3120/api/agent/pull-github

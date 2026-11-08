@@ -1007,7 +1007,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             const syncStatusBody = await resSyncStatus.json();
             assert.equal(syncStatusBody.success, true);
             assert.equal(syncStatusBody.enabled, true);
-            assert.equal(syncStatusBody.intervalMinutes, 5);
+            assert.equal(syncStatusBody.intervalMinutes, 60);
             assert.equal(syncStatusBody.lastSyncStatus, 'synced');
             assert.equal(syncStatusBody.lastSyncedPublishedAt, snapshotTimestamp);
             assert.equal(syncStatusBody.lastSyncedPublishedBy, 'ag-client-alpha');
@@ -1035,7 +1035,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
     it('11. Method 2B Default GitHub Push (pushToGithub=true), --no-github / GITHUB_PUSH_ENABLED=false opt-out & publishedBy / clientId metadata', async () => {
         // 11a. Verify config defaults
         assert.equal(config.githubSync.pushEnabled, true, 'config.githubSync.pushEnabled should default to true');
-        assert.equal(config.githubSync.intervalMinutes, 5, 'config.githubSync.intervalMinutes should default to 5');
+        assert.equal(config.githubSync.intervalMinutes, 60, 'config.githubSync.intervalMinutes should default to 60');
         assert.equal(config.githubSync.cooldownMinutes, 30, 'config.githubSync.cooldownMinutes should default to 30');
         assert.ok(config.githubSync.clientId && config.githubSync.clientId.length > 0, 'config.githubSync.clientId should have a non-empty default');
 

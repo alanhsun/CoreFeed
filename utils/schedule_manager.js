@@ -81,9 +81,9 @@ class ScheduleManager {
 
         this.isRunning = this.currentTasks.length > 0;
 
-        // 若启用了 GitHub 快照中转同步，启动后台轮询定时器（默认 5 分钟，使用 .unref() 确保不阻塞进程退出）
+        // 若启用了 GitHub 快照中转同步，启动后台轮询定时器（默认 60 分钟，使用 .unref() 确保不阻塞进程退出）
         const githubSyncEnabled = Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true);
-        const syncIntervalMinutes = Number(config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 5);
+        const syncIntervalMinutes = Number(config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 60);
         if (githubSyncEnabled && this.githubSyncManager && syncIntervalMinutes > 0 && process.env.NODE_ENV !== 'test') {
             this.githubSyncTimer = setInterval(async () => {
                 try {

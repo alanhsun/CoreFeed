@@ -706,7 +706,9 @@ function initializeApiRoutes(services, io, stateManager) {
                 scheduleManager &&
                 (updates.AUTO_UPDATE_ENABLED !== undefined ||
                     updates.UPDATE_TIMES !== undefined ||
-                    updates.scheduleTimes !== undefined)
+                    updates.scheduleTimes !== undefined ||
+                    updates.GITHUB_SYNC_INTERVAL_MINUTES !== undefined ||
+                    updates.GITHUB_SYNC_ENABLED !== undefined)
             ) {
                 scheduleManager.restart();
             }
