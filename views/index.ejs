@@ -31,163 +31,72 @@
 </head>
 <body class="antialiased">
     <div class="kami-page">
-        <!-- ==================== 现代高可读性顶部导航头 ==================== -->
+        <%
+            const todayStr = new Date().toLocaleDateString('zh-CN', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                weekday: 'long',
+                timeZone: 'Asia/Shanghai'
+            });
+            let updatedTimeStr = '更新于 --:--';
+            if (lastUpdated) {
+                const d = new Date(lastUpdated);
+                if (!isNaN(d.getTime())) {
+                    updatedTimeStr = '更新于 ' + d.toLocaleTimeString('zh-CN', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                        timeZone: 'Asia/Shanghai'
+                    });
+                }
+            }
+        %>
+        <!-- ==================== 简明、克制、高级的纸媒级报头 ==================== -->
         <header class="kami-masthead">
-            <!-- 顶部状态与快捷工具栏 -->
-            <div class="kami-eyebrow">
-                <div class="flex flex-wrap items-center gap-3">
-                    <span class="kami-tag"><i class="fa-solid fa-satellite-dish"></i> 全球实时情报聚合</span>
-                    <span class="font-semibold">CoreFeed v2.0</span>
-                    <span>·</span>
-                    <span><%= new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long', timeZone: 'Asia/Shanghai' }) %></span>
-                    <span>·</span>
-                    <span id="githubSyncHeaderBadge" class="kami-badge-sync" title="方案 2B：多客户端 GitHub ag-snapshot 快照中枢同步状态">
-                        <i class="fa-brands fa-github"></i>
-                        <span id="githubSyncHeaderText"><%= (typeof githubSync !== 'undefined' && githubSync && githubSync.enabled !== false) ? `GitHub 快照同步 (${githubSync.intervalMinutes || 60}m)` : 'GitHub 同步已关闭' %></span>
-                    </span>
-                    <span id="publisherHeaderBadge" class="kami-tag-neutral" title="当前展示新闻快照的发布客户端标识 (lastPublishedBy)">
-                        <i class="fa-solid fa-server text-xs" style="color: var(--brand);"></i>
-                        <span>发布端: <strong id="headerPublishedBy" style="color: var(--near-black);"><%= (typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || (typeof clientId !== 'undefined' && clientId) || 'antigravity-client' %></strong></span>
-                    </span>
-                </div>
-
-                <!-- 遥测状态与系统工具 -->
-                <div class="flex flex-wrap items-center gap-3">
-                    <div class="flex items-center gap-2">
-                        <span id="socketStatusDot" class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                        <span id="aiModelBadge" class="font-medium"><%= config.aiModel || 'gpt-4o-mini' %></span>
-                        <span>·</span>
-                        <span>已启用 <strong id="enabledSourcesCount" style="color: var(--brand); font-variant-numeric: tabular-nums;"><%= (sourceMatrix || []).filter(s => s.enabled).length %></strong> 家全球名媒</span>
-                    </div>
-                    <span>·</span>
-                    <button onclick="app.openSourceMatrixModal()" class="hover:underline cursor-pointer font-medium" style="color: var(--dark-warm);" title="管理全球知名信源矩阵">
-                        信源矩阵
-                    </button>
-                    <span>·</span>
-                    <button onclick="app.openSettingsModal()" class="hover:underline cursor-pointer font-medium" style="color: var(--dark-warm);" title="多客户端 GitHub 快照同步、定时任务与系统配置">
-                        系统设置
-                    </button>
-                    <span>·</span>
-                    <button onclick="app.toggleTheme()" class="hover:underline cursor-pointer inline-flex items-center gap-1 font-medium" style="color: var(--dark-warm);" title="切换浅色/深色护眼模式">
-                        <i id="themeIcon" class="fa-solid fa-moon text-xs"></i>
-                        <span>深浅模式</span>
-                    </button>
-                </div>
-            </div>
-
-            <!-- 主标题与行动区 -->
             <div class="kami-masthead-main">
-                <div>
-                    <h1 class="kami-display-title">聚核 · CoreFeed</h1>
-                    <p class="kami-subtitle">
-                        全球 30 大权威信源实时聚合 · 多客户端 GitHub 快照协同 · 全文深读与中文精编
-                    </p>
+                <!-- 左侧：刊名与副标题 -->
+                <div class="kami-brand-group">
+                    <div class="flex items-baseline gap-3 flex-wrap">
+                        <h1 class="kami-display-title">CoreFeed</h1>
+                        <span class="kami-masthead-divider">·</span>
+                        <span class="kami-subtitle">全球要闻深度聚合</span>
+                    </div>
+                    <div class="kami-masthead-meta">
+                        <span id="mastheadDate"><%= todayStr %></span>
+                        <span class="kami-meta-dot">·</span>
+                        <span id="lastUpdateTime"><span id="lastUpdatedLabel"><%= updatedTimeStr %></span></span>
+                    </div>
                 </div>
 
-                <!-- 核心采集与 GitHub 快照同步操作栏 -->
-                <div class="flex flex-wrap items-center gap-2.5">
-                    <select id="patrolCategorySelect" class="kami-input text-sm py-2.5 px-3.5 cursor-pointer" title="选择要采集的信源范围">
-                        <option value="all">全部启用信源 (30家)</option>
-                        <option value="wire">国际顶级通讯社 (Reuters/AP/BBC)</option>
-                        <option value="western">欧美权威大报 (NYT/Guardian/Spiegel)</option>
-                        <option value="asiapacific">亚太与大中华名媒 (SCMP/NHK/CNA)</option>
-                        <option value="finance">全球财经媒体 (Bloomberg/WSJ/FT)</option>
-                        <option value="tech">前沿科技媒体 (TechCrunch/Ars)</option>
-                    </select>
-                    <button onclick="app.openSourceMatrixModal()" class="btn-ghost">
-                        <i class="fa-solid fa-globe text-sm" style="color: var(--brand);"></i>
-                        <span>信源管理</span>
+                <!-- 右侧：极简核心操作区 -->
+                <div class="kami-masthead-actions">
+                    <button id="syncGithubBtn" onclick="app.syncFromGitHub()" class="btn-primary" title="从 GitHub 同步最新一期全球要闻与综述">
+                        <i id="syncGithubBtnIcon" class="fa-solid fa-rotate text-xs"></i>
+                        <span id="syncGithubBtnText">同步最新</span>
                     </button>
-                    <button id="syncGithubBtn" onclick="app.syncFromGitHub()" class="btn-secondary" title="从 GitHub ag-snapshot/latest.json 秒级拉取最新精编快照">
-                        <i id="syncGithubBtnIcon" class="fa-brands fa-github text-sm"></i>
-                        <span id="syncGithubBtnText">同步 GitHub 快照</span>
+                    <button id="btnSettings" onclick="app.openSettingsModal()" class="btn-ghost" title="系统设置">
+                        <i class="fa-solid fa-sliders text-xs"></i>
+                        <span>设置</span>
                     </button>
-                    <button id="btnRunPatrol" onclick="app.triggerAgentPatrol()" class="btn-primary">
-                        <i id="patrolBtnIcon" class="fa-solid fa-satellite-dish text-sm"></i>
-                        <span id="patrolBtnText">立即采集全球新闻</span>
+                    <button id="btnThemeToggle" onclick="app.toggleTheme()" class="btn-ghost btn-icon-only" title="切换浅色/深色模式" aria-label="切换浅色/深色模式">
+                        <i id="themeIcon" class="fa-solid fa-moon text-xs"></i>
                     </button>
                 </div>
             </div>
         </header>
 
-        <!-- ==================== 主体工作区 ==================== -->
+        <!-- ==================== 主体阅读工作区 ==================== -->
         <main class="space-y-6">
 
-            <!-- 1. 两阶段渐进式采集与编译流水线状态栏 -->
-            <section class="kami-card py-4 px-5">
-                <div id="agentPipelinePanel">
-                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        <div id="node-scout" class="agent-node flex items-baseline gap-3">
-                            <span class="node-num">01</span>
-                            <div class="min-w-0">
-                                <div class="text-sm font-bold truncate" style="color: var(--near-black);">并发信源采集</div>
-                                <div class="text-xs truncate" style="color: var(--stone);">RSS / GoogleNews 代理 / Jina</div>
-                            </div>
-                        </div>
-                        <div id="node-curate" class="agent-node flex items-baseline gap-3">
-                            <span class="node-num">02</span>
-                            <div class="min-w-0">
-                                <div class="text-sm font-bold truncate" style="color: var(--near-black);">多源聚类 & 秒级汉化</div>
-                                <div class="text-xs truncate" style="color: var(--stone);">去重合并、首屏中文与配图直出</div>
-                            </div>
-                        </div>
-                        <div id="node-compile" class="agent-node flex items-baseline gap-3">
-                            <span class="node-num">03</span>
-                            <div class="min-w-0">
-                                <div class="text-sm font-bold truncate" style="color: var(--near-black);">全文深读 & 深度精编</div>
-                                <div class="text-xs truncate" style="color: var(--stone);">Jina 深读 + 分批 AI 深度提炼</div>
-                            </div>
-                        </div>
-                        <div id="node-summary" class="agent-node flex items-baseline gap-3">
-                            <span class="node-num">04</span>
-                            <div class="min-w-0">
-                                <div class="text-sm font-bold truncate" style="color: var(--near-black);">今日要闻综述</div>
-                                <div class="text-xs truncate" style="color: var(--stone);">跨信源串联综述与原文引注</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 进度条与实时状态文字 -->
-                    <div id="liveProgressContainer" class="mt-3.5 hidden">
-                        <div class="flex items-center justify-between text-sm mb-1.5">
-                            <span id="liveProgressText" style="color: var(--brand); font-weight: 600;">正在初始化采集任务...</span>
-                            <span id="liveProgressPercent" style="color: var(--brand); font-weight: 700; font-variant-numeric: tabular-nums;">0%</span>
-                        </div>
-                        <div class="w-full h-2 rounded-full overflow-hidden" style="background: var(--warm-sand);">
-                            <div id="liveProgressBar" class="h-full transition-all duration-300" style="width: 0%; background: var(--brand);"></div>
-                        </div>
-                    </div>
-
-                    <!-- 底部概览栏与展开实时日志按钮 -->
-                    <div class="mt-3.5 pt-3 flex flex-wrap items-center justify-between gap-2 text-sm" style="border-top: 1px solid var(--border); color: var(--stone); font-variant-numeric: tabular-nums;">
-                        <div class="flex flex-wrap items-center gap-5">
-                            <span>最后更新：<strong id="lastUpdatedLabel" style="color: var(--dark-warm);"><%= lastUpdated ? new Date(lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未采集' %></strong></span>
-                            <span>发布端：<strong id="lastPublishedByLabel" style="color: var(--brand);"><%= (typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || (typeof clientId !== 'undefined' && clientId) || '本地节点' %></strong></span>
-                            <span>当前展示：<strong id="displayedCountLabel" style="color: var(--brand);"><%= displayedNews %></strong> / <strong id="totalPoolCountLabel" style="color: var(--dark-warm);"><%= totalNews %></strong> 条精选新闻</span>
-                            <span id="multiSourceCountWrapper">多媒交叉印证：<strong id="multiSourceCountLabel" style="color: var(--brand);">0</strong> 个热点事件</span>
-                            <span id="scheduleInfoWrapper">定时更新：<strong id="scheduleTimesLabel" style="color: var(--dark-warm);"><%= (typeof schedule !== 'undefined' && schedule && schedule.updateTimes && schedule.updateTimes.length) ? schedule.updateTimes.join(' / ') : '08:00 / 12:30 / 19:30' %></strong></span>
-                        </div>
-                        <button onclick="app.toggleAgentLogDrawer()" class="hover:underline flex items-center gap-1.5 cursor-pointer font-medium" style="color: var(--brand);">
-                            <i class="fa-solid fa-terminal text-xs"></i>
-                            <span>展开实时采集日志</span>
-                        </button>
-                    </div>
-
-                    <!-- 可折叠的实时终端日志 -->
-                    <div id="agentLogDrawer" class="hidden mt-3 kami-code-block max-h-48 overflow-y-auto space-y-1">
-                        <div style="color: var(--stone);">// CoreFeed 实时采集与编译遥测日志流...</div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- 2. 主工作区选项卡与搜索过滤栏 -->
+            <!-- 主工作区选项卡与搜索过滤栏 -->
             <div class="kami-tabs-bar">
                 <div class="flex flex-wrap items-center gap-2" role="tablist">
                     <button id="tabBtn-feed" onclick="app.switchTab('feed')" class="tab-btn active">
-                        <i class="fa-regular fa-newspaper mr-1.5"></i>全球新闻卡片流
+                        <i class="fa-regular fa-newspaper mr-1.5"></i>全球要闻
                     </button>
                     <button id="tabBtn-summary" onclick="app.switchTab('summary')" class="tab-btn">
-                        <i class="fa-solid fa-Compass mr-1.5"></i>今日全球综述
+                        <i class="fa-regular fa-compass mr-1.5"></i>今日综述
                     </button>
                 </div>
 
@@ -224,7 +133,7 @@
                 <!-- 加载更多按钮 -->
                 <div id="loadMoreContainer" class="text-center pt-4 hidden">
                     <button onclick="app.loadMoreNews()" class="btn-ghost">
-                        <span>加载更多已采集新闻</span>
+                        <span>加载更多要闻</span>
                     </button>
                 </div>
             </section>
@@ -232,39 +141,29 @@
             <!-- ==================== TAB 2: 今日要闻深度综述 ==================== -->
             <section id="tabPanel-summary" class="hidden space-y-6">
                 <div class="kami-card sm:p-10">
-                    <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-6" style="border-bottom: 1px solid var(--border);">
-                        <div>
-                            <div class="text-xs uppercase tracking-widest mb-2" style="color: var(--stone); font-family: var(--latin-ui);">
-                                DAILY GLOBAL SYNTHESIS · 全球态势综述
-                            </div>
-                            <h2 id="summaryTitle" class="text-2xl sm:text-3xl" style="color: var(--near-black); margin: 0;">
-                                <%= summaryArticle ? summaryArticle.title : '今日全球要闻深度综述' %>
-                            </h2>
-                            <p id="summaryMeta" class="text-xs mt-2" style="color: var(--stone); font-variant-numeric: tabular-nums;">
-                                <% if (summaryArticle) { %>
-                                    生成时间：<%= new Date(summaryArticle.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) %> · 涵盖 <%= (summaryArticle.regions || []).join('、') %> · 共 <%= summaryArticle.wordCount || 0 %> 字
-                                <% } else { %>
-                                    尚未生成今日深度综述，点击右侧按钮立即统筹当前新闻生成
-                                <% } %>
-                            </p>
+                    <div class="pb-6" style="border-bottom: 1px solid var(--border);">
+                        <div class="text-xs uppercase tracking-widest mb-2" style="color: var(--stone); font-family: var(--latin-ui);">
+                            DAILY GLOBAL SYNTHESIS · 全球态势综述
                         </div>
-
-                        <!-- 综述操作按钮 -->
-                        <div class="flex flex-wrap items-center gap-2.5">
-                            <button onclick="app.generateSummary()" id="btnGenSummary" class="btn-primary">
-                                <i class="fa-solid fa-rotate text-xs"></i>
-                                <span>生成 / 刷新今日综述</span>
-                            </button>
-                        </div>
+                        <h2 id="summaryTitle" class="text-2xl sm:text-3xl" style="color: var(--near-black); margin: 0;">
+                            <%= summaryArticle ? summaryArticle.title : '今日全球要闻深度综述' %>
+                        </h2>
+                        <p id="summaryMeta" class="text-xs mt-2" style="color: var(--stone); font-variant-numeric: tabular-nums;">
+                            <% if (summaryArticle) { %>
+                                生成时间：<%= new Date(summaryArticle.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) %> · 涵盖 <%= (summaryArticle.regions || []).join('、') %> · 共 <%= summaryArticle.wordCount || 0 %> 字
+                            <% } else { %>
+                                点击右上角「同步最新」获取最新一期全球要闻深度综述
+                            <% } %>
+                        </p>
                     </div>
 
-                    <!-- 综述正文 (遵循 Kami 740px 最佳阅读行宽) -->
+                    <!-- 综述正文 -->
                     <div id="summaryBody" class="summary-content mt-8">
                         <% if (summaryArticle && summaryArticle.htmlContent) { %>
                             <%- summaryArticle.htmlContent %>
                         <% } else { %>
                             <div class="py-12" style="color: var(--stone);">
-                                <p>点击上方「生成 / 刷新今日综述」或执行「立即采集全球新闻」，即可生成附带跨信源原文引注的今日全球要闻综述。</p>
+                                <p>暂无今日综述，请点击顶部「同步最新」拉取最新一期全球要闻深度综述。</p>
                             </div>
                         <% } %>
                     </div>
@@ -279,7 +178,7 @@
             <div class="px-6 py-5 flex items-start justify-between gap-4" style="border-bottom: 1px solid var(--border); background: var(--ivory);">
                 <div class="min-w-0">
                     <div class="flex items-center gap-2 mb-1.5">
-                        <span class="kami-tag">Jina Reader + 全文深读</span>
+                        <span class="kami-tag">全文深读</span>
                         <span id="deepReadSourceBadge" class="text-xs" style="color: var(--stone);"></span>
                     </div>
                     <h3 id="deepReadTitle" class="text-lg truncate" style="color: var(--near-black); margin: 0;">正在提取外媒原文...</h3>
@@ -300,210 +199,66 @@
         </div>
     </div>
 
-    <!-- ==================== MODAL 2: 全球知名信源矩阵管理弹窗 ==================== -->
-    <div id="sourceMatrixModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex items-center justify-center p-4" onclick="if(event.target===this) app.closeSourceMatrixModal()">
-        <div class="kami-modal-surface max-w-4xl w-full max-h-[88vh] flex flex-col overflow-hidden">
-            <div class="px-6 py-5 flex items-center justify-between" style="border-bottom: 1px solid var(--border); background: var(--ivory);">
-                <div>
-                    <h3 class="text-lg" style="color: var(--near-black); margin: 0;">全球知名信源矩阵管理</h3>
-                    <p class="text-xs mt-1" style="color: var(--stone);">
-                        勾选启用的国际权威媒体，支持官方 RSS、Google News 站点代理（自动穿透 Cloudflare）及 Jina 网页抽取
-                    </p>
-                </div>
-                <button onclick="app.closeSourceMatrixModal()" class="p-1.5 cursor-pointer" style="color: var(--stone);">
-                    <i class="fa-solid fa-xmark text-lg"></i>
-                </button>
-            </div>
-
-            <div class="p-6 overflow-y-auto space-y-5 flex-1">
-                <!-- 快速新增自定义信源 -->
-                <div class="p-4 rounded-lg space-y-3" style="background: var(--ivory); border: 1px solid var(--border);">
-                    <div class="text-xs font-medium" style="color: var(--olive);">添加自定义国际信源 (RSS 或网站域名)</div>
-                    <div class="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
-                        <input id="newSourceName" type="text" placeholder="媒体名称 (如 Politico)" class="kami-input text-xs py-2">
-                        <input id="newSourceDomain" type="text" placeholder="域名 (如 politico.com)" class="kami-input text-xs py-2">
-                        <input id="newSourceRss" type="text" placeholder="RSS URL (可留空自动代理)" class="kami-input text-xs py-2">
-                        <button onclick="app.addCustomSource()" class="btn-primary py-2 text-xs">
-                            添加至信源矩阵
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 信源列表容器 -->
-                <div id="sourceMatrixList" class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <!-- 由 main.js 渲染 -->
-                </div>
-            </div>
-
-            <div class="px-6 py-4 flex items-center justify-between" style="border-top: 1px solid var(--border); background: var(--ivory);">
-                <div class="flex items-center gap-3 text-xs">
-                    <button onclick="app.toggleAllSources(true)" class="hover:underline cursor-pointer" style="color: var(--brand);">全选启用</button>
-                    <span style="color: var(--line);">·</span>
-                    <button onclick="app.toggleAllSources(false)" class="hover:underline cursor-pointer" style="color: var(--stone);">全部取消</button>
-                </div>
-                <div class="flex items-center gap-2.5">
-                    <button onclick="app.closeSourceMatrixModal()" class="btn-ghost py-1.5 px-4 text-xs">取消</button>
-                    <button onclick="app.saveSourceMatrix()" class="btn-primary py-1.5 px-5 text-xs">保存信源配置</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ==================== MODAL 3: 系统、GitHub 快照同步与 AI 配置弹窗 ==================== -->
+    <!-- ==================== MODAL 2: 极简系统设置弹窗 ==================== -->
     <div id="settingsModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex items-center justify-center p-4" onclick="if(event.target===this) app.closeSettingsModal()">
-        <div class="kami-modal-surface max-w-2xl w-full max-h-[88vh] flex flex-col overflow-hidden">
-            <div class="px-6 py-5 flex items-center justify-between" style="border-bottom: 1px solid var(--border); background: var(--ivory);">
-                <div>
-                    <h3 class="text-lg" style="color: var(--near-black); margin: 0;">系统设置与多客户端同步配置</h3>
-                    <p class="text-xs mt-1" style="color: var(--stone);">
-                        管理方案 2B（GitHub 快照中枢）、早中晚定时更新、采集参数及可选外部 AI 接口
-                    </p>
-                </div>
-                <button onclick="app.closeSettingsModal()" class="p-1.5 cursor-pointer" style="color: var(--stone);">
-                    <i class="fa-solid fa-xmark text-lg"></i>
+        <div class="kami-modal-surface max-w-lg w-full flex flex-col overflow-hidden">
+            <div class="px-6 py-5 flex items-center justify-between" style="border-bottom: 1px solid var(--border);">
+                <h3 class="text-base font-bold" style="color: var(--near-black); margin: 0;">系统设置</h3>
+                <button onclick="app.closeSettingsModal()" class="p-1.5 cursor-pointer" style="color: var(--stone);" aria-label="关闭设置">
+                    <i class="fa-solid fa-xmark text-base"></i>
                 </button>
             </div>
-            <div class="p-6 overflow-y-auto space-y-6 text-xs sm:text-sm">
-                <!-- 一 · 多客户端与 GitHub 快照同步（方案 2B） -->
-                <div class="space-y-3.5">
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                        <h4 class="text-base" style="color: var(--brand); margin: 0;">一 · 多客户端与 GitHub 快照同步（方案 2B）</h4>
-                        <span class="kami-tag"><i class="fa-brands fa-github"></i> ag-snapshot 统一中枢</span>
-                    </div>
-                    <p class="text-xs leading-relaxed" style="color: var(--stone); margin: 0;">
-                        多台 Antigravity 客户端编译完成后自动推送至 GitHub <code>ag-snapshot/latest.json</code>；路由器或接收端自动从中枢拉取最新快照，免公网 IP 实现多端协同。
-                    </p>
 
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <label class="kami-toggle-card">
-                            <input id="cfgGithubSyncEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4" <%= (config.githubSyncEnabled !== false) ? 'checked' : '' %>>
-                            <div>
-                                <div class="font-semibold text-xs sm:text-sm" style="color: var(--near-black);">启用从 GitHub 自动拉取快照</div>
-                                <div class="text-[11px]" style="color: var(--stone);">GITHUB_SYNC_ENABLED (启动、定时点及后台轮询自动同步)</div>
-                            </div>
-                        </label>
-                        <label class="kami-toggle-card">
-                            <input id="cfgGithubPushEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4" <%= (config.githubPushEnabled !== false) ? 'checked' : '' %>>
-                            <div>
-                                <div class="font-semibold text-xs sm:text-sm" style="color: var(--near-black);">采集后自动推送 GitHub 快照</div>
-                                <div class="text-[11px]" style="color: var(--stone);">GITHUB_PUSH_ENABLED (发布时自动写入 ag-snapshot)</div>
-                            </div>
-                        </label>
-                    </div>
-
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="p-6 space-y-5 text-sm">
+                <!-- 1. GitHub 自动同步与后台检测间隔 -->
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between gap-4">
                         <div>
-                            <label class="block text-xs mb-1" style="color: var(--stone);">当前客户端标识 (CLIENT_ID)</label>
-                            <input id="cfgClientId" type="text" value="<%= (typeof clientId !== 'undefined' && clientId) || 'antigravity-client' %>" placeholder="例如: antigravity-cloud-vm / router-10.10.20.10" class="kami-input w-full text-xs">
+                            <div class="font-semibold" style="color: var(--near-black);">GitHub 自动同步</div>
+                            <div class="text-xs mt-0.5" style="color: var(--stone);">自动从 GitHub 同步最新精编要闻快照</div>
                         </div>
-                        <div>
-                            <label class="block text-xs mb-1" style="color: var(--stone);">后台兜底检测间隔 (分钟，GITHUB_SYNC_INTERVAL_MINUTES)</label>
-                            <input id="cfgGithubSyncInterval" type="number" min="1" max="1440" value="<%= config.githubSyncIntervalMinutes || 60 %>" class="kami-input w-full text-xs">
-                        </div>
-                        <div class="sm:col-span-2">
-                            <label class="block text-xs mb-1" style="color: var(--stone);">GitHub 快照源地址 (GITHUB_SNAPSHOT_URL)</label>
-                            <input id="cfgGithubSnapshotUrl" type="text" value="<%= (typeof githubSync !== 'undefined' && githubSync && githubSync.snapshotUrl) || 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json' %>" class="kami-input w-full text-xs font-mono">
-                        </div>
+                        <input id="cfgGithubSyncEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4 cursor-pointer" <%= (config.githubSyncEnabled !== false) ? 'checked' : '' %>>
                     </div>
 
-                    <!-- 实时 GitHub 同步状态与弹窗内立即测试按钮 -->
-                    <div id="modalGithubSyncStatusPanel" class="p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3" style="background: var(--inline-code-bg); border: 1px solid var(--border);">
-                        <div class="space-y-1 text-xs">
-                            <div class="flex flex-wrap items-center gap-2">
-                                <span style="color: var(--stone);">当前状态：</span>
-                                <strong id="modalSyncStatusText" style="color: var(--brand);">
-                                    <%= (typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'synced') ? '已同步最新快照' : ((typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'up-to-date') ? '已是最新快照' : '就绪') %>
-                                </strong>
-                                <span>·</span>
-                                <span style="color: var(--stone);">最近发布端：</span>
-                                <strong id="modalSyncPublishedBy" style="color: var(--near-black);"><%= (typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || (typeof githubSync !== 'undefined' && githubSync && githubSync.publishedBy) || (typeof clientId !== 'undefined' && clientId) || '暂无记录' %></strong>
-                            </div>
-                            <div style="color: var(--stone); font-variant-numeric: tabular-nums;">
-                                最近同步检测：<span id="modalSyncLastTime"><%= (typeof githubSync !== 'undefined' && githubSync && (githubSync.lastSyncedAt || githubSync.lastSyncCheckAt)) ? new Date(githubSync.lastSyncedAt || githubSync.lastSyncCheckAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : (lastUpdated ? new Date(lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未检测') %></span>
-                            </div>
-                        </div>
-                        <button type="button" id="btnModalSyncGithub" onclick="app.syncFromGitHub({ force: true, fromModal: true })" class="btn-secondary py-2 px-3.5 text-xs shrink-0">
-                            <i id="modalSyncGithubIcon" class="fa-brands fa-github"></i>
-                            <span id="modalSyncGithubText">立即从 GitHub 同步</span>
-                        </button>
+                    <div class="flex items-center justify-between gap-4 pt-1">
+                        <label for="cfgGithubSyncInterval" class="text-xs" style="color: var(--olive);">后台检测间隔（分钟）</label>
+                        <input id="cfgGithubSyncInterval" type="number" min="5" max="1440" value="<%= config.githubSyncIntervalMinutes || 60 %>" class="kami-input w-28 text-xs text-right">
                     </div>
                 </div>
 
-                <!-- 二 · 定时更新配置 -->
+                <!-- 2. 每日定时同步时间 -->
                 <div class="space-y-3 pt-4" style="border-top: 1px solid var(--border);">
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                        <h4 class="text-base" style="color: var(--brand); margin: 0;">二 · 定时更新配置（每日早中晚三次自动更新）</h4>
-                        <span class="kami-tag-neutral">时区: Asia/Shanghai (北京时间)</span>
-                    </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
-                        <label class="kami-toggle-card">
-                            <input id="cfgAutoUpdateEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4" <%= (config.autoUpdateEnabled !== false) ? 'checked' : '' %>>
-                            <div>
-                                <div class="font-semibold text-xs sm:text-sm" style="color: var(--near-black);">启用每日定时自动更新</div>
-                                <div class="text-[11px]" style="color: var(--stone);">AUTO_UPDATE_ENABLED (到点优先拉取 GitHub 快照或执行采集)</div>
-                            </div>
-                        </label>
+                    <div class="flex items-center justify-between gap-4">
                         <div>
-                            <label class="block text-xs mb-1" style="color: var(--stone);">每日自动更新时间 (逗号分隔，默认早中晚三次 08:00,12:30,19:30)</label>
-                            <input id="cfgUpdateTimes" type="text" value="<%= Array.isArray(config.updateTimes) ? config.updateTimes.join(',') : (config.updateTimes || '08:00,12:30,19:30') %>" placeholder="08:00,12:30,19:30" class="kami-input w-full text-xs font-mono">
+                            <div class="font-semibold" style="color: var(--near-black);">每日定时同步</div>
+                            <div class="text-xs mt-0.5" style="color: var(--stone);">按北京时间每日早、中、晚自动同步更新</div>
                         </div>
+                        <input id="cfgAutoUpdateEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4 cursor-pointer" <%= (config.autoUpdateEnabled !== false) ? 'checked' : '' %>>
+                    </div>
+
+                    <div>
+                        <label for="cfgUpdateTimes" class="block text-xs mb-1.5" style="color: var(--olive);">每日定时同步时间（逗号分隔）</label>
+                        <input id="cfgUpdateTimes" type="text" value="<%= Array.isArray(config.updateTimes) ? config.updateTimes.join(', ') : (config.updateTimes || '08:00, 12:30, 19:30') %>" placeholder="08:00, 12:30, 19:30" class="kami-input w-full text-xs font-mono">
                     </div>
                 </div>
 
-                <!-- 三 · 采集与深读参数 -->
-                <div class="space-y-3 pt-4" style="border-top: 1px solid var(--border);">
-                    <h4 class="text-base" style="color: var(--brand); margin: 0;">三 · 新闻采集与全文深读参数</h4>
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
-                            <label class="block text-xs mb-1" style="color: var(--stone);">首屏精选展示条数</label>
-                            <input id="cfgMaxCurated" type="number" min="10" max="60" value="30" class="kami-input w-full text-xs">
-                        </div>
-                        <div>
-                            <label class="block text-xs mb-1" style="color: var(--stone);">Jina 全文提取篇数</label>
-                            <input id="cfgDeepReadCount" type="number" min="0" max="25" value="8" class="kami-input w-full text-xs">
-                        </div>
-                        <div>
-                            <label class="block text-xs mb-1" style="color: var(--stone);">新闻时效窗口 (小时)</label>
-                            <input id="cfgFreshnessHours" type="number" min="12" max="168" value="48" class="kami-input w-full text-xs">
-                        </div>
+                <!-- 3. 简洁的当前同步状态展示 -->
+                <div id="modalGithubSyncStatusPanel" class="px-4 py-3 rounded-lg flex items-center justify-between gap-3 text-xs" style="background: var(--inline-code-bg); border: 1px solid var(--border);">
+                    <div class="flex items-center gap-2">
+                        <span style="color: var(--stone);">同步状态：</span>
+                        <strong id="modalSyncStatusText" style="color: var(--near-black);">
+                            <%= (typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'synced') ? '已同步最新' : ((typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'up-to-date') ? '已是最新' : '就绪') %>
+                        </strong>
                     </div>
-                </div>
-
-                <!-- 四 · 外部 AI 接口配置（可选，默认折叠） -->
-                <div class="pt-4" style="border-top: 1px solid var(--border);">
-                    <details id="optionalAiConfigDetails" class="kami-collapsible">
-                        <summary class="kami-collapsible-summary">
-                            <div class="flex flex-wrap items-center gap-2">
-                                <span class="text-base font-bold" style="color: var(--near-black);">四 · 外部 AI 接口配置</span>
-                                <span class="kami-badge-optional">可选（使用 Antigravity 客户端直编或仅作为路由器接收端时无需填写外部 API Key）</span>
-                            </div>
-                            <i class="fa-solid fa-chevron-down text-xs transition-transform collapsible-chevron" style="color: var(--stone);"></i>
-                        </summary>
-                        <div class="pt-3.5 space-y-3">
-                            <p class="text-xs" style="color: var(--stone); margin: 0;">
-                                仅当本节点需要脱离 Antigravity 客户端、独立调用第三方 OpenAI / MiniMax 兼容接口执行翻译与综述生成时才需配置。
-                            </p>
-                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <div>
-                                    <label class="block text-xs mb-1" style="color: var(--stone);">API Base URL</label>
-                                    <input id="cfgAiBaseUrl" type="text" class="kami-input w-full text-xs">
-                                </div>
-                                <div>
-                                    <label class="block text-xs mb-1" style="color: var(--stone);">模型名称 (Model)</label>
-                                    <input id="cfgAiModel" type="text" class="kami-input w-full text-xs">
-                                </div>
-                                <div class="sm:col-span-2">
-                                    <label class="block text-xs mb-1" style="color: var(--stone);">API Key (可选，留空或保持 *** 则不修改原密钥)</label>
-                                    <input id="cfgAiApiKey" type="password" placeholder="sk-... (使用 Antigravity 直编或方案 2B 同步时无需填写)" class="kami-input w-full text-xs">
-                                </div>
-                            </div>
-                        </div>
-                    </details>
+                    <div style="color: var(--stone); font-variant-numeric: tabular-nums;">
+                        最近同步：<span id="modalSyncLastTime"><%= (typeof githubSync !== 'undefined' && githubSync && (githubSync.lastSyncedAt || githubSync.lastSyncCheckAt)) ? new Date(githubSync.lastSyncedAt || githubSync.lastSyncCheckAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }) : (lastUpdated ? new Date(lastUpdated).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未同步') %></span>
+                    </div>
                 </div>
             </div>
-            <div class="px-6 py-4 flex items-center justify-end gap-2.5" style="border-top: 1px solid var(--border); background: var(--ivory);">
-                <button onclick="app.closeSettingsModal()" class="btn-ghost py-1.5 px-4 text-xs">取消</button>
-                <button onclick="app.saveSettings()" class="btn-primary py-1.5 px-5 text-xs">保存并生效</button>
+
+            <div class="px-6 py-4 flex items-center justify-end gap-2.5" style="border-top: 1px solid var(--border); background: var(--inline-code-bg);">
+                <button type="button" onclick="app.closeSettingsModal()" class="btn-ghost py-2 px-4 text-xs">取消</button>
+                <button type="button" id="btnSaveSettings" onclick="app.saveSettings()" class="btn-primary py-2 px-5 text-xs">保存设置</button>
             </div>
         </div>
     </div>

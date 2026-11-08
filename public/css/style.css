@@ -9,14 +9,14 @@
 
 :root {
     /* Surfaces */
-    --parchment:      #f1f5f9;
+    --parchment:      #f8fafc;
     --ivory:          #ffffff;
-    --inline-code-bg: #f8fafc;
+    --inline-code-bg: #f1f5f9;
     --warm-sand:      #e2e8f0;
 
-    /* Primary Brand Accent (Modern News Blue) */
-    --brand:          #2563eb;
-    --brand-light:    #1d4ed8;
+    /* Primary Brand Accent (Restrained Editorial Navy/Blue) */
+    --brand:          #1d4ed8;
+    --brand-light:    #1e40af;
     --brand-tint:     #eff6ff;
     --tag-bg:         #dbeafe;
 
@@ -107,40 +107,24 @@ a:hover {
 /* ========== Page Container & Masthead ========== */
 
 .kami-page {
-    max-width: 1360px;
+    max-width: 1320px;
     margin: 0 auto;
-    padding: 24px 20px 80px;
+    padding: 28px 20px 84px;
 }
 
 @media (min-width: 768px) {
     .kami-page {
-        padding: 32px 36px 96px;
+        padding: 36px 32px 96px;
     }
 }
 
 .kami-masthead {
     background: var(--ivory);
     border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 22px 26px;
-    margin-bottom: 24px;
-    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
-}
-
-.kami-eyebrow {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    font-family: var(--sans);
-    font-size: 13.5px;
-    font-weight: 500;
-    color: var(--stone);
-    padding-bottom: 14px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 18px;
-    font-variant-numeric: tabular-nums;
+    border-radius: 14px;
+    padding: 26px 30px;
+    margin-bottom: 26px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 
 .kami-masthead-main {
@@ -157,22 +141,58 @@ a:hover {
     }
 }
 
+.kami-brand-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
 .kami-display-title {
     font-family: var(--sans);
     font-weight: 800;
-    font-size: clamp(26px, 3vw, 34px);
-    line-height: 1.2;
+    font-size: clamp(26px, 2.8vw, 32px);
+    letter-spacing: -0.02em;
+    line-height: 1.15;
     color: var(--near-black);
     margin: 0;
 }
 
+.kami-masthead-divider {
+    color: var(--line);
+    font-weight: 300;
+    font-size: 20px;
+}
+
 .kami-subtitle {
     font-family: var(--sans);
-    font-weight: 400;
-    font-size: 15px;
-    line-height: 1.5;
+    font-weight: 500;
+    font-size: 16px;
+    line-height: 1.4;
+    color: var(--olive);
+    margin: 0;
+}
+
+.kami-masthead-meta {
+    font-family: var(--sans);
+    font-size: 13px;
     color: var(--stone);
-    margin: 6px 0 0;
+    margin-top: 2px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-variant-numeric: tabular-nums;
+}
+
+.kami-meta-dot {
+    color: var(--line);
+}
+
+.kami-masthead-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
 }
 
 /* ========== Buttons & Filter Pills ========== */
@@ -181,16 +201,16 @@ a:hover {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    background: #2563eb;
+    gap: 7px;
+    background: var(--near-black);
     color: #ffffff;
     font-family: var(--sans);
     font-weight: 600;
-    font-size: 14.5px;
-    padding: 10px 20px;
-    border-radius: 10px;
-    border: 1px solid #2563eb;
-    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+    font-size: 13.5px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--near-black);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
     transition: all 0.15s ease;
     cursor: pointer;
     white-space: nowrap;
@@ -203,8 +223,8 @@ html.dark .btn-primary {
 }
 
 .btn-primary:hover:not(:disabled) {
-    background: #1d4ed8;
-    border-color: #1d4ed8;
+    background: var(--brand);
+    border-color: var(--brand);
     transform: translateY(-1px);
 }
 
@@ -219,51 +239,55 @@ html.dark .btn-primary {
     justify-content: center;
     gap: 6px;
     font-family: var(--sans);
-    font-weight: 600;
-    font-size: 14px;
+    font-weight: 500;
+    font-size: 13.5px;
     color: var(--dark-warm);
     background: var(--ivory);
-    padding: 9px 16px;
-    border-radius: 10px;
-    border: 1px solid var(--line);
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
     transition: all 0.15s ease;
     cursor: pointer;
     white-space: nowrap;
 }
 
 .btn-ghost:hover:not(:disabled) {
-    background: var(--warm-sand);
+    background: var(--inline-code-bg);
+    border-color: var(--line);
     color: var(--near-black);
+}
+
+.btn-icon-only {
+    padding: 8px 10px;
 }
 
 .btn-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     font-family: var(--sans);
     font-weight: 500;
-    font-size: 14px;
+    font-size: 13px;
     font-variant-numeric: tabular-nums;
     color: var(--olive);
     background: var(--ivory);
-    padding: 6px 14px;
-    border-radius: 8px;
+    padding: 5px 12px;
+    border-radius: 9999px;
     border: 1px solid var(--border);
     cursor: pointer;
     transition: all 0.15s ease;
 }
 
 .btn-chip:hover {
-    background: var(--warm-sand);
+    background: var(--inline-code-bg);
     color: var(--near-black);
 }
 
 .btn-chip.active {
-    background: #2563eb;
+    background: var(--near-black);
     color: #ffffff;
-    border-color: #2563eb;
+    border-color: var(--near-black);
     font-weight: 600;
-    box-shadow: 0 2px 5px rgba(37, 99, 235, 0.22);
 }
 
 html.dark .btn-chip.active {
@@ -642,16 +666,16 @@ html.dark .kami-badge-sync {
     background: var(--ivory);
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 12px 18px;
+    padding: 10px 16px;
 }
 
 .tab-btn {
     font-family: var(--sans);
-    font-size: 15.5px;
+    font-size: 14.5px;
     font-weight: 600;
     color: var(--stone);
     background: transparent;
-    padding: 8px 18px;
+    padding: 7px 16px;
     border-radius: 8px;
     border: none;
     cursor: pointer;
@@ -665,7 +689,7 @@ html.dark .kami-badge-sync {
 
 .tab-btn.active {
     color: #ffffff;
-    background: #2563eb;
+    background: var(--near-black);
     font-weight: 600;
 }
 

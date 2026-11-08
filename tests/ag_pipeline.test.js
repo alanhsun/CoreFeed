@@ -1336,7 +1336,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         }
     });
 
-    it('13. Frontend UI SSR (GET /), GET/POST /api/config Method 2B & Schedule persistence (optional AI key protection), and Web UI one-click POST /api/agent/pull-github', async () => {
+    it('13. Purified Frontend UI SSR (GET /), GET/POST /api/config persistence, and Web UI one-click POST /api/agent/pull-github', async () => {
         const mockUiSnapshot = {
             version: '2.0',
             publishedAt: new Date().toISOString(),
@@ -1347,12 +1347,12 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
                 {
                     id: 'ui-sync-news-1',
                     title: 'Web UI One-Click GitHub Snapshot Sync Verification',
-                    translatedTitle: '前端一键同步 GitHub 快照测试：多客户端快照中枢秒级载入',
-                    summary: '通过顶部「同步 GitHub 快照」按钮或设置弹窗内测试按钮，无需填写外部 API Key 即可直接从 ag-snapshot/latest.json 同步最新精编内容。',
+                    translatedTitle: '前端一键同步最新快照测试：多客户端快照中枢秒级载入',
+                    summary: '通过顶部「同步最新」按钮，无需填写外部 API Key 即可直接从 ag-snapshot/latest.json 同步最新精编内容。',
                     url: 'https://www.bbc.com/news/ui-sync-test-2026',
                     region: '国际',
                     category: '科技',
-                    keyPoints: ['支持一键同步 GitHub 快照', '状态栏实时显示发布端标识'],
+                    keyPoints: ['支持一键同步最新快照', '极简纸媒阅读体验'],
                     source: { id: 'bbc', name: 'BBC News' }
                 }
             ],
@@ -1380,24 +1380,57 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         const mockUiSnapshotUrl = `http://127.0.0.1:${uiGhPort}/alanhsun/CoreFeed/ag-snapshot/latest.json`;
 
         try {
-            // 13a. Verify GET / SSR HTML includes Method 2B status bar, publisher badge, one-click sync button, and upgraded settings modal
+            // 13a. Verify GET / SSR HTML conforms to the purified, restrained editorial UI contract
             stateManager.set('lastPublishedBy', 'antigravity-cloud-vm', false);
             const resHome = await fetch(`${baseUrl}/`);
             assert.equal(resHome.status, 200);
             const html = await resHome.text();
 
-            assert.ok(html.includes('id="syncGithubBtn"'), 'SSR HTML should contain one-click #syncGithubBtn');
-            assert.ok(html.includes('同步 GitHub 快照'), 'SSR HTML should contain "同步 GitHub 快照" button text');
-            assert.ok(html.includes('antigravity-cloud-vm'), 'SSR HTML should render lastPublishedBy identifier');
-            assert.ok(html.includes('多客户端与 GitHub 快照同步（方案 2B）'), 'SSR HTML should contain Method 2B settings section');
+            // (a) Presence of purified masthead, restrained action buttons, and simplified settings modal
+            assert.ok(html.includes('CoreFeed'), 'SSR HTML should contain CoreFeed brand title');
+            assert.ok(html.includes('全球要闻深度聚合'), 'SSR HTML should contain editorial subtitle "全球要闻深度聚合"');
+            assert.ok(html.includes('id="lastUpdateTime"'), 'SSR HTML should contain #lastUpdateTime in masthead');
+            assert.ok(html.includes('更新于'), 'SSR HTML should display "更新于" timestamp prefix');
+            assert.ok(html.includes('id="syncGithubBtn"'), 'SSR HTML should contain #syncGithubBtn');
+            assert.ok(html.includes('同步最新'), 'SSR HTML should contain restrained "同步最新" button label');
+            assert.ok(html.includes('id="btnSettings"'), 'SSR HTML should contain #btnSettings button');
+            assert.ok(html.includes('设置'), 'SSR HTML should contain "设置" button label');
+            assert.ok(html.includes('id="settingsModal"'), 'SSR HTML should contain #settingsModal');
             assert.ok(html.includes('id="cfgGithubSyncEnabled"'), 'SSR HTML should contain #cfgGithubSyncEnabled');
-            assert.ok(html.includes('id="cfgGithubPushEnabled"'), 'SSR HTML should contain #cfgGithubPushEnabled');
             assert.ok(html.includes('id="cfgGithubSyncInterval"'), 'SSR HTML should contain #cfgGithubSyncInterval');
-            assert.ok(html.includes('id="cfgClientId"'), 'SSR HTML should contain #cfgClientId');
             assert.ok(html.includes('id="cfgAutoUpdateEnabled"'), 'SSR HTML should contain #cfgAutoUpdateEnabled');
             assert.ok(html.includes('id="cfgUpdateTimes"'), 'SSR HTML should contain #cfgUpdateTimes');
-            assert.ok(html.includes('id="optionalAiConfigDetails"'), 'SSR HTML should contain collapsible #optionalAiConfigDetails');
-            assert.ok(html.includes('可选（使用 Antigravity 客户端直编或仅作为路由器接收端时无需填写外部 API Key）'), 'SSR HTML should clearly badge external AI config as optional');
+            assert.ok(html.includes('id="modalSyncStatusText"'), 'SSR HTML should contain concise sync status display #modalSyncStatusText');
+            assert.ok(html.includes('id="btnSaveSettings"'), 'SSR HTML should contain #btnSaveSettings');
+
+            // (b) Absence of removed cluttered buttons, engineering badges, status bars, and low-level modal inputs
+            assert.ok(!html.includes('立即采集全球新闻'), 'SSR HTML must NOT contain removed manual harvest button "立即采集全球新闻"');
+            assert.ok(!html.includes('id="btnRunPatrol"'), 'SSR HTML must NOT contain #btnRunPatrol');
+            assert.ok(!html.includes('重新生成综述'), 'SSR HTML must NOT contain "重新生成综述"');
+            assert.ok(!html.includes('生成今日综述'), 'SSR HTML must NOT contain "生成今日综述"');
+            assert.ok(!html.includes('生成 / 刷新今日综述'), 'SSR HTML must NOT contain "生成 / 刷新今日综述"');
+            assert.ok(!html.includes('id="btnGenSummary"'), 'SSR HTML must NOT contain #btnGenSummary');
+            assert.ok(!html.includes('30 大权威信源'), 'SSR HTML must NOT contain cluttered badge "30 大权威信源"');
+            assert.ok(!html.includes('48h 时效过滤'), 'SSR HTML must NOT contain cluttered badge "48h 时效过滤"');
+            assert.ok(!html.includes('AI 去重精译'), 'SSR HTML must NOT contain cluttered badge "AI 去重精译"');
+            assert.ok(!html.includes('id="githubSyncHeaderBadge"'), 'SSR HTML must NOT contain #githubSyncHeaderBadge');
+            assert.ok(!html.includes('id="publisherHeaderBadge"'), 'SSR HTML must NOT contain #publisherHeaderBadge');
+            assert.ok(!html.includes('发布端:'), 'SSR HTML must NOT contain "发布端:" engineering badge');
+            assert.ok(!html.includes('发布端：'), 'SSR HTML must NOT contain "发布端：" status bar label');
+            assert.ok(!html.includes('流水线状态：'), 'SSR HTML must NOT contain "流水线状态："');
+            assert.ok(!html.includes('候选池'), 'SSR HTML must NOT contain "候选池"');
+            assert.ok(!html.includes('信源巡检'), 'SSR HTML must NOT contain "信源巡检"');
+            assert.ok(!html.includes('展开实时采集日志'), 'SSR HTML must NOT contain "展开实时采集日志"');
+            assert.ok(!html.includes('id="optionalAiConfigDetails"'), 'SSR HTML must NOT contain #optionalAiConfigDetails');
+            assert.ok(!html.includes('id="cfgAiApiKey"'), 'SSR HTML must NOT contain #cfgAiApiKey');
+            assert.ok(!html.includes('id="cfgAiBaseUrl"'), 'SSR HTML must NOT contain #cfgAiBaseUrl');
+            assert.ok(!html.includes('id="cfgAiModel"'), 'SSR HTML must NOT contain #cfgAiModel');
+            assert.ok(!html.includes('id="cfgClientId"'), 'SSR HTML must NOT contain #cfgClientId');
+            assert.ok(!html.includes('id="cfgGithubSnapshotUrl"'), 'SSR HTML must NOT contain #cfgGithubSnapshotUrl');
+            assert.ok(!html.includes('id="cfgGithubPushEnabled"'), 'SSR HTML must NOT contain #cfgGithubPushEnabled');
+            assert.ok(!html.includes('id="cfgMaxCurated"'), 'SSR HTML must NOT contain #cfgMaxCurated');
+            assert.ok(!html.includes('id="cfgDeepReadCount"'), 'SSR HTML must NOT contain #cfgDeepReadCount');
+            assert.ok(!html.includes('id="cfgFreshnessHours"'), 'SSR HTML must NOT contain #cfgFreshnessHours');
 
             // 13b. Verify GET /api/config exposes Method 2B and schedule fields
             const resGetCfg = await fetch(`${baseUrl}/api/config`);
@@ -1412,7 +1445,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(getCfgData.config.githubSync);
             assert.ok(getCfgData.config.schedule);
 
-            // 13c. Verify POST /api/config saves Method 2B + Schedule settings without wiping existing AI_API_KEY when empty/masked
+            // 13c. Verify POST /api/config saves both full backward-compatible payloads and the simplified 4-field modal payload without wiping existing settings
             process.env.AI_API_KEY = 'sk-existing-secret-preserve';
             config.reload();
 
@@ -1442,11 +1475,30 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.equal(postCfgData.config.AUTO_UPDATE_ENABLED, true);
             assert.equal(postCfgData.config.ai.apiKeyConfigured, true, 'Empty AI_API_KEY in POST /api/config must not erase existing configured key');
 
+            // Also verify the simplified modal's 4-key payload preserves CLIENT_ID, GITHUB_PUSH_ENABLED, and GITHUB_SNAPSHOT_URL
+            const resPostModalCfg = await fetch(`${baseUrl}/api/config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    GITHUB_SYNC_ENABLED: true,
+                    GITHUB_SYNC_INTERVAL_MINUTES: 60,
+                    AUTO_UPDATE_ENABLED: true,
+                    UPDATE_TIMES: '08:00,12:30,19:30'
+                })
+            });
+            assert.equal(resPostModalCfg.status, 200);
+            const postModalCfgData = await resPostModalCfg.json();
+            assert.equal(postModalCfgData.success, true);
+            assert.equal(postModalCfgData.config.GITHUB_SYNC_INTERVAL_MINUTES, 60);
+            assert.equal(postModalCfgData.config.UPDATE_TIMES, '08:00,12:30,19:30');
+            assert.equal(postModalCfgData.config.GITHUB_PUSH_ENABLED, false, '4-key modal save must preserve existing GITHUB_PUSH_ENABLED');
+            assert.equal(postModalCfgData.config.CLIENT_ID, 'router-10-10-20-10', '4-key modal save must preserve existing CLIENT_ID');
+
             const savedOnDisk = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'settings.json'), 'utf8'));
-            assert.equal(savedOnDisk.GITHUB_SYNC_INTERVAL_MINUTES, 45);
+            assert.equal(savedOnDisk.GITHUB_SYNC_INTERVAL_MINUTES, 60);
             assert.equal(savedOnDisk.GITHUB_PUSH_ENABLED, false);
             assert.equal(savedOnDisk.CLIENT_ID, 'router-10-10-20-10');
-            assert.equal(savedOnDisk.UPDATE_TIMES, '07:30,12:00,20:00');
+            assert.equal(savedOnDisk.UPDATE_TIMES, '08:00,12:30,19:30');
 
             // 13d. Verify Web UI one-click POST /api/agent/pull-github works seamlessly even when PUBLISH_SECRET is set
             process.env.PUBLISH_SECRET = 'router-ui-secret-999';

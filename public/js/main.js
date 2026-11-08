@@ -95,37 +95,13 @@ class CoreFeedApp {
         if (typeof io === 'undefined') return;
         this.socket = io();
 
-        const dot = document.getElementById('socketStatusDot');
-
-        this.socket.on('connect', () => {
-            if (dot) dot.style.background = 'var(--brand)';
-        });
-
-        this.socket.on('disconnect', () => {
-            if (dot) dot.style.background = 'var(--stone)';
-        });
-
         this.socket.on('connected', (data) => {
-            if (data.collectionPhase) {
+            if (data && data.collectionPhase) {
                 this.collectionPhase = data.collectionPhase;
             }
-            if (Array.isArray(data.recentLogs)) {
-                data.recentLogs.forEach(log => this.appendAgentLog(log));
-            }
-            if (data.isUpdating && data.progress) {
-                this.updatePipelineUI(data.progress);
-            }
         });
 
-        this.socket.on('agent-event', (entry) => {
-            this.appendAgentLog(entry);
-        });
-
-        this.socket.on('update-progress', (progress) => {
-            this.updatePipelineUI(progress);
-        });
-
-        // 两阶段渐进式核心或 GitHub 快照同步完成：实时拉取最新快照与状态刷新卡片
+        // GitHub 快照同步或发布更新完成：实时拉取最新快照与状态刷新卡片
         this.socket.on('news-updated', (payload) => {
             if (payload && payload.phase) {
                 this.collectionPhase = payload.phase;
@@ -158,73 +134,6 @@ class CoreFeedApp {
         });
     }
 
-    appendAgentLog(entry) {
-        const drawer = document.getElementById('agentLogDrawer');
-        if (!drawer || !entry) return;
-        const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : '';
-        const line = document.createElement('div');
-        line.innerHTML = `<span style="color: var(--stone);">[${time}]</span> <span style="color: var(--brand); font-weight: 500;">[${this.escapeHtml(entry.agent || 'Agent')}]</span> <span style="color: var(--dark-warm);">${this.escapeHtml(entry.message || '')}</span>`;
-        drawer.appendChild(line);
-        drawer.scrollTop = drawer.scrollHeight;
-    }
-
-    toggleAgentLogDrawer() {
-        const drawer = document.getElementById('agentLogDrawer');
-        if (drawer) drawer.classList.toggle('hidden');
-    }
-
-    updatePipelineUI(progress = {}) {
-        const container = document.getElementById('liveProgressContainer');
-        const bar = document.getElementById('liveProgressBar');
-        const text = document.getElementById('liveProgressText');
-        const pctLabel = document.getElementById('liveProgressPercent');
-
-        const pct = Math.min(100, Math.max(0, Number(progress.percentage || 0)));
-        const stage = String(progress.stage || '').toLowerCase();
-
-        if (container && bar && text && pctLabel) {
-            container.classList.remove('hidden');
-            bar.style.width = `${pct}%`;
-            text.textContent = progress.message || '正在执行采集与编译任务...';
-            pctLabel.textContent = `${pct}%`;
-
-            if (pct >= 100 || stage === 'completed') {
-                setTimeout(() => {
-                    container.classList.add('hidden');
-                }, 3500);
-            }
-        }
-
-        const nodes = {
-            scout: document.getElementById('node-scout'),
-            curate: document.getElementById('node-curate'),
-            compile: document.getElementById('node-compile'),
-            summary: document.getElementById('node-summary')
-        };
-
-        Object.values(nodes).forEach(el => {
-            if (el) el.classList.remove('active', 'done');
-        });
-
-        if (stage.includes('scout')) {
-            nodes.scout?.classList.add('active');
-        } else if (stage.includes('curate')) {
-            nodes.scout?.classList.add('done');
-            nodes.curate?.classList.add('active');
-        } else if (stage.includes('deep_read') || stage.includes('compile')) {
-            nodes.scout?.classList.add('done');
-            nodes.curate?.classList.add('done');
-            nodes.compile?.classList.add('active');
-        } else if (stage.includes('summary')) {
-            nodes.scout?.classList.add('done');
-            nodes.curate?.classList.add('done');
-            nodes.compile?.classList.add('done');
-            nodes.summary?.classList.add('active');
-        } else if (stage === 'completed') {
-            Object.values(nodes).forEach(el => el?.classList.add('done'));
-        }
-    }
-
     // ==================== 3. 选项卡与多维筛选 ====================
     switchTab(tabName) {
         this.activeTab = tabName;
@@ -255,7 +164,6 @@ class CoreFeedApp {
         const regionCounts = { '全部': this.news.length };
         const categoryCounts = { '全部': this.news.length };
         const sourceCounts = {};
-        let multiSourceCount = 0;
 
         this.news.forEach(item => {
             const r = item.region || '国际';
@@ -264,15 +172,7 @@ class CoreFeedApp {
             regionCounts[r] = (regionCounts[r] || 0) + 1;
             categoryCounts[c] = (categoryCounts[c] || 0) + 1;
             sourceCounts[s] = (sourceCounts[s] || 0) + 1;
-            if ((item.sourceCount || 1) > 1 || (Array.isArray(item.relatedSources) && item.relatedSources.length > 0)) {
-                multiSourceCount++;
-            }
         });
-
-        const multiLabel = document.getElementById('multiSourceCountLabel');
-        if (multiLabel) {
-            multiLabel.textContent = multiSourceCount;
-        }
 
         // 如果当前选中的筛选值在新数据中不存在，自动回退到“全部”
         if (this.selectedRegion !== '全部' && !regionCounts[this.selectedRegion]) {
@@ -346,8 +246,10 @@ class CoreFeedApp {
             return true;
         });
 
-        document.getElementById('displayedCountLabel').textContent = filtered.length;
-        document.getElementById('totalPoolCountLabel').textContent = Math.max(this.totalNews, this.news.length);
+        const displayedEl = document.getElementById('displayedCountLabel');
+        if (displayedEl) displayedEl.textContent = filtered.length;
+        const totalPoolEl = document.getElementById('totalPoolCountLabel');
+        if (totalPoolEl) totalPoolEl.textContent = Math.max(this.totalNews, this.news.length);
 
         const loadMoreBtn = document.getElementById('loadMoreContainer');
         if (loadMoreBtn) {
@@ -359,7 +261,7 @@ class CoreFeedApp {
                 <div class="col-span-full kami-card py-14 text-center space-y-3">
                     <div class="kami-tag mx-auto">暂无匹配新闻</div>
                     <h3 class="text-xl font-bold" style="color: var(--near-black);">当前筛选条件下暂无新闻条目</h3>
-                    <p class="text-sm max-w-md mx-auto" style="color: var(--stone);">点击右上角「立即采集全球新闻」按钮，并发采集路透社、BBC、纽约时报、彭博社、南华早报等全球知名媒体。</p>
+                    <p class="text-sm max-w-md mx-auto" style="color: var(--stone);">可尝试切换筛选条件，或点击右上角「同步最新」拉取最新一期全球权威媒体精编要闻。</p>
                 </div>
             `;
             return;
@@ -551,99 +453,84 @@ class CoreFeedApp {
     }
 
     /**
-     * 更新主界面顶部与流水线状态栏中的发布客户端标识、GitHub 快照同步状态及定时任务时间
+     * 更新报头最后更新时间（简明、克制格式，如 "更新于 12:30" 或 "更新于 11-08 12:30"）
      */
-    renderStatusBar() {
-        if (this.lastUpdated) {
-            const updatedEl = document.getElementById('lastUpdatedLabel');
-            if (updatedEl) {
-                updatedEl.textContent = new Date(this.lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-            }
+    updateHeaderTimestamp(isoStr = this.lastUpdated) {
+        if (isoStr) {
+            this.lastUpdated = isoStr;
         }
-
-        const publisher = this.lastPublishedBy || this.githubSync?.publishedBy || this.clientId || '本地节点';
-        const headerPubEl = document.getElementById('headerPublishedBy');
-        if (headerPubEl) {
-            headerPubEl.textContent = publisher;
+        const updatedEl = document.getElementById('lastUpdatedLabel') || document.getElementById('lastUpdateTime');
+        if (!updatedEl) return;
+        if (!this.lastUpdated) {
+            updatedEl.textContent = '更新于 --:--';
+            return;
         }
-        const pubBadge = document.getElementById('publishedByBadge');
-        if (pubBadge) {
-            pubBadge.textContent = `发布端: ${publisher}`;
+        const d = new Date(this.lastUpdated);
+        if (isNaN(d.getTime())) {
+            updatedEl.textContent = '更新于 --:--';
+            return;
         }
-        const pubLabel = document.getElementById('lastPublishedByLabel');
-        if (pubLabel) {
-            pubLabel.textContent = publisher;
-        }
-
-        if (this.githubSync) {
-            const syncEnabled = this.githubSync.enabled !== false;
-            const intervalMin = this.githubSync.intervalMinutes || 60;
-            const ghText = syncEnabled
-                ? `GitHub 快照同步 (${intervalMin}m)`
-                : 'GitHub 同步已关闭';
-            const ghHeaderTextEl = document.getElementById('githubSyncHeaderText');
-            if (ghHeaderTextEl) {
-                ghHeaderTextEl.textContent = ghText;
-            }
-            const ghHeaderBadgeEl = document.getElementById('githubSyncHeaderBadge');
-            if (ghHeaderBadgeEl) {
-                ghHeaderBadgeEl.title = `分支: ${this.githubSync.branch || 'ag-snapshot'} · 状态: ${this.githubSync.lastSyncStatus || 'idle'}`;
-            }
-            const ghBadge = document.getElementById('githubSyncBadge');
-            if (ghBadge) {
-                ghBadge.textContent = ghText;
-            }
-        }
-
-        const schedLabel = document.getElementById('scheduleTimesLabel');
-        if (schedLabel && this.schedule) {
-            const enabled = this.schedule.enabled !== false;
-            const times = Array.isArray(this.schedule.updateTimes) && this.schedule.updateTimes.length > 0
-                ? this.schedule.updateTimes.join(' / ')
-                : '08:00 / 12:30 / 19:30';
-            schedLabel.textContent = enabled ? times : `已暂停 (${times})`;
+        const nowStr = new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
+        const itemDateStr = d.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
+        const timePart = d.toLocaleTimeString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+        if (nowStr === itemDateStr) {
+            updatedEl.textContent = `更新于 ${timePart}`;
+        } else {
+            const mdPart = d.toLocaleDateString('zh-CN', {
+                timeZone: 'Asia/Shanghai',
+                month: '2-digit',
+                day: '2-digit'
+            });
+            updatedEl.textContent = `更新于 ${mdPart} ${timePart}`;
         }
     }
 
+    renderStatusBar() {
+        this.updateHeaderTimestamp(this.lastUpdated);
+    }
+
     /**
-     * 更新「系统设置」弹窗内的 GitHub 快照同步实时状态面板
+     * 更新「系统设置」弹窗内的简洁同步状态展示
      */
     renderModalSyncStatus() {
         const gh = this.githubSync || {};
         const statusEl = document.getElementById('modalSyncStatusText') || document.getElementById('cfgSyncStatusText');
         const syncedAtEl = document.getElementById('modalSyncLastTime') || document.getElementById('cfgLastSyncedAt');
-        const pubByEl = document.getElementById('modalSyncPublishedBy') || document.getElementById('cfgLastPublishedBy');
-        const branchEl = document.getElementById('cfgSnapshotBranchUrl');
 
         const statusMap = {
-            synced: '已同步最新快照',
-            'up-to-date': '已是最新快照 (ETag 304)',
+            synced: '已同步最新',
+            'up-to-date': '已是最新',
             idle: '就绪',
             error: `同步异常 (${gh.lastSyncError || '未知错误'})`
         };
 
         if (statusEl) {
             statusEl.textContent = gh.enabled === false
-                ? '已关闭自动拉取'
+                ? '自动同步已关闭'
                 : (statusMap[gh.lastSyncStatus] || gh.lastSyncStatus || '就绪');
         }
         if (syncedAtEl) {
             const ts = gh.lastSyncedAt || gh.lastSyncCheckAt || this.lastUpdated;
             syncedAtEl.textContent = ts
-                ? new Date(ts).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
-                : '尚未检测';
-        }
-        if (pubByEl) {
-            pubByEl.textContent = this.lastPublishedBy || gh.publishedBy || gh.lastSyncedPublishedBy || this.clientId || '暂无记录';
-        }
-        if (branchEl) {
-            branchEl.textContent = `${gh.branch || 'ag-snapshot'} · ${gh.snapshotUrl || 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'}`;
+                ? new Date(ts).toLocaleString('zh-CN', {
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false,
+                    timeZone: 'Asia/Shanghai'
+                })
+                : '尚未同步';
         }
     }
 
     /**
-     * 一键从 GitHub 快照分支 (ag-snapshot/latest.json) 拉取最新新闻并刷新界面
-     * 可同时由顶部「同步 GitHub 快照」按钮和系统设置弹窗内「立即从 GitHub 同步」按钮调用
+     * 一键从 GitHub 快照分支 (ag-snapshot/latest.json) 同步最新一期新闻与综述
      */
     async syncFromGitHub(options = {}) {
         if (this.isSyncingGithub) return;
@@ -652,18 +539,10 @@ class CoreFeedApp {
         const headerBtn = document.getElementById('syncGithubBtn') || document.getElementById('btnSyncGithub');
         const headerIcon = document.getElementById('syncGithubBtnIcon');
         const headerText = document.getElementById('syncGithubBtnText');
-        const modalBtn = document.getElementById('btnModalSyncGithub') || document.getElementById('modalSyncGithubBtn');
-        const modalIcon = document.getElementById('modalSyncGithubIcon');
-        const modalText = document.getElementById('modalSyncGithubText');
 
         if (headerBtn) headerBtn.disabled = true;
-        if (headerIcon) headerIcon.className = 'fa-solid fa-spinner fa-spin text-sm';
-        if (headerText) headerText.textContent = '正在同步快照...';
-        if (modalBtn) modalBtn.disabled = true;
-        if (modalIcon) modalIcon.className = 'fa-solid fa-spinner fa-spin';
-        if (modalText) modalText.textContent = '正在拉取 GitHub 快照...';
-
-        this.toast('正在从 GitHub (ag-snapshot/latest.json) 同步最新全球要闻快照...', 'info');
+        if (headerIcon) headerIcon.className = 'fa-solid fa-spinner fa-spin text-xs';
+        if (headerText) headerText.textContent = '同步中...';
 
         try {
             const res = await fetch('/api/agent/pull-github', {
@@ -673,14 +552,14 @@ class CoreFeedApp {
                     'X-Requested-With': 'CoreFeed-WebUI'
                 },
                 body: JSON.stringify({
-                    force: options.force !== undefined ? Boolean(options.force) : true,
+                    force: options.force !== undefined ? Boolean(options.force) : false,
                     trigger: 'ui'
                 })
             });
             const data = await res.json();
 
             if (!res.ok || !data.success) {
-                throw new Error(data.message || '从 GitHub 同步快照失败');
+                throw new Error(data.message || '同步最新内容失败');
             }
 
             if (data.publishedBy) {
@@ -697,19 +576,19 @@ class CoreFeedApp {
             ]);
 
             const count = data.displayedCount || this.news.length;
-            const pubBy = data.publishedBy || this.lastPublishedBy || 'remote';
-            this.toast(`GitHub 快照同步成功！已载入 ${count} 条精选要闻（发布端: ${pubBy}）`, 'success');
+            if (data.skipped) {
+                this.toast(`当前已是最新内容（共 ${count} 条精选要闻）`, 'info');
+            } else {
+                this.toast(`已同步最新全球要闻（共 ${count} 条）`, 'success');
+            }
         } catch (err) {
-            this.toast(`GitHub 快照同步失败: ${err.message}`, 'error');
+            this.toast(`同步失败: ${err.message}`, 'error');
             await this.fetchStatus();
         } finally {
             this.isSyncingGithub = false;
             if (headerBtn) headerBtn.disabled = false;
-            if (headerIcon) headerIcon.className = 'fa-brands fa-github text-sm';
-            if (headerText) headerText.textContent = '同步 GitHub 快照';
-            if (modalBtn) modalBtn.disabled = false;
-            if (modalIcon) modalIcon.className = 'fa-brands fa-github';
-            if (modalText) modalText.textContent = '立即从 GitHub 同步';
+            if (headerIcon) headerIcon.className = 'fa-solid fa-rotate text-xs';
+            if (headerText) headerText.textContent = '同步最新';
         }
     }
 
@@ -724,65 +603,6 @@ class CoreFeedApp {
         } catch (_) {}
     }
 
-    /**
-     * 触发两阶段渐进式全球知名信源巡检
-     */
-    async triggerAgentPatrol() {
-        const btn = document.getElementById('btnRunPatrol');
-        const icon = document.getElementById('patrolBtnIcon');
-        const text = document.getElementById('patrolBtnText');
-        const categoryFilter = document.getElementById('patrolCategorySelect')?.value || 'all';
-
-        if (btn) btn.disabled = true;
-        if (icon) icon.className = 'fa-solid fa-spinner fa-spin text-xs';
-        if (text) text.textContent = '采集与编译中...';
-
-        this.collectionPhase = 'collecting';
-        this.toast('已启动两阶段渐进式采集：几秒内将先行展示最新外媒报道，随后后台自动执行全文深读与中文编译...', 'info');
-        this.updatePipelineUI({ stage: 'scout', percentage: 5, message: '正在并发连接全球知名媒体矩阵...' });
-
-        try {
-            const res = await fetch('/api/agent/patrol', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    categoryFilter,
-                    generateSummary: true
-                })
-            });
-            const data = await res.json();
-
-            if (!res.ok || !data.success) {
-                throw new Error(data.message || '采集请求失败');
-            }
-
-            this.collectionPhase = 'completed';
-            this.news = data.news || [];
-            this.totalNews = data.totalEnhancedCount || this.news.length;
-            this.lastUpdated = data.lastUpdated;
-            if (data.summaryArticle) {
-                this.summaryArticle = data.summaryArticle;
-                this.renderSummaryArticle(data.summaryArticle);
-            }
-
-            if (this.lastUpdated) {
-                document.getElementById('lastUpdatedLabel').textContent = new Date(this.lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-            }
-
-            this.renderFilters();
-            this.renderNewsGrid();
-            await this.fetchStatus();
-            this.toast(`全球新闻采集与编译全部完成！共展示 ${this.news.length} 条精选新闻（耗时 ${data.elapsedSeconds || ''}s）`, 'success');
-        } catch (err) {
-            this.collectionPhase = 'idle';
-            this.toast(`采集提示: ${err.message}`, 'error');
-        } finally {
-            if (btn) btn.disabled = false;
-            if (icon) icon.className = 'fa-solid fa-satellite-dish text-xs';
-            if (text) text.textContent = '立即采集全球新闻';
-        }
-    }
-
     async fetchLatestNews() {
         try {
             const res = await fetch('/api/news');
@@ -795,10 +615,7 @@ class CoreFeedApp {
                 }
                 if (data.lastUpdated) {
                     this.lastUpdated = data.lastUpdated;
-                    const updatedEl = document.getElementById('lastUpdatedLabel');
-                    if (updatedEl) {
-                        updatedEl.textContent = new Date(data.lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-                    }
+                    this.updateHeaderTimestamp(data.lastUpdated);
                 }
                 if (data.lastPublishedBy) {
                     this.lastPublishedBy = data.lastPublishedBy;
@@ -925,173 +742,14 @@ class CoreFeedApp {
 
         if (titleEl) titleEl.textContent = article.title || '今日全球要闻深度综述';
         if (metaEl) {
-            metaEl.textContent = `生成时间：${new Date(article.generatedAt || Date.now()).toLocaleString('zh-CN')} · 涵盖 ${(article.regions || []).join('、')} · 共 ${article.wordCount || 0} 字`;
+            metaEl.textContent = `生成时间：${new Date(article.generatedAt || Date.now()).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} · 涵盖 ${(article.regions || []).join('、')} · 共 ${article.wordCount || 0} 字`;
         }
         if (bodyEl) {
             bodyEl.innerHTML = article.htmlContent || '';
         }
     }
 
-    async generateSummary() {
-        const btn = document.getElementById('btnGenSummary');
-        if (btn) btn.disabled = true;
-        this.toast('主编 Agent 正在统筹撰写《全球要闻深度综述》...', 'info');
-
-        try {
-            const res = await fetch('/api/generate-summary', { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok || !data.success) throw new Error(data.message || '生成综述失败');
-            this.summaryArticle = data.article;
-            this.renderSummaryArticle(data.article);
-            this.toast('《全球要闻深度综述》已生成！', 'success');
-        } catch (err) {
-            this.toast(err.message, 'error');
-        } finally {
-            if (btn) btn.disabled = false;
-        }
-    }
-
-    // ==================== 7. 全球知名信源矩阵管理 ====================
-
-    async openSourceMatrixModal() {
-        const modal = document.getElementById('sourceMatrixModal');
-        if (!modal) return;
-        modal.classList.remove('hidden');
-
-        try {
-            const res = await fetch('/api/sources/matrix');
-            const data = await res.json();
-            if (data && data.success) {
-                this.sourceMatrix = data.sources;
-                this.customSourcesDraft = this.sourceMatrix.filter(s => s.isCustom);
-                this.renderSourceMatrixList();
-            }
-        } catch (err) {
-            this.toast('加载信源矩阵失败: ' + err.message, 'error');
-        }
-    }
-
-    closeSourceMatrixModal() {
-        document.getElementById('sourceMatrixModal')?.classList.add('hidden');
-    }
-
-    renderSourceMatrixList() {
-        const container = document.getElementById('sourceMatrixList');
-        if (!container) return;
-
-        const categoryLabels = {
-            wire: '国际顶级通讯社与全球门户',
-            western: '欧美权威大报',
-            asiapacific: '亚太与大中华区名媒',
-            finance: '全球财经与商业',
-            tech: '前沿科技媒体',
-            custom: '自定义国际信源'
-        };
-
-        container.innerHTML = this.sourceMatrix.map((src) => {
-            const badge = categoryLabels[src.category] || '国际信源';
-            const stat = src.lastStat;
-            const statHtml = stat
-                ? `<span class="text-[11px]" style="color: ${stat.status === 'ok' ? 'var(--brand)' : 'var(--stone)'}; font-variant-numeric: tabular-nums;">上次采集：${stat.count} 条 (${stat.durationMs}ms)</span>`
-                : `<span class="text-[11px]" style="color: var(--stone); font-variant-numeric: tabular-nums;">权威指数：${src.authority || 85}</span>`;
-
-            return `
-                <div class="p-3.5 rounded-lg flex items-start justify-between gap-3" style="background: var(--ivory); border: 1px solid var(--border);">
-                    <label class="flex items-start gap-2.5 cursor-pointer flex-1 min-w-0">
-                        <input type="checkbox" data-source-id="${this.escapeHtml(src.id)}" class="source-toggle mt-1 accent-[#1B365D]" ${src.enabled ? 'checked' : ''}>
-                        <div class="min-w-0">
-                            <div class="font-medium text-xs sm:text-sm truncate" style="color: var(--near-black);">${this.escapeHtml(src.name)}</div>
-                            <div class="text-[11px] truncate" style="color: var(--stone);">${this.escapeHtml(badge)} · ${this.escapeHtml(src.domain || src.rssUrl || '')}</div>
-                            <div class="text-[11px] mt-0.5 line-clamp-1" style="color: var(--olive);">${this.escapeHtml(src.description || '')}</div>
-                            ${statHtml}
-                        </div>
-                    </label>
-                    <div class="flex flex-col items-end gap-1">
-                        <span class="text-[10px]" style="color: var(--stone);">单次条数</span>
-                        <input type="number" min="1" max="20" value="${src.maxArticles || 5}" data-source-max="${this.escapeHtml(src.id)}"
-                            class="kami-input w-14 px-2 py-1 text-xs text-center" style="font-variant-numeric: tabular-nums;">
-                    </div>
-                </div>
-            `;
-        }).join('');
-    }
-
-    toggleAllSources(enable) {
-        document.querySelectorAll('.source-toggle').forEach(chk => {
-            chk.checked = Boolean(enable);
-        });
-    }
-
-    addCustomSource() {
-        const name = (document.getElementById('newSourceName')?.value || '').trim();
-        const domain = (document.getElementById('newSourceDomain')?.value || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-        const rssUrl = (document.getElementById('newSourceRss')?.value || '').trim();
-
-        if (!name || (!domain && !rssUrl)) {
-            this.toast('请填写媒体名称，以及域名或 RSS 地址', 'warning');
-            return;
-        }
-
-        const newSrc = {
-            id: `custom-${Date.now()}`,
-            name,
-            category: 'custom',
-            region: '国际',
-            authority: 85,
-            enabled: true,
-            maxArticles: 5,
-            strategy: rssUrl ? 'rss' : 'gnews_proxy',
-            domain: domain || (rssUrl ? new URL(rssUrl).hostname : ''),
-            url: domain ? `https://${domain}` : rssUrl,
-            rssUrl: rssUrl || `https://news.google.com/rss/search?q=site:${encodeURIComponent(domain)}+when:2d&hl=en-US&gl=US&ceid=US:en`,
-            description: '用户自定义添加的国际媒体源',
-            isCustom: true
-        };
-
-        this.sourceMatrix.push(newSrc);
-        this.customSourcesDraft.push(newSrc);
-        this.renderSourceMatrixList();
-        this.toast(`已添加信源「${name}」，请点击右下角保存配置`, 'info');
-    }
-
-    async saveSourceMatrix() {
-        const overrides = {};
-        document.querySelectorAll('.source-toggle').forEach(chk => {
-            const id = chk.getAttribute('data-source-id');
-            const maxInput = document.querySelector(`[data-source-max="${id}"]`);
-            overrides[id] = {
-                enabled: chk.checked,
-                maxArticles: maxInput ? parseInt(maxInput.value, 10) || 5 : 5
-            };
-        });
-
-        const updatedCustoms = this.customSourcesDraft.map(c => ({
-            ...c,
-            enabled: overrides[c.id]?.enabled ?? c.enabled,
-            maxArticles: overrides[c.id]?.maxArticles ?? c.maxArticles
-        }));
-
-        try {
-            const res = await fetch('/api/sources/matrix', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    overrides,
-                    customSources: updatedCustoms
-                })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.success) throw new Error(data.message || '保存失败');
-
-            document.getElementById('enabledSourcesCount').textContent = data.enabledCount;
-            this.closeSourceMatrixModal();
-            this.toast(`信源矩阵已保存（当前启用 ${data.enabledCount} 个全球信源）`, 'success');
-        } catch (err) {
-            this.toast(err.message, 'error');
-        }
-    }
-
-    // ==================== 8. 系统、方案 2B 同步与 AI 设置弹窗 ====================
+    // ==================== 7. 极简系统设置弹窗 ====================
 
     openSettings() {
         return this.openSettingsModal();
@@ -1122,36 +780,22 @@ class CoreFeedApp {
 
             if (data && data.success) {
                 const cfg = data.config || data;
-                const { ai = {}, agent = {}, schedule = {}, githubSync = {} } = cfg;
+                const { agent = {}, schedule = {}, githubSync = {} } = cfg;
 
-                // 1. 方案 2B：多客户端与 GitHub 快照同步配置
                 const syncEnabled = cfg.GITHUB_SYNC_ENABLED ?? githubSync.enabled ?? agent.githubSyncEnabled ?? true;
-                const pushEnabled = cfg.GITHUB_PUSH_ENABLED ?? githubSync.pushEnabled ?? agent.githubPushEnabled ?? true;
                 const syncInterval = cfg.GITHUB_SYNC_INTERVAL_MINUTES ?? githubSync.intervalMinutes ?? agent.githubSyncIntervalMinutes ?? 60;
-                const clientId = cfg.CLIENT_ID || githubSync.clientId || agent.clientId || this.clientId || '';
-                const snapshotUrl = cfg.GITHUB_SNAPSHOT_URL || githubSync.snapshotUrl || agent.githubSnapshotUrl || '';
 
                 const syncEnabledEl = document.getElementById('cfgGithubSyncEnabled');
                 if (syncEnabledEl) syncEnabledEl.checked = Boolean(syncEnabled);
 
-                const pushEnabledEl = document.getElementById('cfgGithubPushEnabled');
-                if (pushEnabledEl) pushEnabledEl.checked = Boolean(pushEnabled);
-
                 const syncIntervalEl = document.getElementById('cfgGithubSyncInterval');
                 if (syncIntervalEl) syncIntervalEl.value = syncInterval;
-
-                const clientIdEl = document.getElementById('cfgClientId');
-                if (clientIdEl) clientIdEl.value = clientId;
-
-                const snapshotUrlEl = document.getElementById('cfgGithubSnapshotUrl');
-                if (snapshotUrlEl && snapshotUrl) snapshotUrlEl.value = snapshotUrl;
 
                 if (githubSync && Object.keys(githubSync).length > 0) {
                     this.githubSync = { ...(this.githubSync || {}), ...githubSync };
                 }
                 this.renderModalSyncStatus();
 
-                // 2. 定时自动更新配置
                 const autoUpdateEnabled = cfg.AUTO_UPDATE_ENABLED ?? schedule.enabled ?? true;
                 const autoUpdateEl = document.getElementById('cfgAutoUpdateEnabled');
                 if (autoUpdateEl) autoUpdateEl.checked = Boolean(autoUpdateEnabled);
@@ -1160,33 +804,9 @@ class CoreFeedApp {
                 const updateTimesEl = document.getElementById('cfgUpdateTimes');
                 if (updateTimesEl) {
                     updateTimesEl.value = Array.isArray(updateTimesArr)
-                        ? updateTimesArr.join(',')
-                        : String(updateTimesArr || '08:00,12:30,19:30');
+                        ? updateTimesArr.join(', ')
+                        : String(updateTimesArr || '08:00, 12:30, 19:30');
                 }
-
-                // 3. 采集参数与可选外部 AI 接口配置
-                const baseUrlEl = document.getElementById('cfgAiBaseUrl');
-                if (baseUrlEl) baseUrlEl.value = ai.baseUrl || '';
-
-                const modelEl = document.getElementById('cfgAiModel');
-                if (modelEl) modelEl.value = ai.model || '';
-
-                const apiKeyEl = document.getElementById('cfgAiApiKey');
-                if (apiKeyEl) {
-                    apiKeyEl.value = '';
-                    apiKeyEl.placeholder = ai.apiKeyConfigured
-                        ? '已配置密钥（留空保持不变）'
-                        : '可选：使用 Antigravity 直编或作为路由器接收端时无需填写';
-                }
-
-                const maxCuratedEl = document.getElementById('cfgMaxCurated');
-                if (maxCuratedEl) maxCuratedEl.value = agent.maxCuratedArticles || 30;
-
-                const deepReadEl = document.getElementById('cfgDeepReadCount');
-                if (deepReadEl) deepReadEl.value = agent.deepReadTopCount ?? 8;
-
-                const freshnessEl = document.getElementById('cfgFreshnessHours');
-                if (freshnessEl) freshnessEl.value = agent.freshnessHours || 48;
             }
         } catch (_) {}
     }
@@ -1196,57 +816,30 @@ class CoreFeedApp {
     }
 
     async saveSettings() {
-        const githubSyncEnabled = document.getElementById('cfgGithubSyncEnabled')
-            ? Boolean(document.getElementById('cfgGithubSyncEnabled').checked)
-            : true;
-        const githubPushEnabled = document.getElementById('cfgGithubPushEnabled')
-            ? Boolean(document.getElementById('cfgGithubPushEnabled').checked)
-            : true;
+        const syncEnabledEl = document.getElementById('cfgGithubSyncEnabled');
+        const githubSyncEnabled = syncEnabledEl ? Boolean(syncEnabledEl.checked) : true;
+
         const githubSyncInterval = Math.max(
             1,
             parseInt(document.getElementById('cfgGithubSyncInterval')?.value, 10) || 60
         );
-        const clientId = (document.getElementById('cfgClientId')?.value || '').trim();
-        const githubSnapshotUrl = (document.getElementById('cfgGithubSnapshotUrl')?.value || '').trim();
 
-        const autoUpdateEnabled = document.getElementById('cfgAutoUpdateEnabled')
-            ? Boolean(document.getElementById('cfgAutoUpdateEnabled').checked)
-            : true;
-        const updateTimes = (document.getElementById('cfgUpdateTimes')?.value || '08:00,12:30,19:30').trim();
+        const autoUpdateEl = document.getElementById('cfgAutoUpdateEnabled');
+        const autoUpdateEnabled = autoUpdateEl ? Boolean(autoUpdateEl.checked) : true;
 
-        const baseUrl = (document.getElementById('cfgAiBaseUrl')?.value || '').trim();
-        const model = (document.getElementById('cfgAiModel')?.value || '').trim();
-        const apiKey = (document.getElementById('cfgAiApiKey')?.value || '').trim();
-        const maxCurated = parseInt(document.getElementById('cfgMaxCurated')?.value, 10) || 30;
-        const deepReadCount = parseInt(document.getElementById('cfgDeepReadCount')?.value, 10) || 8;
-        const freshnessHours = parseInt(document.getElementById('cfgFreshnessHours')?.value, 10) || 48;
+        const rawUpdateTimes = (document.getElementById('cfgUpdateTimes')?.value || '08:00, 12:30, 19:30').trim();
+        const updateTimes = rawUpdateTimes
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean)
+            .join(',') || '08:00,12:30,19:30';
 
         const payload = {
             GITHUB_SYNC_ENABLED: githubSyncEnabled,
-            GITHUB_PUSH_ENABLED: githubPushEnabled,
             GITHUB_SYNC_INTERVAL_MINUTES: githubSyncInterval,
             AUTO_UPDATE_ENABLED: autoUpdateEnabled,
-            UPDATE_TIMES: updateTimes,
-            AGENT_MAX_CURATED_ARTICLES: maxCurated,
-            AGENT_DEEP_READ_COUNT: deepReadCount,
-            AGENT_FRESHNESS_HOURS: freshnessHours
+            UPDATE_TIMES: updateTimes
         };
-
-        if (clientId) {
-            payload.CLIENT_ID = clientId;
-        }
-        if (githubSnapshotUrl) {
-            payload.GITHUB_SNAPSHOT_URL = githubSnapshotUrl;
-        }
-        if (baseUrl) {
-            payload.AI_BASE_URL = baseUrl;
-        }
-        if (model) {
-            payload.AI_MODEL = model;
-        }
-        if (apiKey && !apiKey.startsWith('***')) {
-            payload.AI_API_KEY = apiKey;
-        }
 
         try {
             const res = await fetch('/api/config', {
@@ -1257,16 +850,9 @@ class CoreFeedApp {
             const data = await res.json();
             if (!res.ok || !data.success) throw new Error(data.message || '保存失败');
 
-            if (model) {
-                const badge = document.getElementById('aiModelBadge');
-                if (badge) badge.textContent = model;
-            }
-            if (clientId) {
-                this.clientId = clientId;
-            }
             await this.fetchStatus();
             this.closeSettingsModal();
-            this.toast('系统与多客户端同步配置已保存并立即生效！', 'success');
+            this.toast('设置已保存并生效', 'success');
         } catch (err) {
             this.toast(err.message, 'error');
         }
