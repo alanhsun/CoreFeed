@@ -474,6 +474,113 @@ html.dark .btn-chip.active {
     line-height: 1.5;
 }
 
+.btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--brand);
+    background: var(--brand-tint);
+    padding: 9px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--tag-bg);
+    transition: all 0.15s ease;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: var(--tag-bg);
+    border-color: var(--brand);
+    transform: translateY(-1px);
+}
+
+.btn-secondary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.kami-badge-sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(16, 185, 129, 0.12);
+    color: #059669;
+    border: 1px solid rgba(16, 185, 129, 0.28);
+    font-family: var(--sans);
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 2.5px 9px;
+    border-radius: 6px;
+}
+
+html.dark .kami-badge-sync {
+    background: rgba(16, 185, 129, 0.18);
+    color: #34d399;
+    border-color: rgba(52, 211, 153, 0.3);
+}
+
+.kami-badge-optional {
+    display: inline-flex;
+    align-items: center;
+    background: var(--inline-code-bg);
+    color: var(--stone);
+    border: 1px solid var(--border);
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 6px;
+}
+
+.kami-toggle-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--inline-code-bg);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+}
+
+.kami-toggle-card:hover {
+    border-color: var(--brand);
+}
+
+.kami-toggle-card input[type="checkbox"] {
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.kami-collapsible {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--inline-code-bg);
+    padding: 12px 14px;
+}
+
+.kami-collapsible-summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.kami-collapsible-summary::-webkit-details-marker {
+    display: none;
+}
+
+.kami-collapsible[open] .collapsible-chevron {
+    transform: rotate(180deg);
+}
+
 /* Inputs */
 .kami-input {
     background: var(--ivory);

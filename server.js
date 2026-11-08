@@ -104,7 +104,11 @@ stateManager.on('newsData-changed', ({ value }) => {
         success: true,
         phase: stateManager.get('collectionPhase') || 'idle',
         total: value?.length || 0,
-        lastUpdated: stateManager.get('lastUpdated')
+        lastUpdated: stateManager.get('lastUpdated'),
+        lastPublishedBy:
+            stateManager.get('lastPublishedBy') ||
+            (githubSyncManager ? githubSyncManager.getStatus().publishedBy : null) ||
+            null
     });
 });
 
@@ -164,6 +168,18 @@ app.get('/', (req, res) => {
     const summaryArticle = stateManager.get('summaryArticle') || null;
     const lastUpdated = stateManager.get('lastUpdated');
     const sourceMatrix = getGlobalSourceMatrix();
+    const githubSyncStatus = githubSyncManager ? githubSyncManager.getStatus() : null;
+    const scheduleStatus = scheduleManager ? scheduleManager.getStatus() : null;
+    const clientId = String(
+        process.env.CLIENT_ID ||
+        config.githubSync?.clientId ||
+        config.agent?.clientId ||
+        'antigravity-client'
+    ).trim();
+    const lastPublishedBy =
+        stateManager.get('lastPublishedBy') ||
+        (githubSyncStatus && githubSyncStatus.publishedBy) ||
+        clientId;
 
     const displayNews = newsData.slice(0, config.agent.maxCuratedArticles || 30);
 
@@ -174,13 +190,25 @@ app.get('/', (req, res) => {
         displayedNews: displayNews.length,
         summaryArticle,
         lastUpdated,
+        lastPublishedBy,
+        clientId,
+        githubSync: githubSyncStatus,
+        schedule: scheduleStatus,
         sourceMatrix,
         appVersion: '2.0.0',
         config: {
             siteName: '聚核 CoreFeed · 全球知名信源实时聚合与深读平台',
             aiModel: config.minimax.model || 'MiniMax-M2.5',
             aiConfigured: Boolean(config.minimax.apiKey),
-            jinaReaderEnabled: config.agent.jinaReaderEnabled
+            jinaReaderEnabled: config.agent.jinaReaderEnabled,
+            githubSyncEnabled: Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true),
+            githubPushEnabled: Boolean(config.githubSync?.pushEnabled ?? config.agent?.githubPushEnabled ?? true),
+            githubSyncIntervalMinutes: Number(config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 60),
+            clientId,
+            updateTimes: (config.news.updateTimes && config.news.updateTimes.length > 0)
+                ? config.news.updateTimes
+                : ['08:00', '12:30', '19:30'],
+            autoUpdateEnabled: Boolean(config.news.autoUpdateEnabled)
         }
     });
 });

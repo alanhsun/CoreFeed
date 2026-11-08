@@ -170,7 +170,10 @@ function initializeApiRoutes(services, io, stateManager) {
      */
     router.post('/agent/pull-github', async (req, res) => {
         try {
-            const auth = verifyPublishSecret(req);
+            const isWebUiDefaultPull =
+                !req.body?.snapshotUrl &&
+                (req.get('x-requested-with') === 'CoreFeed-WebUI' || req.body?.trigger === 'ui');
+            const auth = isWebUiDefaultPull ? { authorized: true } : verifyPublishSecret(req);
             if (!auth.authorized) {
                 return res.status(401).json({
                     success: false,
@@ -188,7 +191,7 @@ function initializeApiRoutes(services, io, stateManager) {
             const result = await githubSyncManager.pullAndApply({
                 snapshotUrl: req.body?.snapshotUrl || null,
                 force: Boolean(req.body?.force),
-                trigger: 'api'
+                trigger: req.body?.trigger || 'api'
             });
 
             res.json(result);
@@ -541,7 +544,11 @@ function initializeApiRoutes(services, io, stateManager) {
             displayed: filtered.length,
             hasMore: allEnhanced.length > newsData.length,
             collectionPhase,
-            lastUpdated
+            lastUpdated,
+            lastPublishedBy:
+                stateManager.get('lastPublishedBy') ||
+                (githubSyncManager ? githubSyncManager.getStatus().publishedBy : null) ||
+                null
         });
     });
 
@@ -676,24 +683,72 @@ function initializeApiRoutes(services, io, stateManager) {
         });
     });
 
+    const buildConfigPayload = () => {
+        const syncStatus = githubSyncManager ? githubSyncManager.getStatus() : {};
+        const scheduleStatus = scheduleManager ? scheduleManager.getStatus() : {
+            isRunning: false,
+            enabled: config.news.autoUpdateEnabled,
+            updateTimes: config.news.updateTimes,
+            scheduleTimes: config.news.scheduleTimes || config.news.updateTimes,
+            timezone: config.news.timezone || 'Asia/Shanghai'
+        };
+        const lastPublishedBy =
+            stateManager.get('lastPublishedBy') ||
+            syncStatus.publishedBy ||
+            null;
+        const updateTimesArr = Array.isArray(scheduleStatus.updateTimes) && scheduleStatus.updateTimes.length > 0
+            ? scheduleStatus.updateTimes
+            : (config.news.updateTimes || ['08:00', '12:30', '19:30']);
+
+        return {
+            GITHUB_SYNC_ENABLED: Boolean(config.githubSync?.enabled ?? true),
+            GITHUB_PUSH_ENABLED: Boolean(config.githubSync?.pushEnabled ?? true),
+            GITHUB_SYNC_INTERVAL_MINUTES: Number(config.githubSync?.intervalMinutes || 60),
+            GITHUB_COOLDOWN_MINUTES: Number(config.githubSync?.cooldownMinutes ?? 30),
+            CLIENT_ID: config.githubSync?.clientId || config.agent?.clientId || 'antigravity-client',
+            GITHUB_SNAPSHOT_URL: config.githubSync?.snapshotUrl || config.agent?.githubSnapshotUrl || '',
+            AG_GITHUB_BRANCH: config.githubSync?.branch || 'ag-snapshot',
+            UPDATE_TIMES: updateTimesArr.join(','),
+            AUTO_UPDATE_ENABLED: Boolean(config.news.autoUpdateEnabled),
+            SCHEDULE_TIMEZONE: config.news.timezone || 'Asia/Shanghai',
+            lastPublishedBy,
+            agent: {
+                jinaReaderEnabled: config.agent.jinaReaderEnabled,
+                maxCuratedArticles: config.agent.maxCuratedArticles,
+                deepReadTopCount: config.agent.deepReadTopCount,
+                freshnessHours: config.agent.freshnessHours,
+                githubSyncEnabled: Boolean(config.githubSync?.enabled ?? true),
+                githubPushEnabled: Boolean(config.githubSync?.pushEnabled ?? true),
+                githubSyncIntervalMinutes: Number(config.githubSync?.intervalMinutes || 60),
+                clientId: config.githubSync?.clientId || config.agent?.clientId || 'antigravity-client',
+                githubSnapshotUrl: config.githubSync?.snapshotUrl || config.agent?.githubSnapshotUrl || ''
+            },
+            githubSync: {
+                ...syncStatus,
+                enabled: Boolean(config.githubSync?.enabled ?? true),
+                pushEnabled: Boolean(config.githubSync?.pushEnabled ?? true),
+                intervalMinutes: Number(config.githubSync?.intervalMinutes || 60),
+                cooldownMinutes: Number(config.githubSync?.cooldownMinutes ?? 30),
+                clientId: config.githubSync?.clientId || config.agent?.clientId || 'antigravity-client',
+                snapshotUrl: config.githubSync?.snapshotUrl || syncStatus.snapshotUrl || '',
+                branch: config.githubSync?.branch || syncStatus.branch || 'ag-snapshot',
+                lastPublishedBy,
+                lastSyncAt: syncStatus.lastSyncedAt || syncStatus.lastSyncCheckAt || null
+            },
+            ai: {
+                baseUrl: config.minimax.baseUrl,
+                model: config.minimax.model,
+                apiKeyConfigured: Boolean(config.minimax.apiKey),
+                rateLimitRpm: config.minimax.rateLimitRpm
+            },
+            schedule: scheduleStatus
+        };
+    };
+
     router.get('/config', (req, res) => {
         res.json({
             success: true,
-            config: {
-                agent: {
-                    jinaReaderEnabled: config.agent.jinaReaderEnabled,
-                    maxCuratedArticles: config.agent.maxCuratedArticles,
-                    deepReadTopCount: config.agent.deepReadTopCount,
-                    freshnessHours: config.agent.freshnessHours
-                },
-                ai: {
-                    baseUrl: config.minimax.baseUrl,
-                    model: config.minimax.model,
-                    apiKeyConfigured: Boolean(config.minimax.apiKey),
-                    rateLimitRpm: config.minimax.rateLimitRpm
-                },
-                schedule: scheduleManager ? scheduleManager.getStatus() : {}
-            }
+            config: buildConfigPayload()
         });
     });
 
@@ -705,16 +760,22 @@ function initializeApiRoutes(services, io, stateManager) {
             if (
                 scheduleManager &&
                 (updates.AUTO_UPDATE_ENABLED !== undefined ||
+                    updates.autoUpdateEnabled !== undefined ||
+                    updates.scheduleEnabled !== undefined ||
                     updates.UPDATE_TIMES !== undefined ||
+                    updates.updateTimes !== undefined ||
                     updates.scheduleTimes !== undefined ||
                     updates.GITHUB_SYNC_INTERVAL_MINUTES !== undefined ||
-                    updates.GITHUB_SYNC_ENABLED !== undefined)
+                    updates.githubSyncIntervalMinutes !== undefined ||
+                    updates.GITHUB_SYNC_ENABLED !== undefined ||
+                    updates.githubSyncEnabled !== undefined)
             ) {
                 scheduleManager.restart();
             }
             res.json({
                 success: true,
-                message: '系统配置已保存并生效'
+                message: '系统配置已保存并生效',
+                config: buildConfigPayload()
             });
         } catch (error) {
             res.status(500).json({

@@ -296,22 +296,149 @@ function buildConfig() {
 
 const config = buildConfig();
 
+function parseBoolInput(val) {
+    if (typeof val === 'boolean') return val;
+    const str = String(val).toLowerCase().trim();
+    return str === 'true' || str === '1' || str === 'yes';
+}
+
 /**
  * 动态保存设置到 data/settings.json 并刷新内存配置
  */
 config.saveDynamicSettings = function (updates = {}) {
     const current = loadSavedSettings();
-    const normalizedUpdates = { ...updates };
-    if (normalizedUpdates.scheduleTimes !== undefined && normalizedUpdates.UPDATE_TIMES === undefined) {
-        normalizedUpdates.UPDATE_TIMES = Array.isArray(normalizedUpdates.scheduleTimes)
-            ? normalizedUpdates.scheduleTimes.join(',')
-            : String(normalizedUpdates.scheduleTimes);
+    const raw = { ...updates };
+    const normalizedUpdates = {};
+
+    // 1. 兼容驼峰与别名键名映射至标准大写配置键
+    if (raw.githubSyncEnabled !== undefined && raw.GITHUB_SYNC_ENABLED === undefined) {
+        raw.GITHUB_SYNC_ENABLED = raw.githubSyncEnabled;
+    }
+    if (raw.githubPushEnabled !== undefined && raw.GITHUB_PUSH_ENABLED === undefined) {
+        raw.GITHUB_PUSH_ENABLED = raw.githubPushEnabled;
+    }
+    if (raw.pushToGithub !== undefined && raw.GITHUB_PUSH_ENABLED === undefined) {
+        raw.GITHUB_PUSH_ENABLED = raw.pushToGithub;
+    }
+    if (raw.githubSyncIntervalMinutes !== undefined && raw.GITHUB_SYNC_INTERVAL_MINUTES === undefined) {
+        raw.GITHUB_SYNC_INTERVAL_MINUTES = raw.githubSyncIntervalMinutes;
+    }
+    if (raw.githubCooldownMinutes !== undefined && raw.GITHUB_COOLDOWN_MINUTES === undefined) {
+        raw.GITHUB_COOLDOWN_MINUTES = raw.githubCooldownMinutes;
+    }
+    if (raw.clientId !== undefined && raw.CLIENT_ID === undefined) {
+        raw.CLIENT_ID = raw.clientId;
+    }
+    if (raw.githubSnapshotUrl !== undefined && raw.GITHUB_SNAPSHOT_URL === undefined) {
+        raw.GITHUB_SNAPSHOT_URL = raw.githubSnapshotUrl;
+    }
+    if (raw.autoUpdateEnabled !== undefined && raw.AUTO_UPDATE_ENABLED === undefined) {
+        raw.AUTO_UPDATE_ENABLED = raw.autoUpdateEnabled;
+    }
+    if (raw.scheduleEnabled !== undefined && raw.AUTO_UPDATE_ENABLED === undefined) {
+        raw.AUTO_UPDATE_ENABLED = raw.scheduleEnabled;
+    }
+    if (raw.updateTimes !== undefined && raw.UPDATE_TIMES === undefined) {
+        raw.UPDATE_TIMES = raw.updateTimes;
+    }
+    if (raw.scheduleTimes !== undefined && raw.UPDATE_TIMES === undefined) {
+        raw.UPDATE_TIMES = Array.isArray(raw.scheduleTimes)
+            ? raw.scheduleTimes.join(',')
+            : String(raw.scheduleTimes);
+    }
+
+    const aliasKeys = new Set([
+        'githubSyncEnabled',
+        'githubPushEnabled',
+        'pushToGithub',
+        'githubSyncIntervalMinutes',
+        'githubCooldownMinutes',
+        'clientId',
+        'githubSnapshotUrl',
+        'autoUpdateEnabled',
+        'scheduleEnabled',
+        'updateTimes'
+    ]);
+
+    for (const [k, v] of Object.entries(raw)) {
+        if (aliasKeys.has(k) || v === undefined || v === null) continue;
+        normalizedUpdates[k] = v;
+    }
+
+    // 2. 保护可选外部 AI 配置项不被空字符串或脱敏掩码 ('***') 覆盖清除
+    if (normalizedUpdates.AI_API_KEY !== undefined) {
+        const keyStr = String(normalizedUpdates.AI_API_KEY).trim();
+        if (!keyStr || keyStr.startsWith('***')) {
+            delete normalizedUpdates.AI_API_KEY;
+        } else {
+            normalizedUpdates.AI_API_KEY = keyStr;
+        }
+    }
+    if (normalizedUpdates.AI_BASE_URL !== undefined) {
+        const urlStr = String(normalizedUpdates.AI_BASE_URL).trim();
+        if (!urlStr) {
+            delete normalizedUpdates.AI_BASE_URL;
+        } else {
+            normalizedUpdates.AI_BASE_URL = urlStr;
+        }
+    }
+    if (normalizedUpdates.AI_MODEL !== undefined) {
+        const modelStr = String(normalizedUpdates.AI_MODEL).trim();
+        if (!modelStr) {
+            delete normalizedUpdates.AI_MODEL;
+        } else {
+            normalizedUpdates.AI_MODEL = modelStr;
+        }
+    }
+
+    // 3. 规范化方案 2B 与定时调度参数
+    if (normalizedUpdates.GITHUB_SYNC_ENABLED !== undefined) {
+        normalizedUpdates.GITHUB_SYNC_ENABLED = parseBoolInput(normalizedUpdates.GITHUB_SYNC_ENABLED);
+    }
+    if (normalizedUpdates.GITHUB_PUSH_ENABLED !== undefined) {
+        normalizedUpdates.GITHUB_PUSH_ENABLED = parseBoolInput(normalizedUpdates.GITHUB_PUSH_ENABLED);
+        normalizedUpdates.AG_GITHUB_SYNC = normalizedUpdates.GITHUB_PUSH_ENABLED;
+    }
+    if (normalizedUpdates.AUTO_UPDATE_ENABLED !== undefined) {
+        normalizedUpdates.AUTO_UPDATE_ENABLED = parseBoolInput(normalizedUpdates.AUTO_UPDATE_ENABLED);
+    }
+    if (normalizedUpdates.JINA_READER_ENABLED !== undefined) {
+        normalizedUpdates.JINA_READER_ENABLED = parseBoolInput(normalizedUpdates.JINA_READER_ENABLED);
+    }
+    if (normalizedUpdates.GITHUB_SYNC_INTERVAL_MINUTES !== undefined) {
+        const interval = parseInt(normalizedUpdates.GITHUB_SYNC_INTERVAL_MINUTES, 10);
+        normalizedUpdates.GITHUB_SYNC_INTERVAL_MINUTES = !isNaN(interval) && interval > 0 ? interval : 60;
+    }
+    if (normalizedUpdates.GITHUB_COOLDOWN_MINUTES !== undefined) {
+        const cooldown = parseInt(normalizedUpdates.GITHUB_COOLDOWN_MINUTES, 10);
+        normalizedUpdates.GITHUB_COOLDOWN_MINUTES = !isNaN(cooldown) && cooldown >= 0 ? cooldown : 30;
+    }
+    if (normalizedUpdates.CLIENT_ID !== undefined) {
+        const cid = String(normalizedUpdates.CLIENT_ID).trim();
+        if (cid) {
+            normalizedUpdates.CLIENT_ID = cid;
+            normalizedUpdates.AG_CLIENT_ID = cid;
+        } else {
+            delete normalizedUpdates.CLIENT_ID;
+        }
+    }
+    if (normalizedUpdates.GITHUB_SNAPSHOT_URL !== undefined) {
+        const snapUrl = String(normalizedUpdates.GITHUB_SNAPSHOT_URL).trim();
+        if (snapUrl) {
+            normalizedUpdates.GITHUB_SNAPSHOT_URL = snapUrl;
+        } else {
+            delete normalizedUpdates.GITHUB_SNAPSHOT_URL;
+        }
     }
     if (normalizedUpdates.UPDATE_TIMES !== undefined) {
         const parsed = parseUpdateTimes(normalizedUpdates.UPDATE_TIMES);
-        normalizedUpdates.UPDATE_TIMES = parsed.join(',');
-        normalizedUpdates.scheduleTimes = parsed;
+        const finalTimes = parsed.length > 0
+            ? parsed
+            : (config.news?.updateTimes?.length ? config.news.updateTimes : ['08:00', '12:30', '19:30']);
+        normalizedUpdates.UPDATE_TIMES = finalTimes.join(',');
+        normalizedUpdates.scheduleTimes = finalTimes;
     }
+
     const merged = {
         timezone: 'Asia/Shanghai',
         ...current,
@@ -326,7 +453,7 @@ config.saveDynamicSettings = function (updates = {}) {
 
     // 同时同步更新 process.env 以便子模块立即读取
     for (const [k, v] of Object.entries(normalizedUpdates)) {
-        if (v !== undefined && v !== null) {
+        if (v !== undefined && v !== null && v !== '') {
             process.env[k] = Array.isArray(v) ? v.join(',') : String(v);
         }
     }
@@ -341,6 +468,12 @@ config.saveDynamicSettings = function (updates = {}) {
  */
 config.reload = function () {
     require('dotenv').config({ override: true });
+    const saved = loadSavedSettings();
+    for (const [k, v] of Object.entries(saved)) {
+        if (v !== undefined && v !== null && v !== '' && k !== 'updatedAt' && k !== 'scheduleTimes') {
+            process.env[k] = Array.isArray(v) ? v.join(',') : String(v);
+        }
+    }
     const refreshed = buildConfig();
     Object.assign(config, refreshed);
     return config;

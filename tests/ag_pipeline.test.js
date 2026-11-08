@@ -1335,4 +1335,148 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             await new Promise((resolve) => mockGhServer.close(() => resolve()));
         }
     });
+
+    it('13. Frontend UI SSR (GET /), GET/POST /api/config Method 2B & Schedule persistence (optional AI key protection), and Web UI one-click POST /api/agent/pull-github', async () => {
+        const mockUiSnapshot = {
+            version: '2.0',
+            publishedAt: new Date().toISOString(),
+            lastUpdated: new Date().toISOString(),
+            publishedBy: 'ui-sync-publisher',
+            clientId: 'ui-sync-publisher',
+            news: [
+                {
+                    id: 'ui-sync-news-1',
+                    title: 'Web UI One-Click GitHub Snapshot Sync Verification',
+                    translatedTitle: '前端一键同步 GitHub 快照测试：多客户端快照中枢秒级载入',
+                    summary: '通过顶部「同步 GitHub 快照」按钮或设置弹窗内测试按钮，无需填写外部 API Key 即可直接从 ag-snapshot/latest.json 同步最新精编内容。',
+                    url: 'https://www.bbc.com/news/ui-sync-test-2026',
+                    region: '国际',
+                    category: '科技',
+                    keyPoints: ['支持一键同步 GitHub 快照', '状态栏实时显示发布端标识'],
+                    source: { id: 'bbc', name: 'BBC News' }
+                }
+            ],
+            summary: {
+                title: '2026年全球要闻深度综述（Web UI 同步验证）',
+                content: '### 全球科技动态\n多客户端快照中枢秒级载入 [NEWS_1]。'
+            },
+            sourceStats: [{ id: 'bbc', name: 'BBC News', count: 1, status: 'ok' }]
+        };
+
+        const mockUiGhServer = http.createServer((req, res) => {
+            if (req.url && req.url.startsWith('/alanhsun/CoreFeed/ag-snapshot/latest.json')) {
+                res.writeHead(200, { 'Content-Type': 'application/json', ETag: '"ui-etag-1"' });
+                res.end(JSON.stringify(mockUiSnapshot));
+                return;
+            }
+            res.writeHead(404);
+            res.end('Not Found');
+        });
+
+        await new Promise((resolve, reject) => {
+            mockUiGhServer.listen(0, '127.0.0.1', (err) => (err ? reject(err) : resolve()));
+        });
+        const uiGhPort = mockUiGhServer.address().port;
+        const mockUiSnapshotUrl = `http://127.0.0.1:${uiGhPort}/alanhsun/CoreFeed/ag-snapshot/latest.json`;
+
+        try {
+            // 13a. Verify GET / SSR HTML includes Method 2B status bar, publisher badge, one-click sync button, and upgraded settings modal
+            stateManager.set('lastPublishedBy', 'antigravity-cloud-vm', false);
+            const resHome = await fetch(`${baseUrl}/`);
+            assert.equal(resHome.status, 200);
+            const html = await resHome.text();
+
+            assert.ok(html.includes('id="syncGithubBtn"'), 'SSR HTML should contain one-click #syncGithubBtn');
+            assert.ok(html.includes('同步 GitHub 快照'), 'SSR HTML should contain "同步 GitHub 快照" button text');
+            assert.ok(html.includes('antigravity-cloud-vm'), 'SSR HTML should render lastPublishedBy identifier');
+            assert.ok(html.includes('多客户端与 GitHub 快照同步（方案 2B）'), 'SSR HTML should contain Method 2B settings section');
+            assert.ok(html.includes('id="cfgGithubSyncEnabled"'), 'SSR HTML should contain #cfgGithubSyncEnabled');
+            assert.ok(html.includes('id="cfgGithubPushEnabled"'), 'SSR HTML should contain #cfgGithubPushEnabled');
+            assert.ok(html.includes('id="cfgGithubSyncInterval"'), 'SSR HTML should contain #cfgGithubSyncInterval');
+            assert.ok(html.includes('id="cfgClientId"'), 'SSR HTML should contain #cfgClientId');
+            assert.ok(html.includes('id="cfgAutoUpdateEnabled"'), 'SSR HTML should contain #cfgAutoUpdateEnabled');
+            assert.ok(html.includes('id="cfgUpdateTimes"'), 'SSR HTML should contain #cfgUpdateTimes');
+            assert.ok(html.includes('id="optionalAiConfigDetails"'), 'SSR HTML should contain collapsible #optionalAiConfigDetails');
+            assert.ok(html.includes('可选（使用 Antigravity 客户端直编或仅作为路由器接收端时无需填写外部 API Key）'), 'SSR HTML should clearly badge external AI config as optional');
+
+            // 13b. Verify GET /api/config exposes Method 2B and schedule fields
+            const resGetCfg = await fetch(`${baseUrl}/api/config`);
+            assert.equal(resGetCfg.status, 200);
+            const getCfgData = await resGetCfg.json();
+            assert.equal(getCfgData.success, true);
+            assert.equal(typeof getCfgData.config.GITHUB_SYNC_ENABLED, 'boolean');
+            assert.equal(typeof getCfgData.config.GITHUB_PUSH_ENABLED, 'boolean');
+            assert.equal(typeof getCfgData.config.GITHUB_SYNC_INTERVAL_MINUTES, 'number');
+            assert.ok(getCfgData.config.CLIENT_ID);
+            assert.equal(getCfgData.config.lastPublishedBy, 'antigravity-cloud-vm');
+            assert.ok(getCfgData.config.githubSync);
+            assert.ok(getCfgData.config.schedule);
+
+            // 13c. Verify POST /api/config saves Method 2B + Schedule settings without wiping existing AI_API_KEY when empty/masked
+            process.env.AI_API_KEY = 'sk-existing-secret-preserve';
+            config.reload();
+
+            const resPostCfg = await fetch(`${baseUrl}/api/config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    GITHUB_SYNC_ENABLED: true,
+                    GITHUB_PUSH_ENABLED: false,
+                    GITHUB_SYNC_INTERVAL_MINUTES: 45,
+                    CLIENT_ID: 'router-10-10-20-10',
+                    GITHUB_SNAPSHOT_URL: mockUiSnapshotUrl,
+                    AUTO_UPDATE_ENABLED: true,
+                    UPDATE_TIMES: '07:30,12:00,20:00',
+                    AI_API_KEY: '',
+                    AI_BASE_URL: ''
+                })
+            });
+            assert.equal(resPostCfg.status, 200);
+            const postCfgData = await resPostCfg.json();
+            assert.equal(postCfgData.success, true);
+            assert.equal(postCfgData.config.GITHUB_SYNC_ENABLED, true);
+            assert.equal(postCfgData.config.GITHUB_PUSH_ENABLED, false);
+            assert.equal(postCfgData.config.GITHUB_SYNC_INTERVAL_MINUTES, 45);
+            assert.equal(postCfgData.config.CLIENT_ID, 'router-10-10-20-10');
+            assert.equal(postCfgData.config.UPDATE_TIMES, '07:30,12:00,20:00');
+            assert.equal(postCfgData.config.AUTO_UPDATE_ENABLED, true);
+            assert.equal(postCfgData.config.ai.apiKeyConfigured, true, 'Empty AI_API_KEY in POST /api/config must not erase existing configured key');
+
+            const savedOnDisk = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'settings.json'), 'utf8'));
+            assert.equal(savedOnDisk.GITHUB_SYNC_INTERVAL_MINUTES, 45);
+            assert.equal(savedOnDisk.GITHUB_PUSH_ENABLED, false);
+            assert.equal(savedOnDisk.CLIENT_ID, 'router-10-10-20-10');
+            assert.equal(savedOnDisk.UPDATE_TIMES, '07:30,12:00,20:00');
+
+            // 13d. Verify Web UI one-click POST /api/agent/pull-github works seamlessly even when PUBLISH_SECRET is set
+            process.env.PUBLISH_SECRET = 'router-ui-secret-999';
+            const resUiPull = await fetch(`${baseUrl}/api/agent/pull-github`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'CoreFeed-WebUI'
+                },
+                body: JSON.stringify({
+                    force: true,
+                    trigger: 'ui'
+                })
+            });
+            assert.equal(resUiPull.status, 200);
+            const uiPullData = await resUiPull.json();
+            assert.equal(uiPullData.success, true);
+            assert.equal(uiPullData.applied, true);
+            assert.equal(uiPullData.publishedBy, 'ui-sync-publisher');
+            assert.equal(uiPullData.displayedCount, 1);
+
+            const resStatusAfterUiPull = await fetch(`${baseUrl}/api/status`);
+            const statusAfterUiPull = await resStatusAfterUiPull.json();
+            assert.equal(statusAfterUiPull.lastPublishedBy, 'ui-sync-publisher');
+            assert.equal(statusAfterUiPull.githubSync.lastPublishedBy, 'ui-sync-publisher');
+        } finally {
+            services.scheduleManager.stop();
+            delete process.env.AI_API_KEY;
+            await new Promise((resolve) => mockUiGhServer.close(() => resolve()));
+        }
+    });
 });
+

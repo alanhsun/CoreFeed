@@ -7,10 +7,15 @@ class CoreFeedApp {
         this.news = Array.isArray(init.news) ? init.news : [];
         this.totalNews = init.totalNews || this.news.length;
         this.lastUpdated = init.lastUpdated || null;
+        this.lastPublishedBy = init.lastPublishedBy || init.githubSync?.publishedBy || null;
+        this.githubSync = init.githubSync || null;
+        this.schedule = init.schedule || null;
+        this.clientId = init.clientId || init.githubSync?.clientId || '';
         this.summaryArticle = init.summaryArticle || null;
         this.sourceMatrix = Array.isArray(init.sourceMatrix) ? init.sourceMatrix : [];
         this.customSourcesDraft = [];
         this.collectionPhase = 'idle';
+        this.isSyncingGithub = false;
 
         this.selectedRegion = '全部';
         this.selectedCategory = '全部';
@@ -21,6 +26,11 @@ class CoreFeedApp {
         this.initSocket();
         this.renderFilters();
         this.renderNewsGrid();
+        this.renderStatusBar();
+        this.fetchStatus();
+
+        // 每 60 秒轻量刷新一次顶栏状态与同步遥测
+        this.statusPollTimer = setInterval(() => this.fetchStatus(), 60 * 1000);
     }
 
     // ==================== 1. 主题与通知 ====================
@@ -115,12 +125,16 @@ class CoreFeedApp {
             this.updatePipelineUI(progress);
         });
 
-        // 两阶段渐进式核心：当第一阶段去重完成或每批 AI 编译完成时，实时拉取最新快照刷新卡片
+        // 两阶段渐进式核心或 GitHub 快照同步完成：实时拉取最新快照与状态刷新卡片
         this.socket.on('news-updated', (payload) => {
             if (payload && payload.phase) {
                 this.collectionPhase = payload.phase;
             }
+            if (payload && payload.lastPublishedBy) {
+                this.lastPublishedBy = payload.lastPublishedBy;
+            }
             this.fetchLatestNews();
+            this.fetchStatus();
         });
 
         this.socket.on('summary-completed', (payload) => {
@@ -128,6 +142,19 @@ class CoreFeedApp {
                 this.summaryArticle = payload.article;
                 this.renderSummaryArticle(payload.article);
             }
+        });
+
+        this.socket.on('schedule-updated', (payload) => {
+            if (payload) {
+                this.schedule = { ...(this.schedule || {}), ...payload };
+                this.renderStatusBar();
+            }
+        });
+
+        this.socket.on('news-update-completed', () => {
+            this.fetchLatestNews();
+            this.fetchLatestSummary();
+            this.fetchStatus();
         });
     }
 
@@ -489,7 +516,213 @@ class CoreFeedApp {
         }
     }
 
-    // ==================== 5. 全球新闻采集、加载与全文深读 ====================
+    // ==================== 5. 全球新闻采集、GitHub 快照同步、加载与全文深读 ====================
+
+    /**
+     * 拉取后端实时状态 (/api/status) 并更新顶部状态栏、发布端标识与定时信息
+     */
+    async fetchStatus() {
+        try {
+            const res = await fetch('/api/status');
+            const data = await res.json();
+            if (!data || !data.success) return;
+
+            if (data.lastUpdated) {
+                this.lastUpdated = data.lastUpdated;
+            }
+            if (data.lastPublishedBy) {
+                this.lastPublishedBy = data.lastPublishedBy;
+            }
+            if (data.githubSync) {
+                this.githubSync = data.githubSync;
+                if (!this.lastPublishedBy && data.githubSync.publishedBy) {
+                    this.lastPublishedBy = data.githubSync.publishedBy;
+                }
+                if (data.githubSync.clientId) {
+                    this.clientId = data.githubSync.clientId;
+                }
+            }
+            if (data.schedule) {
+                this.schedule = data.schedule;
+            }
+            this.renderStatusBar();
+            this.renderModalSyncStatus();
+        } catch (_) {}
+    }
+
+    /**
+     * 更新主界面顶部与流水线状态栏中的发布客户端标识、GitHub 快照同步状态及定时任务时间
+     */
+    renderStatusBar() {
+        if (this.lastUpdated) {
+            const updatedEl = document.getElementById('lastUpdatedLabel');
+            if (updatedEl) {
+                updatedEl.textContent = new Date(this.lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+            }
+        }
+
+        const publisher = this.lastPublishedBy || this.githubSync?.publishedBy || this.clientId || '本地节点';
+        const headerPubEl = document.getElementById('headerPublishedBy');
+        if (headerPubEl) {
+            headerPubEl.textContent = publisher;
+        }
+        const pubBadge = document.getElementById('publishedByBadge');
+        if (pubBadge) {
+            pubBadge.textContent = `发布端: ${publisher}`;
+        }
+        const pubLabel = document.getElementById('lastPublishedByLabel');
+        if (pubLabel) {
+            pubLabel.textContent = publisher;
+        }
+
+        if (this.githubSync) {
+            const syncEnabled = this.githubSync.enabled !== false;
+            const intervalMin = this.githubSync.intervalMinutes || 60;
+            const ghText = syncEnabled
+                ? `GitHub 快照同步 (${intervalMin}m)`
+                : 'GitHub 同步已关闭';
+            const ghHeaderTextEl = document.getElementById('githubSyncHeaderText');
+            if (ghHeaderTextEl) {
+                ghHeaderTextEl.textContent = ghText;
+            }
+            const ghHeaderBadgeEl = document.getElementById('githubSyncHeaderBadge');
+            if (ghHeaderBadgeEl) {
+                ghHeaderBadgeEl.title = `分支: ${this.githubSync.branch || 'ag-snapshot'} · 状态: ${this.githubSync.lastSyncStatus || 'idle'}`;
+            }
+            const ghBadge = document.getElementById('githubSyncBadge');
+            if (ghBadge) {
+                ghBadge.textContent = ghText;
+            }
+        }
+
+        const schedLabel = document.getElementById('scheduleTimesLabel');
+        if (schedLabel && this.schedule) {
+            const enabled = this.schedule.enabled !== false;
+            const times = Array.isArray(this.schedule.updateTimes) && this.schedule.updateTimes.length > 0
+                ? this.schedule.updateTimes.join(' / ')
+                : '08:00 / 12:30 / 19:30';
+            schedLabel.textContent = enabled ? times : `已暂停 (${times})`;
+        }
+    }
+
+    /**
+     * 更新「系统设置」弹窗内的 GitHub 快照同步实时状态面板
+     */
+    renderModalSyncStatus() {
+        const gh = this.githubSync || {};
+        const statusEl = document.getElementById('modalSyncStatusText') || document.getElementById('cfgSyncStatusText');
+        const syncedAtEl = document.getElementById('modalSyncLastTime') || document.getElementById('cfgLastSyncedAt');
+        const pubByEl = document.getElementById('modalSyncPublishedBy') || document.getElementById('cfgLastPublishedBy');
+        const branchEl = document.getElementById('cfgSnapshotBranchUrl');
+
+        const statusMap = {
+            synced: '已同步最新快照',
+            'up-to-date': '已是最新快照 (ETag 304)',
+            idle: '就绪',
+            error: `同步异常 (${gh.lastSyncError || '未知错误'})`
+        };
+
+        if (statusEl) {
+            statusEl.textContent = gh.enabled === false
+                ? '已关闭自动拉取'
+                : (statusMap[gh.lastSyncStatus] || gh.lastSyncStatus || '就绪');
+        }
+        if (syncedAtEl) {
+            const ts = gh.lastSyncedAt || gh.lastSyncCheckAt || this.lastUpdated;
+            syncedAtEl.textContent = ts
+                ? new Date(ts).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+                : '尚未检测';
+        }
+        if (pubByEl) {
+            pubByEl.textContent = this.lastPublishedBy || gh.publishedBy || gh.lastSyncedPublishedBy || this.clientId || '暂无记录';
+        }
+        if (branchEl) {
+            branchEl.textContent = `${gh.branch || 'ag-snapshot'} · ${gh.snapshotUrl || 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'}`;
+        }
+    }
+
+    /**
+     * 一键从 GitHub 快照分支 (ag-snapshot/latest.json) 拉取最新新闻并刷新界面
+     * 可同时由顶部「同步 GitHub 快照」按钮和系统设置弹窗内「立即从 GitHub 同步」按钮调用
+     */
+    async syncFromGitHub(options = {}) {
+        if (this.isSyncingGithub) return;
+        this.isSyncingGithub = true;
+
+        const headerBtn = document.getElementById('syncGithubBtn') || document.getElementById('btnSyncGithub');
+        const headerIcon = document.getElementById('syncGithubBtnIcon');
+        const headerText = document.getElementById('syncGithubBtnText');
+        const modalBtn = document.getElementById('btnModalSyncGithub') || document.getElementById('modalSyncGithubBtn');
+        const modalIcon = document.getElementById('modalSyncGithubIcon');
+        const modalText = document.getElementById('modalSyncGithubText');
+
+        if (headerBtn) headerBtn.disabled = true;
+        if (headerIcon) headerIcon.className = 'fa-solid fa-spinner fa-spin text-sm';
+        if (headerText) headerText.textContent = '正在同步快照...';
+        if (modalBtn) modalBtn.disabled = true;
+        if (modalIcon) modalIcon.className = 'fa-solid fa-spinner fa-spin';
+        if (modalText) modalText.textContent = '正在拉取 GitHub 快照...';
+
+        this.toast('正在从 GitHub (ag-snapshot/latest.json) 同步最新全球要闻快照...', 'info');
+
+        try {
+            const res = await fetch('/api/agent/pull-github', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'CoreFeed-WebUI'
+                },
+                body: JSON.stringify({
+                    force: options.force !== undefined ? Boolean(options.force) : true,
+                    trigger: 'ui'
+                })
+            });
+            const data = await res.json();
+
+            if (!res.ok || !data.success) {
+                throw new Error(data.message || '从 GitHub 同步快照失败');
+            }
+
+            if (data.publishedBy) {
+                this.lastPublishedBy = data.publishedBy;
+            }
+            if (data.lastUpdated || data.publishedAt) {
+                this.lastUpdated = data.lastUpdated || data.publishedAt;
+            }
+
+            await Promise.all([
+                this.fetchLatestNews(),
+                this.fetchLatestSummary(),
+                this.fetchStatus()
+            ]);
+
+            const count = data.displayedCount || this.news.length;
+            const pubBy = data.publishedBy || this.lastPublishedBy || 'remote';
+            this.toast(`GitHub 快照同步成功！已载入 ${count} 条精选要闻（发布端: ${pubBy}）`, 'success');
+        } catch (err) {
+            this.toast(`GitHub 快照同步失败: ${err.message}`, 'error');
+            await this.fetchStatus();
+        } finally {
+            this.isSyncingGithub = false;
+            if (headerBtn) headerBtn.disabled = false;
+            if (headerIcon) headerIcon.className = 'fa-brands fa-github text-sm';
+            if (headerText) headerText.textContent = '同步 GitHub 快照';
+            if (modalBtn) modalBtn.disabled = false;
+            if (modalIcon) modalIcon.className = 'fa-brands fa-github';
+            if (modalText) modalText.textContent = '立即从 GitHub 同步';
+        }
+    }
+
+    async fetchLatestSummary() {
+        try {
+            const res = await fetch('/api/summary');
+            const data = await res.json();
+            if (data && data.success && data.article) {
+                this.summaryArticle = data.article;
+                this.renderSummaryArticle(data.article);
+            }
+        } catch (_) {}
+    }
 
     /**
      * 触发两阶段渐进式全球知名信源巡检
@@ -538,6 +771,7 @@ class CoreFeedApp {
 
             this.renderFilters();
             this.renderNewsGrid();
+            await this.fetchStatus();
             this.toast(`全球新闻采集与编译全部完成！共展示 ${this.news.length} 条精选新闻（耗时 ${data.elapsedSeconds || ''}s）`, 'success');
         } catch (err) {
             this.collectionPhase = 'idle';
@@ -561,10 +795,17 @@ class CoreFeedApp {
                 }
                 if (data.lastUpdated) {
                     this.lastUpdated = data.lastUpdated;
-                    document.getElementById('lastUpdatedLabel').textContent = new Date(data.lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+                    const updatedEl = document.getElementById('lastUpdatedLabel');
+                    if (updatedEl) {
+                        updatedEl.textContent = new Date(data.lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+                    }
+                }
+                if (data.lastPublishedBy) {
+                    this.lastPublishedBy = data.lastPublishedBy;
                 }
                 this.renderFilters();
                 this.renderNewsGrid();
+                this.renderStatusBar();
             }
         } catch (_) {}
     }
@@ -850,7 +1091,15 @@ class CoreFeedApp {
         }
     }
 
-    // ==================== 8. 系统与 AI 设置弹窗 ====================
+    // ==================== 8. 系统、方案 2B 同步与 AI 设置弹窗 ====================
+
+    openSettings() {
+        return this.openSettingsModal();
+    }
+
+    closeSettings() {
+        return this.closeSettingsModal();
+    }
 
     async openSettingsModal() {
         const modal = document.getElementById('settingsModal');
@@ -858,16 +1107,86 @@ class CoreFeedApp {
         modal.classList.remove('hidden');
 
         try {
-            const res = await fetch('/api/config');
-            const data = await res.json();
-            if (data && data.success && data.config) {
-                const { ai, agent, schedule } = data.config;
-                document.getElementById('cfgAiBaseUrl').value = ai?.baseUrl || '';
-                document.getElementById('cfgAiModel').value = ai?.model || '';
-                document.getElementById('cfgMaxCurated').value = agent?.maxCuratedArticles || 30;
-                document.getElementById('cfgDeepReadCount').value = agent?.deepReadTopCount ?? 8;
-                document.getElementById('cfgFreshnessHours').value = agent?.freshnessHours || 48;
-                document.getElementById('cfgUpdateTimes').value = (schedule?.updateTimes || []).join(',');
+            const [cfgRes, statusRes] = await Promise.all([
+                fetch('/api/config'),
+                fetch('/api/status')
+            ]);
+            const data = await cfgRes.json();
+            const statusData = await statusRes.json().catch(() => ({}));
+
+            if (statusData && statusData.success) {
+                if (statusData.githubSync) this.githubSync = statusData.githubSync;
+                if (statusData.lastPublishedBy) this.lastPublishedBy = statusData.lastPublishedBy;
+                if (statusData.schedule) this.schedule = statusData.schedule;
+            }
+
+            if (data && data.success) {
+                const cfg = data.config || data;
+                const { ai = {}, agent = {}, schedule = {}, githubSync = {} } = cfg;
+
+                // 1. 方案 2B：多客户端与 GitHub 快照同步配置
+                const syncEnabled = cfg.GITHUB_SYNC_ENABLED ?? githubSync.enabled ?? agent.githubSyncEnabled ?? true;
+                const pushEnabled = cfg.GITHUB_PUSH_ENABLED ?? githubSync.pushEnabled ?? agent.githubPushEnabled ?? true;
+                const syncInterval = cfg.GITHUB_SYNC_INTERVAL_MINUTES ?? githubSync.intervalMinutes ?? agent.githubSyncIntervalMinutes ?? 60;
+                const clientId = cfg.CLIENT_ID || githubSync.clientId || agent.clientId || this.clientId || '';
+                const snapshotUrl = cfg.GITHUB_SNAPSHOT_URL || githubSync.snapshotUrl || agent.githubSnapshotUrl || '';
+
+                const syncEnabledEl = document.getElementById('cfgGithubSyncEnabled');
+                if (syncEnabledEl) syncEnabledEl.checked = Boolean(syncEnabled);
+
+                const pushEnabledEl = document.getElementById('cfgGithubPushEnabled');
+                if (pushEnabledEl) pushEnabledEl.checked = Boolean(pushEnabled);
+
+                const syncIntervalEl = document.getElementById('cfgGithubSyncInterval');
+                if (syncIntervalEl) syncIntervalEl.value = syncInterval;
+
+                const clientIdEl = document.getElementById('cfgClientId');
+                if (clientIdEl) clientIdEl.value = clientId;
+
+                const snapshotUrlEl = document.getElementById('cfgGithubSnapshotUrl');
+                if (snapshotUrlEl && snapshotUrl) snapshotUrlEl.value = snapshotUrl;
+
+                if (githubSync && Object.keys(githubSync).length > 0) {
+                    this.githubSync = { ...(this.githubSync || {}), ...githubSync };
+                }
+                this.renderModalSyncStatus();
+
+                // 2. 定时自动更新配置
+                const autoUpdateEnabled = cfg.AUTO_UPDATE_ENABLED ?? schedule.enabled ?? true;
+                const autoUpdateEl = document.getElementById('cfgAutoUpdateEnabled');
+                if (autoUpdateEl) autoUpdateEl.checked = Boolean(autoUpdateEnabled);
+
+                const updateTimesArr = schedule.updateTimes || cfg.UPDATE_TIMES || ['08:00', '12:30', '19:30'];
+                const updateTimesEl = document.getElementById('cfgUpdateTimes');
+                if (updateTimesEl) {
+                    updateTimesEl.value = Array.isArray(updateTimesArr)
+                        ? updateTimesArr.join(',')
+                        : String(updateTimesArr || '08:00,12:30,19:30');
+                }
+
+                // 3. 采集参数与可选外部 AI 接口配置
+                const baseUrlEl = document.getElementById('cfgAiBaseUrl');
+                if (baseUrlEl) baseUrlEl.value = ai.baseUrl || '';
+
+                const modelEl = document.getElementById('cfgAiModel');
+                if (modelEl) modelEl.value = ai.model || '';
+
+                const apiKeyEl = document.getElementById('cfgAiApiKey');
+                if (apiKeyEl) {
+                    apiKeyEl.value = '';
+                    apiKeyEl.placeholder = ai.apiKeyConfigured
+                        ? '已配置密钥（留空保持不变）'
+                        : '可选：使用 Antigravity 直编或作为路由器接收端时无需填写';
+                }
+
+                const maxCuratedEl = document.getElementById('cfgMaxCurated');
+                if (maxCuratedEl) maxCuratedEl.value = agent.maxCuratedArticles || 30;
+
+                const deepReadEl = document.getElementById('cfgDeepReadCount');
+                if (deepReadEl) deepReadEl.value = agent.deepReadTopCount ?? 8;
+
+                const freshnessEl = document.getElementById('cfgFreshnessHours');
+                if (freshnessEl) freshnessEl.value = agent.freshnessHours || 48;
             }
         } catch (_) {}
     }
@@ -877,22 +1196,54 @@ class CoreFeedApp {
     }
 
     async saveSettings() {
-        const baseUrl = document.getElementById('cfgAiBaseUrl')?.value.trim();
-        const model = document.getElementById('cfgAiModel')?.value.trim();
-        const apiKey = document.getElementById('cfgAiApiKey')?.value.trim();
+        const githubSyncEnabled = document.getElementById('cfgGithubSyncEnabled')
+            ? Boolean(document.getElementById('cfgGithubSyncEnabled').checked)
+            : true;
+        const githubPushEnabled = document.getElementById('cfgGithubPushEnabled')
+            ? Boolean(document.getElementById('cfgGithubPushEnabled').checked)
+            : true;
+        const githubSyncInterval = Math.max(
+            1,
+            parseInt(document.getElementById('cfgGithubSyncInterval')?.value, 10) || 60
+        );
+        const clientId = (document.getElementById('cfgClientId')?.value || '').trim();
+        const githubSnapshotUrl = (document.getElementById('cfgGithubSnapshotUrl')?.value || '').trim();
+
+        const autoUpdateEnabled = document.getElementById('cfgAutoUpdateEnabled')
+            ? Boolean(document.getElementById('cfgAutoUpdateEnabled').checked)
+            : true;
+        const updateTimes = (document.getElementById('cfgUpdateTimes')?.value || '08:00,12:30,19:30').trim();
+
+        const baseUrl = (document.getElementById('cfgAiBaseUrl')?.value || '').trim();
+        const model = (document.getElementById('cfgAiModel')?.value || '').trim();
+        const apiKey = (document.getElementById('cfgAiApiKey')?.value || '').trim();
         const maxCurated = parseInt(document.getElementById('cfgMaxCurated')?.value, 10) || 30;
         const deepReadCount = parseInt(document.getElementById('cfgDeepReadCount')?.value, 10) || 8;
         const freshnessHours = parseInt(document.getElementById('cfgFreshnessHours')?.value, 10) || 48;
-        const updateTimes = document.getElementById('cfgUpdateTimes')?.value.trim();
 
         const payload = {
-            AI_BASE_URL: baseUrl,
-            AI_MODEL: model,
+            GITHUB_SYNC_ENABLED: githubSyncEnabled,
+            GITHUB_PUSH_ENABLED: githubPushEnabled,
+            GITHUB_SYNC_INTERVAL_MINUTES: githubSyncInterval,
+            AUTO_UPDATE_ENABLED: autoUpdateEnabled,
+            UPDATE_TIMES: updateTimes,
             AGENT_MAX_CURATED_ARTICLES: maxCurated,
             AGENT_DEEP_READ_COUNT: deepReadCount,
-            AGENT_FRESHNESS_HOURS: freshnessHours,
-            UPDATE_TIMES: updateTimes
+            AGENT_FRESHNESS_HOURS: freshnessHours
         };
+
+        if (clientId) {
+            payload.CLIENT_ID = clientId;
+        }
+        if (githubSnapshotUrl) {
+            payload.GITHUB_SNAPSHOT_URL = githubSnapshotUrl;
+        }
+        if (baseUrl) {
+            payload.AI_BASE_URL = baseUrl;
+        }
+        if (model) {
+            payload.AI_MODEL = model;
+        }
         if (apiKey && !apiKey.startsWith('***')) {
             payload.AI_API_KEY = apiKey;
         }
@@ -910,8 +1261,12 @@ class CoreFeedApp {
                 const badge = document.getElementById('aiModelBadge');
                 if (badge) badge.textContent = model;
             }
+            if (clientId) {
+                this.clientId = clientId;
+            }
+            await this.fetchStatus();
             this.closeSettingsModal();
-            this.toast('系统与采集配置已保存并立即生效！', 'success');
+            this.toast('系统与多客户端同步配置已保存并立即生效！', 'success');
         } catch (err) {
             this.toast(err.message, 'error');
         }

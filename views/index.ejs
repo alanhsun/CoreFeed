@@ -40,6 +40,15 @@
                     <span class="font-semibold">CoreFeed v2.0</span>
                     <span>·</span>
                     <span><%= new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long', timeZone: 'Asia/Shanghai' }) %></span>
+                    <span>·</span>
+                    <span id="githubSyncHeaderBadge" class="kami-badge-sync" title="方案 2B：多客户端 GitHub ag-snapshot 快照中枢同步状态">
+                        <i class="fa-brands fa-github"></i>
+                        <span id="githubSyncHeaderText"><%= (typeof githubSync !== 'undefined' && githubSync && githubSync.enabled !== false) ? `GitHub 快照同步 (${githubSync.intervalMinutes || 60}m)` : 'GitHub 同步已关闭' %></span>
+                    </span>
+                    <span id="publisherHeaderBadge" class="kami-tag-neutral" title="当前展示新闻快照的发布客户端标识 (lastPublishedBy)">
+                        <i class="fa-solid fa-server text-xs" style="color: var(--brand);"></i>
+                        <span>发布端: <strong id="headerPublishedBy" style="color: var(--near-black);"><%= (typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || (typeof clientId !== 'undefined' && clientId) || 'antigravity-client' %></strong></span>
+                    </span>
                 </div>
 
                 <!-- 遥测状态与系统工具 -->
@@ -55,7 +64,7 @@
                         信源矩阵
                     </button>
                     <span>·</span>
-                    <button onclick="app.openSettingsModal()" class="hover:underline cursor-pointer font-medium" style="color: var(--dark-warm);" title="系统与采集配置">
+                    <button onclick="app.openSettingsModal()" class="hover:underline cursor-pointer font-medium" style="color: var(--dark-warm);" title="多客户端 GitHub 快照同步、定时任务与系统配置">
                         系统设置
                     </button>
                     <span>·</span>
@@ -71,11 +80,11 @@
                 <div>
                     <h1 class="kami-display-title">聚核 · CoreFeed</h1>
                     <p class="kami-subtitle">
-                        全球 30 大权威信源实时聚合 · 多媒交叉印证 · 全文深读与中文精编
+                        全球 30 大权威信源实时聚合 · 多客户端 GitHub 快照协同 · 全文深读与中文精编
                     </p>
                 </div>
 
-                <!-- 核心采集操作栏 -->
+                <!-- 核心采集与 GitHub 快照同步操作栏 -->
                 <div class="flex flex-wrap items-center gap-2.5">
                     <select id="patrolCategorySelect" class="kami-input text-sm py-2.5 px-3.5 cursor-pointer" title="选择要采集的信源范围">
                         <option value="all">全部启用信源 (30家)</option>
@@ -88,6 +97,10 @@
                     <button onclick="app.openSourceMatrixModal()" class="btn-ghost">
                         <i class="fa-solid fa-globe text-sm" style="color: var(--brand);"></i>
                         <span>信源管理</span>
+                    </button>
+                    <button id="syncGithubBtn" onclick="app.syncFromGitHub()" class="btn-secondary" title="从 GitHub ag-snapshot/latest.json 秒级拉取最新精编快照">
+                        <i id="syncGithubBtnIcon" class="fa-brands fa-github text-sm"></i>
+                        <span id="syncGithubBtnText">同步 GitHub 快照</span>
                     </button>
                     <button id="btnRunPatrol" onclick="app.triggerAgentPatrol()" class="btn-primary">
                         <i id="patrolBtnIcon" class="fa-solid fa-satellite-dish text-sm"></i>
@@ -149,8 +162,10 @@
                     <div class="mt-3.5 pt-3 flex flex-wrap items-center justify-between gap-2 text-sm" style="border-top: 1px solid var(--border); color: var(--stone); font-variant-numeric: tabular-nums;">
                         <div class="flex flex-wrap items-center gap-5">
                             <span>最后更新：<strong id="lastUpdatedLabel" style="color: var(--dark-warm);"><%= lastUpdated ? new Date(lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未采集' %></strong></span>
+                            <span>发布端：<strong id="lastPublishedByLabel" style="color: var(--brand);"><%= (typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || (typeof clientId !== 'undefined' && clientId) || '本地节点' %></strong></span>
                             <span>当前展示：<strong id="displayedCountLabel" style="color: var(--brand);"><%= displayedNews %></strong> / <strong id="totalPoolCountLabel" style="color: var(--dark-warm);"><%= totalNews %></strong> 条精选新闻</span>
                             <span id="multiSourceCountWrapper">多媒交叉印证：<strong id="multiSourceCountLabel" style="color: var(--brand);">0</strong> 个热点事件</span>
+                            <span id="scheduleInfoWrapper">定时更新：<strong id="scheduleTimesLabel" style="color: var(--dark-warm);"><%= (typeof schedule !== 'undefined' && schedule && schedule.updateTimes && schedule.updateTimes.length) ? schedule.updateTimes.join(' / ') : '08:00 / 12:30 / 19:30' %></strong></span>
                         </div>
                         <button onclick="app.toggleAgentLogDrawer()" class="hover:underline flex items-center gap-1.5 cursor-pointer font-medium" style="color: var(--brand);">
                             <i class="fa-solid fa-terminal text-xs"></i>
@@ -334,38 +349,110 @@
         </div>
     </div>
 
-    <!-- ==================== MODAL 3: 系统与 AI 配置弹窗 ==================== -->
+    <!-- ==================== MODAL 3: 系统、GitHub 快照同步与 AI 配置弹窗 ==================== -->
     <div id="settingsModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex items-center justify-center p-4" onclick="if(event.target===this) app.closeSettingsModal()">
         <div class="kami-modal-surface max-w-2xl w-full max-h-[88vh] flex flex-col overflow-hidden">
             <div class="px-6 py-5 flex items-center justify-between" style="border-bottom: 1px solid var(--border); background: var(--ivory);">
-                <h3 class="text-lg" style="color: var(--near-black); margin: 0;">采集引擎与系统设置</h3>
+                <div>
+                    <h3 class="text-lg" style="color: var(--near-black); margin: 0;">系统设置与多客户端同步配置</h3>
+                    <p class="text-xs mt-1" style="color: var(--stone);">
+                        管理方案 2B（GitHub 快照中枢）、早中晚定时更新、采集参数及可选外部 AI 接口
+                    </p>
+                </div>
                 <button onclick="app.closeSettingsModal()" class="p-1.5 cursor-pointer" style="color: var(--stone);">
                     <i class="fa-solid fa-xmark text-lg"></i>
                 </button>
             </div>
             <div class="p-6 overflow-y-auto space-y-6 text-xs sm:text-sm">
-                <!-- AI 模型设置 -->
-                <div class="space-y-3">
-                    <h4 class="text-base" style="color: var(--brand); margin: 0;">一 · 大语言模型配置 (用于中文编译与今日综述，MiniMax / OpenAI 兼容)</h4>
+                <!-- 一 · 多客户端与 GitHub 快照同步（方案 2B） -->
+                <div class="space-y-3.5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h4 class="text-base" style="color: var(--brand); margin: 0;">一 · 多客户端与 GitHub 快照同步（方案 2B）</h4>
+                        <span class="kami-tag"><i class="fa-brands fa-github"></i> ag-snapshot 统一中枢</span>
+                    </div>
+                    <p class="text-xs leading-relaxed" style="color: var(--stone); margin: 0;">
+                        多台 Antigravity 客户端编译完成后自动推送至 GitHub <code>ag-snapshot/latest.json</code>；路由器或接收端自动从中枢拉取最新快照，免公网 IP 实现多端协同。
+                    </p>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <label class="kami-toggle-card">
+                            <input id="cfgGithubSyncEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4" <%= (config.githubSyncEnabled !== false) ? 'checked' : '' %>>
+                            <div>
+                                <div class="font-semibold text-xs sm:text-sm" style="color: var(--near-black);">启用从 GitHub 自动拉取快照</div>
+                                <div class="text-[11px]" style="color: var(--stone);">GITHUB_SYNC_ENABLED (启动、定时点及后台轮询自动同步)</div>
+                            </div>
+                        </label>
+                        <label class="kami-toggle-card">
+                            <input id="cfgGithubPushEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4" <%= (config.githubPushEnabled !== false) ? 'checked' : '' %>>
+                            <div>
+                                <div class="font-semibold text-xs sm:text-sm" style="color: var(--near-black);">采集后自动推送 GitHub 快照</div>
+                                <div class="text-[11px]" style="color: var(--stone);">GITHUB_PUSH_ENABLED (发布时自动写入 ag-snapshot)</div>
+                            </div>
+                        </label>
+                    </div>
+
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
-                            <label class="block text-xs mb-1" style="color: var(--stone);">API Base URL</label>
-                            <input id="cfgAiBaseUrl" type="text" class="kami-input w-full text-xs">
+                            <label class="block text-xs mb-1" style="color: var(--stone);">当前客户端标识 (CLIENT_ID)</label>
+                            <input id="cfgClientId" type="text" value="<%= (typeof clientId !== 'undefined' && clientId) || 'antigravity-client' %>" placeholder="例如: antigravity-cloud-vm / router-10.10.20.10" class="kami-input w-full text-xs">
                         </div>
                         <div>
-                            <label class="block text-xs mb-1" style="color: var(--stone);">模型名称 (Model)</label>
-                            <input id="cfgAiModel" type="text" class="kami-input w-full text-xs">
+                            <label class="block text-xs mb-1" style="color: var(--stone);">后台兜底检测间隔 (分钟，GITHUB_SYNC_INTERVAL_MINUTES)</label>
+                            <input id="cfgGithubSyncInterval" type="number" min="1" max="1440" value="<%= config.githubSyncIntervalMinutes || 60 %>" class="kami-input w-full text-xs">
                         </div>
                         <div class="sm:col-span-2">
-                            <label class="block text-xs mb-1" style="color: var(--stone);">API Key (留空或保持 *** 则不修改原密钥；不配置也可正常采集展示外媒原文)</label>
-                            <input id="cfgAiApiKey" type="password" placeholder="sk-..." class="kami-input w-full text-xs">
+                            <label class="block text-xs mb-1" style="color: var(--stone);">GitHub 快照源地址 (GITHUB_SNAPSHOT_URL)</label>
+                            <input id="cfgGithubSnapshotUrl" type="text" value="<%= (typeof githubSync !== 'undefined' && githubSync && githubSync.snapshotUrl) || 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json' %>" class="kami-input w-full text-xs font-mono">
+                        </div>
+                    </div>
+
+                    <!-- 实时 GitHub 同步状态与弹窗内立即测试按钮 -->
+                    <div id="modalGithubSyncStatusPanel" class="p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3" style="background: var(--inline-code-bg); border: 1px solid var(--border);">
+                        <div class="space-y-1 text-xs">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span style="color: var(--stone);">当前状态：</span>
+                                <strong id="modalSyncStatusText" style="color: var(--brand);">
+                                    <%= (typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'synced') ? '已同步最新快照' : ((typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'up-to-date') ? '已是最新快照' : '就绪') %>
+                                </strong>
+                                <span>·</span>
+                                <span style="color: var(--stone);">最近发布端：</span>
+                                <strong id="modalSyncPublishedBy" style="color: var(--near-black);"><%= (typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || (typeof githubSync !== 'undefined' && githubSync && githubSync.publishedBy) || (typeof clientId !== 'undefined' && clientId) || '暂无记录' %></strong>
+                            </div>
+                            <div style="color: var(--stone); font-variant-numeric: tabular-nums;">
+                                最近同步检测：<span id="modalSyncLastTime"><%= (typeof githubSync !== 'undefined' && githubSync && (githubSync.lastSyncedAt || githubSync.lastSyncCheckAt)) ? new Date(githubSync.lastSyncedAt || githubSync.lastSyncCheckAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : (lastUpdated ? new Date(lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '尚未检测') %></span>
+                            </div>
+                        </div>
+                        <button type="button" id="btnModalSyncGithub" onclick="app.syncFromGitHub({ force: true, fromModal: true })" class="btn-secondary py-2 px-3.5 text-xs shrink-0">
+                            <i id="modalSyncGithubIcon" class="fa-brands fa-github"></i>
+                            <span id="modalSyncGithubText">立即从 GitHub 同步</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 二 · 定时更新配置 -->
+                <div class="space-y-3 pt-4" style="border-top: 1px solid var(--border);">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h4 class="text-base" style="color: var(--brand); margin: 0;">二 · 定时更新配置（每日早中晚三次自动更新）</h4>
+                        <span class="kami-tag-neutral">时区: Asia/Shanghai (北京时间)</span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+                        <label class="kami-toggle-card">
+                            <input id="cfgAutoUpdateEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4" <%= (config.autoUpdateEnabled !== false) ? 'checked' : '' %>>
+                            <div>
+                                <div class="font-semibold text-xs sm:text-sm" style="color: var(--near-black);">启用每日定时自动更新</div>
+                                <div class="text-[11px]" style="color: var(--stone);">AUTO_UPDATE_ENABLED (到点优先拉取 GitHub 快照或执行采集)</div>
+                            </div>
+                        </label>
+                        <div>
+                            <label class="block text-xs mb-1" style="color: var(--stone);">每日自动更新时间 (逗号分隔，默认早中晚三次 08:00,12:30,19:30)</label>
+                            <input id="cfgUpdateTimes" type="text" value="<%= Array.isArray(config.updateTimes) ? config.updateTimes.join(',') : (config.updateTimes || '08:00,12:30,19:30') %>" placeholder="08:00,12:30,19:30" class="kami-input w-full text-xs font-mono">
                         </div>
                     </div>
                 </div>
 
-                <!-- 采集与深读参数 -->
+                <!-- 三 · 采集与深读参数 -->
                 <div class="space-y-3 pt-4" style="border-top: 1px solid var(--border);">
-                    <h4 class="text-base" style="color: var(--brand); margin: 0;">二 · 新闻采集与全文深读参数</h4>
+                    <h4 class="text-base" style="color: var(--brand); margin: 0;">三 · 新闻采集与全文深读参数</h4>
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
                             <label class="block text-xs mb-1" style="color: var(--stone);">首屏精选展示条数</label>
@@ -382,13 +469,36 @@
                     </div>
                 </div>
 
-                <!-- 定时自动采集 -->
-                <div class="space-y-3 pt-4" style="border-top: 1px solid var(--border);">
-                    <h4 class="text-base" style="color: var(--brand); margin: 0;">三 · 定时自动采集任务</h4>
-                    <div>
-                        <label class="block text-xs mb-1" style="color: var(--stone);">每日自动采集时间 (逗号分隔，如 08:00,12:30,19:30 早中晚三次，北京时间)</label>
-                        <input id="cfgUpdateTimes" type="text" placeholder="08:00,12:30,19:30" class="kami-input w-full text-xs">
-                    </div>
+                <!-- 四 · 外部 AI 接口配置（可选，默认折叠） -->
+                <div class="pt-4" style="border-top: 1px solid var(--border);">
+                    <details id="optionalAiConfigDetails" class="kami-collapsible">
+                        <summary class="kami-collapsible-summary">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span class="text-base font-bold" style="color: var(--near-black);">四 · 外部 AI 接口配置</span>
+                                <span class="kami-badge-optional">可选（使用 Antigravity 客户端直编或仅作为路由器接收端时无需填写外部 API Key）</span>
+                            </div>
+                            <i class="fa-solid fa-chevron-down text-xs transition-transform collapsible-chevron" style="color: var(--stone);"></i>
+                        </summary>
+                        <div class="pt-3.5 space-y-3">
+                            <p class="text-xs" style="color: var(--stone); margin: 0;">
+                                仅当本节点需要脱离 Antigravity 客户端、独立调用第三方 OpenAI / MiniMax 兼容接口执行翻译与综述生成时才需配置。
+                            </p>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs mb-1" style="color: var(--stone);">API Base URL</label>
+                                    <input id="cfgAiBaseUrl" type="text" class="kami-input w-full text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-xs mb-1" style="color: var(--stone);">模型名称 (Model)</label>
+                                    <input id="cfgAiModel" type="text" class="kami-input w-full text-xs">
+                                </div>
+                                <div class="sm:col-span-2">
+                                    <label class="block text-xs mb-1" style="color: var(--stone);">API Key (可选，留空或保持 *** 则不修改原密钥)</label>
+                                    <input id="cfgAiApiKey" type="password" placeholder="sk-... (使用 Antigravity 直编或方案 2B 同步时无需填写)" class="kami-input w-full text-xs">
+                                </div>
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </div>
             <div class="px-6 py-4 flex items-center justify-end gap-2.5" style="border-top: 1px solid var(--border); background: var(--ivory);">
@@ -408,6 +518,10 @@
             totalNews: <%= totalNews || 0 %>,
             displayedNews: <%= displayedNews || 0 %>,
             lastUpdated: <%- JSON.stringify(lastUpdated || null) %>,
+            lastPublishedBy: <%- JSON.stringify((typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || null) %>,
+            clientId: <%- JSON.stringify((typeof clientId !== 'undefined' && clientId) || null) %>,
+            githubSync: <%- JSON.stringify((typeof githubSync !== 'undefined' && githubSync) || null) %>,
+            schedule: <%- JSON.stringify((typeof schedule !== 'undefined' && schedule) || null) %>,
             summaryArticle: <%- JSON.stringify(summaryArticle || null) %>,
             sourceMatrix: <%- JSON.stringify(sourceMatrix || []) %>
         };

@@ -629,8 +629,17 @@ class GitHubSyncManager {
                 this.lastSyncStatus = 'up-to-date';
                 this.lastSyncError = null;
                 this.lastSyncSourceUrl = sourceUrl;
+                if (!this.lastSyncedAt) {
+                    this.lastSyncedAt = this.lastSyncCheckAt;
+                }
+                if (remotePublishedAt) {
+                    this.lastSyncedPublishedAt = remotePublishedAt;
+                }
                 if (remotePublishedBy) {
                     this.lastSyncedPublishedBy = remotePublishedBy;
+                    if (this.stateManager && !this.stateManager.get('lastPublishedBy')) {
+                        this.stateManager.set('lastPublishedBy', remotePublishedBy, false);
+                    }
                 }
                 return {
                     success: true,
@@ -689,9 +698,18 @@ class GitHubSyncManager {
     getStatus() {
         const statePublishedBy = this.stateManager ? this.stateManager.get('lastPublishedBy') : null;
         const publishedBy = statePublishedBy || this.lastSyncedPublishedBy || null;
+        const clientId = String(
+            config.githubSync?.clientId ||
+            config.agent?.clientId ||
+            process.env.CLIENT_ID ||
+            process.env.AG_CLIENT_ID ||
+            os.hostname() ||
+            'antigravity-client'
+        ).trim();
         return {
             enabled: Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true),
             pushEnabled: Boolean(config.githubSync?.pushEnabled ?? config.agent?.githubPushEnabled ?? true),
+            clientId,
             snapshotUrl:
                 process.env.GITHUB_SNAPSHOT_URL ||
                 config.githubSync?.snapshotUrl ||
@@ -711,9 +729,11 @@ class GitHubSyncManager {
             isSyncing: this.isSyncing,
             lastSyncCheckAt: this.lastSyncCheckAt,
             lastSyncedAt: this.lastSyncedAt,
+            lastSyncAt: this.lastSyncedAt || this.lastSyncCheckAt || null,
             lastSyncedPublishedAt: this.lastSyncedPublishedAt,
             lastSyncedPublishedBy: publishedBy,
             publishedBy,
+            lastPublishedBy: publishedBy,
             lastEtag: this.lastEtag,
             lastSyncStatus: this.lastSyncStatus,
             lastSyncError: this.lastSyncError,
