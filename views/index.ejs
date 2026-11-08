@@ -3,8 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="聚核 CoreFeed · 全球知名信源实时聚合与深度阅读平台">
     <title><%= config.siteName || '聚核 CoreFeed · 全球知名信源实时聚合与深读平台' %></title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&family=Noto+Serif+SC:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -12,15 +16,15 @@
             theme: {
                 extend: {
                     colors: {
-                        parchment: '#f1f5f9',
-                        ivory: '#ffffff',
-                        sand: '#e2e8f0',
-                        brand: '#2563eb',
-                        brandLight: '#1d4ed8',
-                        ink: '#0f172a',
-                        warm: '#1e293b',
-                        olive: '#334155',
-                        stone: '#64748b'
+                        parchment: '#F6F5F1',
+                        ivory: '#FFFFFF',
+                        sand: '#EBE8DF',
+                        brand: '#C83214',
+                        brandLight: '#A6260C',
+                        ink: '#141413',
+                        warm: '#2B2A27',
+                        olive: '#46443F',
+                        stone: '#68665E'
                     }
                 }
             }
@@ -51,222 +55,384 @@
                     });
                 }
             }
+
+            function computeBentoLayoutSSR(idx, total) {
+                if (total === 1) {
+                    return { tier: 'lead', spanClass: 'bento-span-12 md:col-span-2' };
+                }
+                if (total === 2) {
+                    return idx === 0
+                        ? { tier: 'lead', spanClass: 'bento-span-7 md:col-span-2' }
+                        : { tier: 'secondary', spanClass: 'bento-span-5 md:col-span-2' };
+                }
+                if (idx === 0) return { tier: 'lead', spanClass: 'bento-span-8 md:col-span-2' };
+                if (idx === 1) return { tier: 'secondary', spanClass: 'bento-span-4' };
+                if (total === 3 && idx === 2) {
+                    return { tier: 'secondary', spanClass: 'bento-span-12 md:col-span-2' };
+                }
+                if (idx === 2 || idx === 3) {
+                    return { tier: 'secondary', spanClass: 'bento-span-6' };
+                }
+                const remCount = total - 4;
+                const tail = remCount % 3;
+                if (tail === 1 && idx === total - 1) {
+                    return { tier: 'compact', spanClass: 'bento-span-12 md:col-span-2' };
+                }
+                if (tail === 2 && idx >= total - 2) {
+                    return { tier: 'compact', spanClass: 'bento-span-6' };
+                }
+                return { tier: 'compact', spanClass: 'bento-span-4' };
+            }
+
+            function formatRelativeTimeSSR(dateInput) {
+                try {
+                    const d = new Date(dateInput);
+                    if (isNaN(d.getTime())) return '';
+                    const diffMin = Math.floor((Date.now() - d.getTime()) / 60000);
+                    if (diffMin < 5) return '刚刚';
+                    if (diffMin < 60) return diffMin + ' 分钟前';
+                    const diffHr = Math.floor(diffMin / 60);
+                    if (diffHr < 24) return diffHr + ' 小时前';
+                    return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+                } catch (_) {
+                    return '';
+                }
+            }
+
+            const ssrNewsList = Array.isArray(news) ? news : [];
         %>
-        <!-- ==================== 简明、克制、高级的纸媒级报头 ==================== -->
+
         <header class="kami-masthead">
+            <div class="kami-masthead-eyebrow">
+                <span class="kami-edition-mark">
+                    <span class="kami-edition-dot"></span>
+                    <span>GLOBAL INTELLIGENCE DISPATCH</span>
+                </span>
+                <div class="kami-masthead-meta" style="margin-top: 0;">
+                    <span id="mastheadDate"><%= todayStr %></span>
+                    <span class="kami-meta-dot">·</span>
+                    <span id="lastUpdateTime"><span id="lastUpdatedLabel"><span id="lastUpdatedText"><%= updatedTimeStr %></span></span></span>
+                </div>
+            </div>
+
             <div class="kami-masthead-main">
-                <!-- 左侧：刊名与副标题 -->
                 <div class="kami-brand-group">
                     <div class="flex items-baseline gap-3 flex-wrap">
                         <h1 class="kami-display-title">CoreFeed</h1>
-                        <span class="kami-masthead-divider">·</span>
+                        <span class="kami-masthead-divider">/</span>
                         <span class="kami-subtitle">全球要闻深度聚合</span>
-                    </div>
-                    <div class="kami-masthead-meta">
-                        <span id="mastheadDate"><%= todayStr %></span>
-                        <span class="kami-meta-dot">·</span>
-                        <span id="lastUpdateTime"><span id="lastUpdatedLabel"><%= updatedTimeStr %></span></span>
                     </div>
                 </div>
 
-                <!-- 右侧：极简核心操作区 -->
                 <div class="kami-masthead-actions">
-                    <button id="syncGithubBtn" onclick="app.syncFromGitHub()" class="btn-primary" title="从 GitHub 同步最新一期全球要闻与综述">
+                    <button id="syncGithubBtn" type="button" onclick="app.syncFromGitHub()" class="btn-primary" title="从 GitHub 同步最新一期全球要闻与综述">
                         <i id="syncGithubBtnIcon" class="fa-solid fa-rotate text-xs"></i>
                         <span id="syncGithubBtnText">同步最新</span>
                     </button>
-                    <button id="btnSettings" onclick="app.openSettingsModal()" class="btn-ghost" title="系统设置">
+                    <button id="btnSettings" type="button" onclick="app.openSettingsModal()" class="btn-ghost" title="系统设置">
                         <i class="fa-solid fa-sliders text-xs"></i>
                         <span>设置</span>
                     </button>
-                    <button id="btnThemeToggle" onclick="app.toggleTheme()" class="btn-ghost btn-icon-only" title="切换浅色/深色模式" aria-label="切换浅色/深色模式">
+                    <button id="btnThemeToggle" type="button" onclick="app.toggleTheme()" class="btn-ghost btn-icon-only" title="切换浅色/深色模式" aria-label="切换浅色/深色模式">
                         <i id="themeIcon" class="fa-solid fa-moon text-xs"></i>
                     </button>
                 </div>
             </div>
         </header>
 
-        <!-- ==================== 主体阅读工作区 ==================== -->
-        <main class="space-y-6">
-
-            <!-- 主工作区选项卡与搜索过滤栏 -->
+        <main class="space-y-5">
             <div class="kami-tabs-bar">
                 <div class="flex flex-wrap items-center gap-2" role="tablist">
-                    <button id="tabBtn-feed" onclick="app.switchTab('feed')" class="tab-btn active">
-                        <i class="fa-regular fa-newspaper mr-1.5"></i>全球要闻
+                    <button id="tabBtn-feed" type="button" onclick="app.switchTab('feed')" class="tab-btn active">
+                        <i class="fa-regular fa-newspaper mr-1.5"></i><span id="tabNews">全球要闻</span>
                     </button>
-                    <button id="tabBtn-summary" onclick="app.switchTab('summary')" class="tab-btn">
-                        <i class="fa-regular fa-compass mr-1.5"></i>今日综述
+                    <button id="tabBtn-summary" type="button" onclick="app.switchTab('summary')" class="tab-btn">
+                        <i class="fa-regular fa-compass mr-1.5"></i><span id="tabSummary">今日综述</span>
                     </button>
                 </div>
 
-                <!-- 新闻流搜索与媒体过滤框 -->
                 <div id="feedSearchWrapper" class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
-                    <select id="sourceFilterSelect" onchange="app.applyFilters()" class="kami-input text-sm py-2 px-3 cursor-pointer">
+                    <select id="sourceFilterSelect" onchange="app.applyFilters()" class="kami-input text-xs sm:text-sm py-2 px-3 cursor-pointer">
                         <option value="全部">全部媒体来源</option>
                     </select>
-                    <div class="relative flex-1 sm:w-72">
+                    <div id="searchInput" class="taste-search-box flex-1 sm:w-72">
                         <input id="localFilterInput" type="text" placeholder="搜索中文标题、摘要或外媒关键词..."
                             oninput="app.applyFilters()"
-                            class="kami-input w-full text-sm py-2 px-3.5">
+                            class="kami-input w-full text-xs sm:text-sm py-2 pl-3.5 pr-8">
+                        <button id="btnClearSearch" type="button" onclick="app.clearSearch()" class="taste-search-clear hidden" title="清空搜索" aria-label="清空搜索">
+                            <i class="fa-solid fa-xmark text-xs"></i>
+                        </button>
                     </div>
                 </div>
             </div>
 
-            <!-- ==================== TAB 1: 全球新闻卡片流 ==================== -->
             <section id="tabPanel-feed" class="space-y-5">
-                <!-- 地域与领域过滤栏 -->
-                <div class="kami-card py-3.5 px-4 space-y-3">
-                    <div id="regionFilterBar" class="flex flex-wrap items-center gap-2">
-                        <!-- 由 main.js 动态渲染地区按钮 -->
+                <div id="newsSection" class="space-y-5">
+                    <div class="taste-filter-deck space-y-2.5">
+                        <div id="regionFilter">
+                            <div id="regionFilterBar" class="flex flex-wrap items-center gap-2"></div>
+                        </div>
+                        <div id="categoryFilter" class="pt-2.5" style="border-top: 1px solid var(--border-subtle);">
+                            <div id="categoryFilterBar" class="flex flex-wrap items-center gap-2"></div>
+                        </div>
                     </div>
-                    <div id="categoryFilterBar" class="flex flex-wrap items-center gap-2 pt-2.5" style="border-top: 1px solid var(--border-soft);">
-                        <!-- 由 main.js 动态渲染领域按钮 -->
+
+                    <div id="newsGrid" class="bento-news-grid">
+                        <% if (ssrNewsList.length === 0) { %>
+                            <div class="col-span-full kami-card py-14 text-center space-y-3">
+                                <div class="kami-tag mx-auto">暂无要闻</div>
+                                <h3 class="text-xl font-bold" style="color: var(--text-primary);">当前暂无可展示的全球要闻</h3>
+                                <p class="text-sm max-w-md mx-auto" style="color: var(--text-muted);">请点击右上角「同步最新」拉取最新一期全球权威媒体精编要闻。</p>
+                            </div>
+                        <% } else { %>
+                            <% ssrNewsList.forEach(function(item, idx) {
+                                const layout = computeBentoLayoutSSR(idx, ssrNewsList.length);
+                                const tier = layout.tier;
+                                const spanClass = layout.spanClass;
+                                const indexNum = String(idx + 1).padStart(2, '0');
+                                const title = item.translatedTitle || item.title || '无标题';
+                                const originalTitle = item.translatedTitle && item.translatedTitle !== item.title ? item.title : '';
+                                const summary = item.summary || item.translatedDescription || item.description || '';
+                                const sourceName = (item.source && item.source.name) ? item.source.name : 'Global Media';
+                                const region = item.region || '国际';
+                                const category = item.category || '国际';
+                                const metaBadgeText = category && category !== region ? (region + ' · ' + category) : region;
+                                const timeStr = item.publishedAt ? formatRelativeTimeSSR(item.publishedAt) : '';
+                                const imageUrl = item.urlToImage || '';
+                                const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
+                                const displayImgSrc = isRemoteHttp ? ('/api/image-proxy?url=' + encodeURIComponent(imageUrl)) : imageUrl;
+                                const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
+                                const hasMultiSources = relatedSources.length > 0;
+                                const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
+                                const encodedUrl = encodeURIComponent(item.url || '');
+                                const encodedTitle = encodeURIComponent(title);
+                                const encodedSource = encodeURIComponent(sourceName);
+                                const encodedSummary = encodeURIComponent(summary);
+                                const summaryClampClass = tier === 'lead' ? 'line-clamp-5' : (tier === 'secondary' ? 'line-clamp-4' : 'line-clamp-3');
+                            %>
+                            <article class="news-card news-card--<%= tier %> <%= spanClass %>" style="--card-index: <%= idx %>;">
+                                <div>
+                                    <div class="card-meta-header">
+                                        <div class="card-meta-left">
+                                            <span class="card-index-num"><%= indexNum %></span>
+                                            <span class="card-meta-sep">/</span>
+                                            <span class="card-source-name" title="<%= sourceName %>"><%= sourceName %></span>
+                                        </div>
+                                        <span class="card-taxonomy-pill"><%= metaBadgeText %></span>
+                                    </div>
+
+                                    <div class="lead-bento-inner <%= tier === 'lead' ? 'has-media' : '' %>">
+                                        <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
+                                           class="card-cover block <%= imageUrl ? '' : 'is-fallback' %>" data-cat="<%= category %>">
+                                            <% if (imageUrl) { %>
+                                                <img src="<%= displayImgSrc %>"
+                                                     data-raw-src="<%= imageUrl %>"
+                                                     alt="<%= title %>"
+                                                     loading="lazy"
+                                                     referrerpolicy="no-referrer"
+                                                     class="card-cover-img"
+                                                     onerror="if(!this.dataset.retried && this.dataset.rawSrc && this.src !== this.dataset.rawSrc){this.dataset.retried='1';this.src=this.dataset.rawSrc;}else{this.parentElement.classList.add('is-fallback');this.remove();}" />
+                                            <% } %>
+                                            <div class="card-cover-fallback">
+                                                <div class="fallback-plate-top">
+                                                    <span>DISPATCH // <%= indexNum %></span>
+                                                    <span><%= region %></span>
+                                                </div>
+                                                <div class="fallback-plate-watermark"><%= indexNum %></div>
+                                                <div class="fallback-plate-bottom">
+                                                    <span class="fallback-plate-source"><%= sourceName %></span>
+                                                    <span class="fallback-plate-cat"><%= category %></span>
+                                                </div>
+                                            </div>
+                                        </a>
+
+                                        <div class="card-body">
+                                            <% if (hasMultiSources) { %>
+                                                <div class="kami-callout flex flex-col gap-0.5">
+                                                    <div class="kami-callout-title">CROSS-VERIFIED · <%= relatedSources.length + 1 %> 家权威外媒交叉印证</div>
+                                                    <div class="truncate text-xs" style="color: var(--text-body);">
+                                                        同题报道：<% relatedSources.forEach(function(r, rIdx) { %><% if (rIdx > 0) { %>、<% } %><% if (r.url) { %><a href="<%= r.url %>" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="<%= r.title || r.name %>"><%= r.name %></a><% } else { %><span><%= r.name %></span><% } %><% }); %>
+                                                    </div>
+                                                </div>
+                                            <% } %>
+
+                                            <div>
+                                                <h3 class="card-title">
+                                                    <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"><%= title %></a>
+                                                </h3>
+                                                <% if (originalTitle) { %>
+                                                    <p class="card-subtitle-en line-clamp-1" title="<%= originalTitle %>"><%= originalTitle %></p>
+                                                <% } %>
+                                            </div>
+
+                                            <p class="card-summary <%= summaryClampClass %>"><%= summary %></p>
+
+                                            <% if (keyPoints.length > 0) { %>
+                                                <div class="pt-1 flex flex-wrap gap-1.5">
+                                                    <% keyPoints.forEach(function(kp) { %>
+                                                        <span class="kami-tag-neutral">· <%= kp %></span>
+                                                    <% }); %>
+                                                </div>
+                                            <% } %>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="card-footer">
+                                    <button type="button" onclick="app.openDeepRead('<%= encodedUrl %>', '<%= encodedTitle %>', '<%= encodedSource %>', '<%= encodedSummary %>')"
+                                        class="btn-read-more">
+                                        <i class="fa-solid fa-book-open-reader text-xs"></i>
+                                        <span>全文深读</span>
+                                    </button>
+                                    <div class="flex items-center gap-3">
+                                        <span class="card-timestamp"><%= timeStr %></span>
+                                        <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
+                                            class="btn-source-link">
+                                            <span>原文</span>
+                                            <span aria-hidden="true">↗</span>
+                                        </a>
+                                    </div>
+                                </div>
+                            </article>
+                            <% }); %>
+                        <% } %>
                     </div>
-                </div>
 
-                <!-- 新闻情报卡片网格 -->
-                <div id="newsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <!-- 由 main.js 渲染卡片 -->
-                </div>
-
-                <!-- 加载更多按钮 -->
-                <div id="loadMoreContainer" class="text-center pt-4 hidden">
-                    <button onclick="app.loadMoreNews()" class="btn-ghost">
-                        <span>加载更多要闻</span>
-                    </button>
+                    <div id="loadMoreContainer" class="text-center pt-4 hidden">
+                        <button type="button" onclick="app.loadMoreNews()" class="btn-ghost">
+                            <span>加载更多要闻</span>
+                        </button>
+                    </div>
                 </div>
             </section>
 
-            <!-- ==================== TAB 2: 今日要闻深度综述 ==================== -->
             <section id="tabPanel-summary" class="hidden space-y-6">
-                <div class="kami-card sm:p-10">
-                    <div class="pb-6" style="border-bottom: 1px solid var(--border);">
-                        <div class="text-xs uppercase tracking-widest mb-2" style="color: var(--stone); font-family: var(--latin-ui);">
-                            DAILY GLOBAL SYNTHESIS · 全球态势综述
-                        </div>
-                        <h2 id="summaryTitle" class="text-2xl sm:text-3xl" style="color: var(--near-black); margin: 0;">
-                            <%= summaryArticle ? summaryArticle.title : '今日全球要闻深度综述' %>
-                        </h2>
-                        <p id="summaryMeta" class="text-xs mt-2" style="color: var(--stone); font-variant-numeric: tabular-nums;">
-                            <% if (summaryArticle) { %>
-                                生成时间：<%= new Date(summaryArticle.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) %> · 涵盖 <%= (summaryArticle.regions || []).join('、') %> · 共 <%= summaryArticle.wordCount || 0 %> 字
-                            <% } else { %>
-                                点击右上角「同步最新」获取最新一期全球要闻深度综述
-                            <% } %>
-                        </p>
-                    </div>
-
-                    <!-- 综述正文 -->
-                    <div id="summaryBody" class="summary-content mt-8">
-                        <% if (summaryArticle && summaryArticle.htmlContent) { %>
-                            <%- summaryArticle.htmlContent %>
-                        <% } else { %>
-                            <div class="py-12" style="color: var(--stone);">
-                                <p>暂无今日综述，请点击顶部「同步最新」拉取最新一期全球要闻深度综述。</p>
+                <div id="summarySection">
+                    <article id="summaryContent" class="kami-card taste-briefing-sheet">
+                        <div class="pb-6" style="border-bottom: 1px solid var(--border-hairline);">
+                            <div class="text-xs uppercase tracking-widest mb-2" style="color: var(--text-muted); font-family: var(--font-mono);">
+                                DAILY GLOBAL SYNTHESIS · 全球态势综述
                             </div>
-                        <% } %>
-                    </div>
+                            <h2 id="summaryTitle" class="taste-briefing-title">
+                                <%= summaryArticle ? summaryArticle.title : '今日全球要闻深度综述' %>
+                            </h2>
+                            <p id="summaryMeta" class="text-xs mt-2.5 tabular-nums" style="color: var(--text-muted); font-family: var(--font-mono);">
+                                <% if (summaryArticle) { %>
+                                    生成时间：<%= new Date(summaryArticle.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) %> · 涵盖 <%= (summaryArticle.regions || []).join('、') %> · 共 <%= summaryArticle.wordCount || 0 %> 字
+                                <% } else { %>
+                                    点击右上角「同步最新」获取最新一期全球要闻深度综述
+                                <% } %>
+                            </p>
+                        </div>
+
+                        <div id="summaryBody" class="summary-content mt-8">
+                            <% if (summaryArticle && summaryArticle.htmlContent) { %>
+                                <%- summaryArticle.htmlContent %>
+                            <% } else { %>
+                                <div class="py-12" style="color: var(--text-muted);">
+                                    <p>暂无今日综述，请点击顶部「同步最新」拉取最新一期全球要闻深度综述。</p>
+                                </div>
+                            <% } %>
+                        </div>
+                    </article>
                 </div>
             </section>
         </main>
     </div>
 
-    <!-- ==================== MODAL 1: 单篇新闻全文深读弹窗 ==================== -->
-    <div id="deepReadModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex items-center justify-center p-4" onclick="if(event.target===this) app.closeDeepReadModal()">
-        <div class="kami-modal-surface max-w-3xl w-full max-h-[88vh] flex flex-col overflow-hidden">
-            <div class="px-6 py-5 flex items-start justify-between gap-4" style="border-bottom: 1px solid var(--border); background: var(--ivory);">
+    <div id="deepReadModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex justify-end" onclick="if(event.target===this) app.closeDeepReadModal()">
+        <aside id="articleModal" class="taste-drawer-surface w-full max-w-2xl h-full flex flex-col justify-between overflow-hidden">
+            <div class="px-6 py-5 flex items-start justify-between gap-4" style="border-bottom: 1px solid var(--border-hairline); background: var(--bg-surface);">
                 <div class="min-w-0">
                     <div class="flex items-center gap-2 mb-1.5">
                         <span class="kami-tag">全文深读</span>
-                        <span id="deepReadSourceBadge" class="text-xs" style="color: var(--stone);"></span>
+                        <span id="deepReadSourceBadge" class="text-xs" style="color: var(--text-muted); font-family: var(--font-mono);"></span>
                     </div>
-                    <h3 id="deepReadTitle" class="text-lg truncate" style="color: var(--near-black); margin: 0;">正在提取外媒原文...</h3>
+                    <h3 id="deepReadTitle" class="text-lg font-bold line-clamp-2" style="color: var(--text-primary); font-family: var(--font-display); margin: 0;">正在提取外媒原文...</h3>
                 </div>
-                <button onclick="app.closeDeepReadModal()" class="p-1.5 cursor-pointer" style="color: var(--stone);">
-                    <i class="fa-solid fa-xmark text-lg"></i>
+                <button type="button" id="btnCloseArticleModal" onclick="app.closeDeepReadModal()" class="btn-ghost btn-icon-only" aria-label="关闭全文深读">
+                    <i class="fa-solid fa-xmark text-sm"></i>
                 </button>
             </div>
-            <div id="deepReadBody" class="p-6 sm:p-8 overflow-y-auto space-y-4 text-sm leading-relaxed">
-                <!-- 动态加载深读结果 -->
-            </div>
-            <div class="px-6 py-4 flex items-center justify-between" style="border-top: 1px solid var(--border); background: var(--ivory);">
-                <a id="deepReadOriginalLink" href="#" target="_blank" rel="noopener noreferrer" class="text-xs font-medium hover:underline" style="color: var(--brand);">
-                    在新窗口打开外媒源站原文 ↗
+            <div id="deepReadBody" class="p-6 sm:p-8 overflow-y-auto flex-1 space-y-5 text-sm leading-relaxed"></div>
+            <div class="px-6 py-4 flex items-center justify-between gap-3" style="border-top: 1px solid var(--border-hairline); background: var(--bg-surface);">
+                <a id="deepReadOriginalLink" href="#" target="_blank" rel="noopener noreferrer" class="btn-source-link">
+                    <span>在新窗口打开外媒源站原文</span>
+                    <span aria-hidden="true">↗</span>
                 </a>
-                <button onclick="app.closeDeepReadModal()" class="btn-ghost py-1.5 px-4 text-xs">关闭</button>
+                <button type="button" onclick="app.closeDeepReadModal()" class="btn-ghost py-1.5 px-4 text-xs">关闭</button>
             </div>
-        </div>
+        </aside>
     </div>
 
-    <!-- ==================== MODAL 2: 极简系统设置弹窗 ==================== -->
     <div id="settingsModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex items-center justify-center p-4" onclick="if(event.target===this) app.closeSettingsModal()">
-        <div class="kami-modal-surface max-w-lg w-full flex flex-col overflow-hidden">
-            <div class="px-6 py-5 flex items-center justify-between" style="border-bottom: 1px solid var(--border);">
-                <h3 class="text-base font-bold" style="color: var(--near-black); margin: 0;">系统设置</h3>
-                <button onclick="app.closeSettingsModal()" class="p-1.5 cursor-pointer" style="color: var(--stone);" aria-label="关闭设置">
-                    <i class="fa-solid fa-xmark text-base"></i>
+        <form id="settingsForm" class="kami-modal-surface max-w-lg w-full flex flex-col overflow-hidden" onsubmit="event.preventDefault(); app.saveSettings();">
+            <div class="px-6 py-5 flex items-center justify-between" style="border-bottom: 1px solid var(--border-hairline);">
+                <h3 class="text-base font-bold" style="color: var(--text-primary); margin: 0;">系统设置</h3>
+                <button type="button" id="btnCloseSettings" onclick="app.closeSettingsModal()" class="btn-ghost btn-icon-only" aria-label="关闭设置">
+                    <i class="fa-solid fa-xmark text-sm"></i>
                 </button>
             </div>
 
             <div class="p-6 space-y-5 text-sm">
-                <!-- 1. GitHub 自动同步与后台检测间隔 -->
                 <div class="space-y-3">
                     <div class="flex items-center justify-between gap-4">
                         <div>
-                            <div class="font-semibold" style="color: var(--near-black);">GitHub 自动同步</div>
-                            <div class="text-xs mt-0.5" style="color: var(--stone);">自动从 GitHub 同步最新精编要闻快照</div>
+                            <div class="font-semibold" style="color: var(--text-primary);">GitHub 自动同步</div>
+                            <div class="text-xs mt-0.5" style="color: var(--text-muted);">自动从 GitHub 同步最新精编要闻快照</div>
                         </div>
-                        <input id="cfgGithubSyncEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4 cursor-pointer" <%= (config.githubSyncEnabled !== false) ? 'checked' : '' %>>
+                        <input id="cfgGithubSyncEnabled" type="checkbox" class="w-4 h-4 cursor-pointer" <%= (config.githubSyncEnabled !== false) ? 'checked' : '' %>>
                     </div>
 
                     <div class="flex items-center justify-between gap-4 pt-1">
-                        <label for="cfgGithubSyncInterval" class="text-xs" style="color: var(--olive);">后台检测间隔（分钟）</label>
-                        <input id="cfgGithubSyncInterval" type="number" min="5" max="1440" value="<%= config.githubSyncIntervalMinutes || 60 %>" class="kami-input w-28 text-xs text-right">
+                        <label for="cfgGithubSyncInterval" class="text-xs" style="color: var(--text-body);">后台检测间隔（分钟）</label>
+                        <input id="cfgGithubSyncInterval" type="number" min="5" max="1440" value="<%= config.githubSyncIntervalMinutes || 60 %>" class="kami-input w-28 text-xs text-right tabular-nums" style="font-family: var(--font-mono);">
                     </div>
                 </div>
 
-                <!-- 2. 每日定时同步时间 -->
-                <div class="space-y-3 pt-4" style="border-top: 1px solid var(--border);">
+                <div class="space-y-3 pt-4" style="border-top: 1px solid var(--border-hairline);">
                     <div class="flex items-center justify-between gap-4">
                         <div>
-                            <div class="font-semibold" style="color: var(--near-black);">每日定时同步</div>
-                            <div class="text-xs mt-0.5" style="color: var(--stone);">按北京时间每日早、中、晚自动同步更新</div>
+                            <div class="font-semibold" style="color: var(--text-primary);">每日定时同步</div>
+                            <div class="text-xs mt-0.5" style="color: var(--text-muted);">按北京时间每日早、中、晚自动同步更新</div>
                         </div>
-                        <input id="cfgAutoUpdateEnabled" type="checkbox" class="accent-[#2563eb] w-4 h-4 cursor-pointer" <%= (config.autoUpdateEnabled !== false) ? 'checked' : '' %>>
+                        <input id="cfgAutoUpdateEnabled" type="checkbox" class="w-4 h-4 cursor-pointer" <%= (config.autoUpdateEnabled !== false) ? 'checked' : '' %>>
                     </div>
 
                     <div>
-                        <label for="cfgUpdateTimes" class="block text-xs mb-1.5" style="color: var(--olive);">每日定时同步时间（逗号分隔）</label>
-                        <input id="cfgUpdateTimes" type="text" value="<%= Array.isArray(config.updateTimes) ? config.updateTimes.join(', ') : (config.updateTimes || '08:00, 12:30, 19:30') %>" placeholder="08:00, 12:30, 19:30" class="kami-input w-full text-xs font-mono">
+                        <label for="cfgUpdateTimes" class="block text-xs mb-1.5" style="color: var(--text-body);">每日定时同步时间（逗号分隔）</label>
+                        <input id="cfgUpdateTimes" type="text" value="<%= Array.isArray(config.updateTimes) ? config.updateTimes.join(', ') : (config.updateTimes || '08:00, 12:30, 19:30') %>" placeholder="08:00, 12:30, 19:30" class="kami-input w-full text-xs tabular-nums" style="font-family: var(--font-mono);">
                     </div>
                 </div>
 
-                <!-- 3. 简洁的当前同步状态展示 -->
-                <div id="modalGithubSyncStatusPanel" class="px-4 py-3 rounded-lg flex items-center justify-between gap-3 text-xs" style="background: var(--inline-code-bg); border: 1px solid var(--border);">
+                <div id="modalGithubSyncStatusPanel" class="px-4 py-3 rounded-md flex items-center justify-between gap-3 text-xs tabular-nums" style="background: var(--bg-subtle); border: 1px solid var(--border-hairline);">
                     <div class="flex items-center gap-2">
-                        <span style="color: var(--stone);">同步状态：</span>
-                        <strong id="modalSyncStatusText" style="color: var(--near-black);">
-                            <%= (typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'synced') ? '已同步最新' : ((typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'up-to-date') ? '已是最新' : '就绪') %>
-                        </strong>
+                        <span style="color: var(--text-muted);">同步状态：</span>
+                        <span id="modalSyncStatusBadge">
+                            <strong id="modalSyncStatusText" style="color: var(--text-primary);">
+                                <%= (typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'synced') ? '已同步最新' : ((typeof githubSync !== 'undefined' && githubSync && githubSync.lastSyncStatus === 'up-to-date') ? '已是最新' : '就绪') %>
+                            </strong>
+                        </span>
                     </div>
-                    <div style="color: var(--stone); font-variant-numeric: tabular-nums;">
+                    <div style="color: var(--text-muted); font-family: var(--font-mono);">
                         最近同步：<span id="modalSyncLastTime"><%= (typeof githubSync !== 'undefined' && githubSync && (githubSync.lastSyncedAt || githubSync.lastSyncCheckAt)) ? new Date(githubSync.lastSyncedAt || githubSync.lastSyncCheckAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }) : (lastUpdated ? new Date(lastUpdated).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未同步') %></span>
+                        <span id="modalSyncPublishedBy" class="sr-only"></span>
+                        <span id="modalSyncSnapshotInfo" class="sr-only"></span>
                     </div>
                 </div>
             </div>
 
-            <div class="px-6 py-4 flex items-center justify-end gap-2.5" style="border-top: 1px solid var(--border); background: var(--inline-code-bg);">
-                <button type="button" onclick="app.closeSettingsModal()" class="btn-ghost py-2 px-4 text-xs">取消</button>
-                <button type="button" id="btnSaveSettings" onclick="app.saveSettings()" class="btn-primary py-2 px-5 text-xs">保存设置</button>
+            <div class="px-6 py-4 flex items-center justify-end gap-2.5" style="border-top: 1px solid var(--border-hairline); background: var(--bg-subtle);">
+                <button type="button" id="btnCancelSettings" onclick="app.closeSettingsModal()" class="btn-ghost py-2 px-4 text-xs">取消</button>
+                <button type="submit" id="btnSaveSettings" class="btn-primary py-2 px-5 text-xs">保存设置</button>
             </div>
-        </div>
+        </form>
     </div>
 
-    <!-- 全局 Toast 通知容器 -->
-    <div id="toastContainer" class="fixed bottom-5 right-5 z-50 space-y-2 max-w-sm"></div>
+    <div id="toastContainer" class="fixed bottom-5 right-5 z-50 space-y-2 max-w-sm">
+        <div id="toast" class="contents"></div>
+    </div>
 
-    <!-- 注入服务端初始状态 -->
     <script>
         window.__INITIAL_STATE__ = {
             news: <%- JSON.stringify(news || []) %>,

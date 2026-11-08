@@ -1,5 +1,6 @@
 /**
  * 聚核 CoreFeed v2.0 · 全球知名信源实时聚合与深读前端控制器
+ * Design Spec: design-taste-frontend v2.5.1 (Swiss Editorial & Asymmetric Bento)
  */
 class CoreFeedApp {
     constructor() {
@@ -23,6 +24,7 @@ class CoreFeedApp {
         this.socket = null;
 
         this.initTheme();
+        this.initKeyboardShortcuts();
         this.initSocket();
         this.renderFilters();
         this.renderNewsGrid();
@@ -33,7 +35,7 @@ class CoreFeedApp {
         this.statusPollTimer = setInterval(() => this.fetchStatus(), 60 * 1000);
     }
 
-    // ==================== 1. 主题与通知 ====================
+    // ==================== 1. 主题、快捷键与通知 ====================
     initTheme() {
         const saved = localStorage.getItem('corefeed_theme');
         if (saved === 'dark') {
@@ -56,8 +58,17 @@ class CoreFeedApp {
         icon.className = isDark ? 'fa-solid fa-sun text-xs' : 'fa-solid fa-moon text-xs';
     }
 
+    initKeyboardShortcuts() {
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.closeDeepReadModal();
+                this.closeSettingsModal();
+            }
+        });
+    }
+
     toast(message, type = 'info') {
-        const container = document.getElementById('toastContainer');
+        const container = document.getElementById('toast') || document.getElementById('toastContainer');
         if (!container) return;
 
         const icons = {
@@ -68,10 +79,11 @@ class CoreFeedApp {
         };
 
         const el = document.createElement('div');
-        el.className = 'flex items-center gap-2.5 px-4 py-3 rounded-lg text-xs sm:text-sm transition-all';
-        el.style.background = type === 'error' ? '#3d3d3a' : 'var(--brand)';
-        el.style.color = '#faf9f5';
-        el.style.border = '1px solid var(--line)';
+        el.className = 'flex items-center gap-2.5 px-4 py-3 rounded-md text-xs sm:text-sm transition-all';
+        el.style.background = type === 'error' ? 'var(--text-primary)' : 'var(--accent)';
+        el.style.color = '#FFFFFF';
+        el.style.border = '1px solid var(--border-strong)';
+        el.style.boxShadow = 'var(--shadow-elevated)';
         el.innerHTML = `<i class="fa-solid ${icons[type] || icons.info}"></i><span>${this.escapeHtml(message)}</span>`;
         container.appendChild(el);
 
@@ -101,7 +113,6 @@ class CoreFeedApp {
             }
         });
 
-        // GitHub 快照同步或发布更新完成：实时拉取最新快照与状态刷新卡片
         this.socket.on('news-updated', (payload) => {
             if (payload && payload.phase) {
                 this.collectionPhase = payload.phase;
@@ -136,22 +147,23 @@ class CoreFeedApp {
 
     // ==================== 3. 选项卡与多维筛选 ====================
     switchTab(tabName) {
-        this.activeTab = tabName;
+        const normalized = tabName === 'news' ? 'feed' : tabName;
+        this.activeTab = normalized;
         const tabs = ['feed', 'summary'];
         tabs.forEach(t => {
             const btn = document.getElementById(`tabBtn-${t}`);
             const panel = document.getElementById(`tabPanel-${t}`);
             if (btn) {
-                btn.classList.toggle('active', t === tabName);
+                btn.classList.toggle('active', t === normalized);
             }
             if (panel) {
-                panel.classList.toggle('hidden', t !== tabName);
+                panel.classList.toggle('hidden', t !== normalized);
             }
         });
 
         const searchWrapper = document.getElementById('feedSearchWrapper');
         if (searchWrapper) {
-            searchWrapper.classList.toggle('hidden', tabName !== 'feed');
+            searchWrapper.classList.toggle('hidden', normalized !== 'feed');
         }
     }
 
@@ -174,7 +186,6 @@ class CoreFeedApp {
             sourceCounts[s] = (sourceCounts[s] || 0) + 1;
         });
 
-        // 如果当前选中的筛选值在新数据中不存在，自动回退到“全部”
         if (this.selectedRegion !== '全部' && !regionCounts[this.selectedRegion]) {
             this.selectedRegion = '全部';
         }
@@ -183,20 +194,19 @@ class CoreFeedApp {
         }
 
         const regions = Object.keys(regionCounts);
-        regionBar.innerHTML = `<span class="text-sm font-semibold mr-1" style="color: var(--stone);">地区：</span>` +
+        regionBar.innerHTML = `<span class="filter-row-label">地区</span>` +
             regions.map(r => {
                 const active = this.selectedRegion === r;
-                return `<button onclick="app.setRegionFilter('${this.escapeHtml(r)}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(r)} <span style="opacity: 0.8;">(${regionCounts[r]})</span></button>`;
+                return `<button type="button" onclick="app.setRegionFilter('${this.escapeHtml(r)}')" class="btn-chip ${active ? 'active' : ''}"><span>${this.escapeHtml(r)}</span><span class="chip-count">(${regionCounts[r]})</span></button>`;
             }).join('');
 
         const categories = Object.keys(categoryCounts);
-        categoryBar.innerHTML = `<span class="text-sm font-semibold mr-1" style="color: var(--stone);">领域：</span>` +
+        categoryBar.innerHTML = `<span class="filter-row-label">领域</span>` +
             categories.map(c => {
                 const active = this.selectedCategory === c;
-                return `<button onclick="app.setCategoryFilter('${this.escapeHtml(c)}')" class="btn-chip ${active ? 'active' : ''}">${this.escapeHtml(c)} <span style="opacity: 0.8;">(${categoryCounts[c]})</span></button>`;
+                return `<button type="button" onclick="app.setCategoryFilter('${this.escapeHtml(c)}')" class="btn-chip ${active ? 'active' : ''}"><span>${this.escapeHtml(c)}</span><span class="chip-count">(${categoryCounts[c]})</span></button>`;
             }).join('');
 
-        // 更新媒体来源下拉筛选框
         if (sourceSelect) {
             const currentVal = sourceSelect.value || '全部';
             const sortedSources = Object.keys(sourceCounts).sort((a, b) => sourceCounts[b] - sourceCounts[a]);
@@ -218,10 +228,58 @@ class CoreFeedApp {
     }
 
     applyFilters() {
+        const inputEl = document.getElementById('localFilterInput');
+        const clearBtn = document.getElementById('btnClearSearch');
+        if (clearBtn && inputEl) {
+            clearBtn.classList.toggle('hidden', !inputEl.value.trim());
+        }
         this.renderNewsGrid();
     }
 
-    // ==================== 4. 渲染全球新闻卡片网格 ====================
+    clearSearch() {
+        const inputEl = document.getElementById('localFilterInput');
+        if (inputEl) {
+            inputEl.value = '';
+        }
+        this.applyFilters();
+    }
+
+    // ==================== 4. 渲染 12 列不对称 Bento 全球新闻网格 ====================
+    computeBentoLayout(idx, total) {
+        if (total === 1) {
+            return { tier: 'lead', spanClass: 'bento-span-12 md:col-span-2' };
+        }
+        if (total === 2) {
+            return idx === 0
+                ? { tier: 'lead', spanClass: 'bento-span-7 md:col-span-2' }
+                : { tier: 'secondary', spanClass: 'bento-span-5 md:col-span-2' };
+        }
+        // Row 1 (idx 0 & 1): 8 + 4 = 12
+        if (idx === 0) return { tier: 'lead', spanClass: 'bento-span-8 md:col-span-2' };
+        if (idx === 1) return { tier: 'secondary', spanClass: 'bento-span-4' };
+
+        // If total === 3, idx 2 is the only item after Row 1 -> span 12
+        if (total === 3 && idx === 2) {
+            return { tier: 'secondary', spanClass: 'bento-span-12 md:col-span-2' };
+        }
+
+        // If total >= 4, Row 2 (idx 2 & 3) uses Dual Secondary Highlight (6 + 6 = 12)
+        if (idx === 2 || idx === 3) {
+            return { tier: 'secondary', spanClass: 'bento-span-6' };
+        }
+
+        // Rows 3+ (idx >= 4): 3 cards per row (4 + 4 + 4 = 12), with last-row remainder balancing
+        const remCount = total - 4;
+        const tail = remCount % 3;
+        if (tail === 1 && idx === total - 1) {
+            return { tier: 'compact', spanClass: 'bento-span-12 md:col-span-2' };
+        }
+        if (tail === 2 && idx >= total - 2) {
+            return { tier: 'compact', spanClass: 'bento-span-6' };
+        }
+        return { tier: 'compact', spanClass: 'bento-span-4' };
+    }
+
     renderNewsGrid() {
         const grid = document.getElementById('newsGrid');
         if (!grid) return;
@@ -260,30 +318,23 @@ class CoreFeedApp {
             grid.innerHTML = `
                 <div class="col-span-full kami-card py-14 text-center space-y-3">
                     <div class="kami-tag mx-auto">暂无匹配新闻</div>
-                    <h3 class="text-xl font-bold" style="color: var(--near-black);">当前筛选条件下暂无新闻条目</h3>
-                    <p class="text-sm max-w-md mx-auto" style="color: var(--stone);">可尝试切换筛选条件，或点击右上角「同步最新」拉取最新一期全球权威媒体精编要闻。</p>
+                    <h3 class="text-xl font-bold" style="color: var(--text-primary);">当前筛选条件下暂无新闻条目</h3>
+                    <p class="text-sm max-w-md mx-auto" style="color: var(--text-muted);">可尝试切换筛选条件，或点击右上角「同步最新」拉取最新一期全球权威媒体精编要闻。</p>
                 </div>
             `;
             return;
         }
 
-        grid.innerHTML = filtered.map((item, idx) => this.renderSingleCardHtml(item, idx)).join('');
+        const total = filtered.length;
+        grid.innerHTML = filtered.map((item, idx) => this.renderSingleCardHtml(item, idx, total)).join('');
     }
 
-    getCategoryIconClass(category) {
-        const map = {
-            '科技': 'fa-microchip',
-            '财经': 'fa-chart-line',
-            '军事': 'fa-shield-halved',
-            '政经': 'fa-landmark',
-            '外交': 'fa-handshake',
-            '能源': 'fa-bolt',
-            '社会': 'fa-users'
-        };
-        return map[category] || 'fa-earth-americas';
-    }
+    renderSingleCardHtml(item, idx, total = this.news.length) {
+        const layout = this.computeBentoLayout(idx, total || 1);
+        const tier = layout.tier;
+        const spanClass = layout.spanClass;
+        const indexNum = String(idx + 1).padStart(2, '0');
 
-    renderSingleCardHtml(item, idx) {
         const title = item.translatedTitle || item.title || '无标题';
         const originalTitle = item.translatedTitle && item.translatedTitle !== item.title ? item.title : '';
         const summary = item.summary || item.translatedDescription || item.description || '';
@@ -310,92 +361,94 @@ class CoreFeedApp {
             return `<span>${this.escapeHtml(r.name)}</span>`;
         }).join('、');
 
-        const catIcon = this.getCategoryIconClass(category);
         const metaBadgeText = category && category !== region ? `${region} · ${category}` : region;
         const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
         const displayImgSrc = isRemoteHttp ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}` : imageUrl;
+        const summaryClampClass = tier === 'lead' ? 'line-clamp-5' : (tier === 'secondary' ? 'line-clamp-4' : 'line-clamp-3');
 
         return `
-            <article class="news-card">
+            <article class="news-card news-card--${tier} ${spanClass}" style="--card-index: ${idx};">
                 <div>
-                    <!-- 顶部新闻标题图区域 (优先通过服务端防盗链代理加载 + 原图直连回退 + 智能分类视觉封面兜底) -->
-                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
-                       class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
-                        ${imageUrl ? `
-                            <img src="${this.escapeHtml(displayImgSrc)}"
-                                 data-raw-src="${this.escapeHtml(imageUrl)}"
-                                 alt="${this.escapeHtml(title)}"
-                                 loading="lazy"
-                                 referrerpolicy="no-referrer"
-                                 class="card-cover-img"
-                                 onerror="if(!this.dataset.retried && this.dataset.rawSrc && this.src !== this.dataset.rawSrc){this.dataset.retried='1';this.src=this.dataset.rawSrc;}else{this.parentElement.classList.add('is-fallback');this.remove();}" />
-                        ` : ''}
-                        <div class="card-cover-fallback">
-                            <i class="fa-solid ${catIcon} text-3xl mb-2 opacity-80"></i>
-                            <div class="text-sm font-bold tracking-wide opacity-95">${this.escapeHtml(sourceName)}</div>
-                            <div class="text-xs opacity-75 mt-0.5">${this.escapeHtml(metaBadgeText)}</div>
+                    <div class="card-meta-header">
+                        <div class="card-meta-left">
+                            <span class="card-index-num">${indexNum}</span>
+                            <span class="card-meta-sep">/</span>
+                            <span class="card-source-name" title="${this.escapeHtml(sourceName)}">${this.escapeHtml(sourceName)}</span>
                         </div>
-                        <div class="card-cover-badges">
-                            <span class="cover-pill-source" title="${this.escapeHtml(sourceName)}">
-                                ${this.escapeHtml(sourceName)}
-                            </span>
-                            <span class="cover-pill-meta">
-                                ${this.escapeHtml(metaBadgeText)}
-                            </span>
-                        </div>
-                    </a>
+                        <span class="card-taxonomy-pill">${this.escapeHtml(metaBadgeText)}</span>
+                    </div>
 
-                    <!-- 卡片主体内容 -->
-                    <div class="card-body">
-                        <!-- 多信源交叉验证提示 -->
-                        ${hasMultiSources ? `
-                            <div class="kami-callout flex flex-col gap-0.5">
-                                <div class="font-bold">🔥 ${relatedSources.length + 1} 家权威外媒交叉印证</div>
-                                <div class="truncate text-xs" style="color: var(--olive);">同题报道：${relatedLinksHtml}</div>
+                    <div class="lead-bento-inner ${tier === 'lead' ? 'has-media' : ''}">
+                        <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
+                           class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
+                            ${imageUrl ? `
+                                <img src="${this.escapeHtml(displayImgSrc)}"
+                                     data-raw-src="${this.escapeHtml(imageUrl)}"
+                                     alt="${this.escapeHtml(title)}"
+                                     loading="lazy"
+                                     referrerpolicy="no-referrer"
+                                     class="card-cover-img"
+                                     onerror="if(!this.dataset.retried && this.dataset.rawSrc && this.src !== this.dataset.rawSrc){this.dataset.retried='1';this.src=this.dataset.rawSrc;}else{this.parentElement.classList.add('is-fallback');this.remove();}" />
+                            ` : ''}
+                            <div class="card-cover-fallback">
+                                <div class="fallback-plate-top">
+                                    <span>DISPATCH // ${indexNum}</span>
+                                    <span>${this.escapeHtml(region)}</span>
+                                </div>
+                                <div class="fallback-plate-watermark">${indexNum}</div>
+                                <div class="fallback-plate-bottom">
+                                    <span class="fallback-plate-source">${this.escapeHtml(sourceName)}</span>
+                                    <span class="fallback-plate-cat">${this.escapeHtml(category)}</span>
+                                </div>
                             </div>
-                        ` : ''}
+                        </a>
 
-                        ${isCompiling ? `
+                        <div class="card-body">
+                            ${hasMultiSources ? `
+                                <div class="kami-callout flex flex-col gap-0.5">
+                                    <div class="kami-callout-title">CROSS-VERIFIED · ${relatedSources.length + 1} 家权威外媒交叉印证</div>
+                                    <div class="truncate text-xs" style="color: var(--text-body);">同题报道：${relatedLinksHtml}</div>
+                                </div>
+                            ` : ''}
+
+                            ${isCompiling ? `
+                                <div>
+                                    <span class="kami-tag">后台深度精编中</span>
+                                </div>
+                            ` : ''}
+
                             <div>
-                                <span class="kami-tag">⚡ 后台深度精编中...</span>
+                                <h3 class="card-title">
+                                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(title)}</a>
+                                </h3>
+                                ${originalTitle ? `<p class="card-subtitle-en line-clamp-1" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
                             </div>
-                        ` : ''}
 
-                        <!-- 中文大号加粗主标题 + 外媒英文原标题对照 -->
-                        <div>
-                            <h3 class="card-title">
-                                <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(title)}</a>
-                            </h3>
-                            ${originalTitle ? `<p class="card-subtitle-en line-clamp-1" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
+                            <p class="card-summary ${summaryClampClass}">
+                                ${this.escapeHtml(summary)}
+                            </p>
+
+                            ${keyPoints.length > 0 ? `
+                                <div class="pt-1 flex flex-wrap gap-1.5">
+                                    ${keyPoints.map(kp => `<span class="kami-tag-neutral">· ${this.escapeHtml(kp)}</span>`).join('')}
+                                </div>
+                            ` : ''}
                         </div>
-
-                        <!-- 舒适大字号中文摘要 -->
-                        <p class="card-summary line-clamp-4">
-                            ${this.escapeHtml(summary)}
-                        </p>
-
-                        <!-- 核心要点标签 -->
-                        ${keyPoints.length > 0 ? `
-                            <div class="pt-1 flex flex-wrap gap-1.5">
-                                ${keyPoints.map(kp => `<span class="kami-tag-neutral">• ${this.escapeHtml(kp)}</span>`).join('')}
-                            </div>
-                        ` : ''}
                     </div>
                 </div>
 
-                <!-- 卡片底部操作栏 -->
                 <div class="card-footer">
-                    <button onclick="app.openDeepRead('${encodedUrl}', '${encodedTitle}', '${encodedSource}', '${encodedSummary}')"
-                        class="inline-flex items-center gap-1.5 font-semibold hover:underline cursor-pointer" style="color: var(--brand);">
+                    <button type="button" onclick="app.openDeepRead('${encodedUrl}', '${encodedTitle}', '${encodedSource}', '${encodedSummary}')"
+                        class="btn-read-more">
                         <i class="fa-solid fa-book-open-reader text-xs"></i>
                         <span>全文深读</span>
                     </button>
                     <div class="flex items-center gap-3">
-                        <span class="text-xs" style="color: var(--stone);">${this.escapeHtml(timeStr)}</span>
+                        <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
                         <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
-                            class="inline-flex items-center gap-1 font-medium hover:underline" style="color: var(--olive);">
+                            class="btn-source-link">
                             <span>原文</span>
-                            <span>↗</span>
+                            <span aria-hidden="true">↗</span>
                         </a>
                     </div>
                 </div>
@@ -420,9 +473,6 @@ class CoreFeedApp {
 
     // ==================== 5. 全球新闻采集、GitHub 快照同步、加载与全文深读 ====================
 
-    /**
-     * 拉取后端实时状态 (/api/status) 并更新顶部状态栏、发布端标识与定时信息
-     */
     async fetchStatus() {
         try {
             const res = await fetch('/api/status');
@@ -452,14 +502,11 @@ class CoreFeedApp {
         } catch (_) {}
     }
 
-    /**
-     * 更新报头最后更新时间（简明、克制格式，如 "更新于 12:30" 或 "更新于 11-08 12:30"）
-     */
     updateHeaderTimestamp(isoStr = this.lastUpdated) {
         if (isoStr) {
             this.lastUpdated = isoStr;
         }
-        const updatedEl = document.getElementById('lastUpdatedLabel') || document.getElementById('lastUpdateTime');
+        const updatedEl = document.getElementById('lastUpdatedText') || document.getElementById('lastUpdatedLabel') || document.getElementById('lastUpdateTime');
         if (!updatedEl) return;
         if (!this.lastUpdated) {
             updatedEl.textContent = '更新于 --:--';
@@ -494,9 +541,6 @@ class CoreFeedApp {
         this.updateHeaderTimestamp(this.lastUpdated);
     }
 
-    /**
-     * 更新「系统设置」弹窗内的简洁同步状态展示
-     */
     renderModalSyncStatus() {
         const gh = this.githubSync || {};
         const statusEl = document.getElementById('modalSyncStatusText') || document.getElementById('cfgSyncStatusText');
@@ -529,9 +573,6 @@ class CoreFeedApp {
         }
     }
 
-    /**
-     * 一键从 GitHub 快照分支 (ag-snapshot/latest.json) 同步最新一期新闻与综述
-     */
     async syncFromGitHub(options = {}) {
         if (this.isSyncingGithub) return;
         this.isSyncingGithub = true;
@@ -645,9 +686,6 @@ class CoreFeedApp {
         }
     }
 
-    /**
-     * 打开单篇外媒报道的全文深读弹窗（即时呈现核心导读，并发拉取多段全文精译与深度解读）
-     */
     async openDeepRead(encodedUrl, encodedTitle, encodedSource, encodedSummary) {
         const url = decodeURIComponent(encodedUrl || '');
         const title = decodeURIComponent(encodedTitle || '');
@@ -680,11 +718,18 @@ class CoreFeedApp {
 
         bodyEl.innerHTML = `
             ${instantLeadHtml}
-            <div class="p-5 rounded-xl border flex items-center gap-3.5" style="background: var(--bg-subtle); border-color: var(--border-subtle);">
-                <i class="fa-solid fa-spinner fa-spin text-lg" style="color: var(--brand);"></i>
-                <div>
-                    <div class="text-sm font-semibold" style="color: var(--text-primary);">正在实时提取 [${this.escapeHtml(sourceName)}] 报道全文并执行中文精译...</div>
-                    <div class="text-xs mt-0.5" style="color: var(--text-muted);">正在抽取原文完整段落、关键引语与背景脉络（通常需 2–8 秒）</div>
+            <div class="p-5 rounded-md border space-y-3.5" style="background: var(--bg-subtle); border-color: var(--border-subtle);">
+                <div class="flex items-center gap-3">
+                    <i class="fa-solid fa-spinner fa-spin text-sm" style="color: var(--accent);"></i>
+                    <div>
+                        <div class="text-sm font-semibold" style="color: var(--text-primary);">正在实时提取 [${this.escapeHtml(sourceName)}] 报道全文并执行中文精译...</div>
+                        <div class="text-xs mt-0.5" style="color: var(--text-muted);">正在抽取原文完整段落、关键引语与背景脉络（通常需 2 至 8 秒）</div>
+                    </div>
+                </div>
+                <div class="space-y-2 pt-1">
+                    <div class="taste-skeleton-line" style="width: 92%;"></div>
+                    <div class="taste-skeleton-line" style="width: 84%;"></div>
+                    <div class="taste-skeleton-line" style="width: 68%;"></div>
                 </div>
             </div>
         `;
@@ -712,7 +757,7 @@ class CoreFeedApp {
                     </div>
                     <details class="kami-code-block text-xs">
                         <summary class="cursor-pointer font-medium" style="color: var(--text-secondary);">查看抓取到的外媒原文摘录 (提取引擎: ${this.escapeHtml(data.extractionMethod || 'readability')})</summary>
-                        <pre class="mt-3 whitespace-pre-wrap max-h-60 overflow-y-auto" style="font-family: var(--sans); color: var(--text-secondary);">${this.escapeHtml(data.fullText || '')}</pre>
+                        <pre class="mt-3 whitespace-pre-wrap max-h-60 overflow-y-auto" style="font-family: var(--font-sans); color: var(--text-secondary);">${this.escapeHtml(data.fullText || '')}</pre>
                     </details>
                 </div>
             `;
@@ -721,8 +766,8 @@ class CoreFeedApp {
             const errMsg = err.name === 'AbortError' ? '外媒原站响应超时，已为您展示核心编译摘要' : err.message;
             bodyEl.innerHTML = `
                 ${instantLeadHtml}
-                <div class="p-4 rounded-lg text-xs" style="background: var(--bg-subtle); color: var(--text-secondary);">
-                    提示：${this.escapeHtml(errMsg)}。您可以点击右下角“阅读外媒原文”直接访问原报道页面。
+                <div class="p-4 rounded-md text-xs" style="background: var(--bg-subtle); border: 1px solid var(--border-subtle); color: var(--text-secondary);">
+                    提示：${this.escapeHtml(errMsg)}。您可以点击左下角链接直接访问外媒原报道页面。
                 </div>
             `;
         }
