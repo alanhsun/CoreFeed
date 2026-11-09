@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 /**
- * CoreFeed v2.0 — Antigravity Path A: 阶段一全球信源并发采集与正文提取工具 (ag-harvest.js)
+ * CoreFeed v2.0 — Antigravity Path A: 阶段一全球信源并发采集与候选池生成工具 (ag-harvest.js)
  *
  * 功能说明：
- *   并发巡检内置 30 个全球权威信源，执行跨源事件初筛去重、规则预分类、社交预览首图提取，
- *   并对前 N 篇核心报道执行 Jina Reader / Cheerio 全文穿透抽取，输出结构化候选池文件
- *   `data/ag_candidates.json` 供后续 AI 深度编译或发布流水线使用。
+ *   并发巡检内置 37 个全球权威信源，执行跨源事件初筛去重、规则预分类与高清题图补全，
+ *   输出结构化候选池文件 `data/ag_candidates.json` 供后续 AI 深度编译或发布流水线使用。
  *
  * 常用参数：
  *   --out <path>           输出候选 JSON 路径 (默认: data/ag_candidates.json)
  *   --limit <number>       候选池保留的最大文章数 (默认: 35)
- *   --deep-read <number>   执行全文穿透提取的头部文章数 (默认: 8)
  *   --images <number>      补齐 og:image 高清配图的文章数 (默认: 30)
  *   --category <string>    按信源分类定向巡检 (默认: all)
  *   --translate-fallback   启用免密钥高速中文直译预填充
@@ -31,7 +29,6 @@ function parseArgs(argv = process.argv.slice(2)) {
     const options = {
         out: process.env.AG_CANDIDATES_FILE || path.join(config.storage.dataDir, 'ag_candidates.json'),
         limit: 35,
-        deepRead: config.agent.deepReadTopCount !== undefined ? config.agent.deepReadTopCount : 8,
         imageLimit: config.agent.maxCuratedArticles || 30,
         category: 'all',
         translateFallback: false
@@ -47,10 +44,6 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.limit = Math.max(1, parseInt(argv[++i], 10) || 35);
         } else if (arg.startsWith('--limit=')) {
             options.limit = Math.max(1, parseInt(eqVal(arg), 10) || 35);
-        } else if (arg === '--deep-read' && argv[i + 1] !== undefined) {
-            options.deepRead = Math.max(0, parseInt(argv[++i], 10));
-        } else if (arg.startsWith('--deep-read=')) {
-            options.deepRead = Math.max(0, parseInt(eqVal(arg), 10));
         } else if (arg === '--images' && argv[i + 1] !== undefined) {
             options.imageLimit = Math.max(0, parseInt(argv[++i], 10));
         } else if (arg.startsWith('--images=')) {
@@ -101,15 +94,12 @@ async function runHarvest(customOptions = {}) {
 
     logger.info(
         'AG-HARVEST',
-        `[3/4] 正在并发补全缺失高清题图 (前 ${Math.min(opts.imageLimit, candidates.length)} 篇) 与焦点报道全文 (前 ${opts.deepRead} 篇)...`
+        `[3/4] 正在并发补全缺失高清题图 (前 ${Math.min(opts.imageLimit, candidates.length)} 篇)...`
     );
 
     const enrichTasks = [];
     if (opts.imageLimit > 0) {
         enrichTasks.push(agentService._enrichMissingArticleImages(candidates.slice(0, opts.imageLimit)));
-    }
-    if (opts.deepRead > 0) {
-        enrichTasks.push(agentService._enrichTopArticlesWithFullText(candidates, opts.deepRead));
     }
     if (opts.translateFallback) {
         enrichTasks.push(
@@ -117,9 +107,7 @@ async function runHarvest(customOptions = {}) {
                 candidates = translated.map((item, idx) => ({
                     ...item,
                     urlToImage: item.urlToImage || candidates[idx]?.urlToImage || null,
-                    fullTextContent: candidates[idx]?.fullTextContent || item.fullTextContent || undefined,
-                    content: candidates[idx]?.content || item.content || '',
-                    deepReadMethod: candidates[idx]?.deepReadMethod || item.deepReadMethod || undefined
+                    content: candidates[idx]?.content || item.content || ''
                 }));
             })
         );
@@ -141,7 +129,7 @@ async function runHarvest(customOptions = {}) {
         categoryHint: a.category || '国际',
         publishedAt: a.publishedAt,
         url: a.url,
-        excerpt: truncateText(a.fullTextContent || a.content || a.description || a.title || '', 700)
+        excerpt: truncateText(a.content || a.description || a.title || '', 700)
     }));
 
     const payload = {

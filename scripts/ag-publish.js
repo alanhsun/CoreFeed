@@ -289,9 +289,6 @@ async function runPublish(customOptions = {}) {
             region,
             category,
             keyPoints,
-            deepReadHtml: comp.deepReadHtml || article.deepReadHtml || undefined,
-            deepReadAnalysisHtml: comp.deepReadAnalysisHtml || article.deepReadAnalysisHtml || undefined,
-            deepReadAnalysis: comp.deepReadAnalysis || article.deepReadAnalysis || undefined,
             aiCompiled: true,
             processedAt: nowIso,
             _hasAgentCompilation: true
@@ -352,12 +349,6 @@ async function runPublish(customOptions = {}) {
                 merged.category = compiledMember.category;
                 if (!Array.isArray(merged.keyPoints) || merged.keyPoints.length === 0) {
                     merged.keyPoints = compiledMember.keyPoints || [];
-                }
-                if (compiledMember.deepReadHtml && !merged.deepReadHtml) {
-                    merged.deepReadHtml = compiledMember.deepReadHtml;
-                }
-                if (compiledMember.deepReadAnalysis && !merged.deepReadAnalysis) {
-                    merged.deepReadAnalysis = compiledMember.deepReadAnalysis;
                 }
                 merged.aiCompiled = true;
                 merged.processedAt = nowIso;

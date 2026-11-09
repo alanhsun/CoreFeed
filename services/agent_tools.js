@@ -1,7 +1,13 @@
+/**
+ * 聚核 CoreFeed v2.0 — 全球信源 RSS/Atom 抓取与题图智能提取工具集 (services/agent_tools.js)
+ *
+ * 核心能力：
+ *   1. 多级容错信源采集 (`fetchFromGlobalSource`)：官方主/备 RSS -> Google News 站点代理 -> Jina Reader 列表兜底
+ *   2. 高清题图提取与分辨率升级 (`extractImageFromItem`, `fetchArticleLeadImage`, `searchNewsImageByTitle`, `upgradeImageResolution`)
+ */
 const axios = require('axios');
 const https = require('https');
 const Parser = require('rss-parser');
-const cheerio = require('cheerio');
 const crypto = require('crypto');
 const config = require('../config');
 const logger = require('../utils/logger');
@@ -32,9 +38,7 @@ const parser = new Parser({
     }
 });
 
-// 全文提取缓存（避免重复抓取同一URL，TTL 2小时）
-const fullTextCache = new SimpleCache(300, 2 * 60 * 60 * 1000);
-// 标题搜图缓存（TTL 6小时）
+// 题图与标题搜图缓存（TTL 6小时）
 const imageLookupCache = new SimpleCache(400, 6 * 60 * 60 * 1000);
 
 /**
@@ -282,7 +286,7 @@ function buildGoogleNewsDomainRssUrl(domain, when = '24h', hl = 'en-US', gl = 'U
 }
 
 /**
- * 工具 1: 采集单个全球知名信源 (支持主 RSS + 备用官方 RSS + Google News 站点代理 + Jina 列表抽取)
+ * 采集单个全球知名信源 (支持主 RSS + 备用官方 RSS + Google News 站点代理 + Jina 列表抽取)
  */
 async function fetchFromGlobalSource(source, maxItemsOverride = null) {
     const maxItems = maxItemsOverride || source.maxArticles || config.news.maxArticlesPerSource || 5;
@@ -365,8 +369,7 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
                     strategy: usedStrategy
                 },
                 author: item.creator || item.author || null,
-                region: source.region || null,
-                needsDeepRead: (cleanContent || '').length < 250
+                region: source.region || null
             });
         }
 
@@ -437,241 +440,11 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
                 strategy: 'jina_scrape'
             },
             author: null,
-            region: source.region || null,
-            needsDeepRead: true
+            region: source.region || null
         });
     }
 
     return articles;
-}
-
-/**
- * 工具 2: 提取单篇新闻全文 (Jina Reader 优先 + 本地 Cheerio Readability 回退)
- */
-async function extractFullArticleContent(url, options = {}) {
-    if (!url || !isValidUrl(url)) {
-        return { success: false, error: '无效的URL' };
-    }
-
-    const cached = fullTextCache.get(url);
-    if (cached && !options.forceRefresh) {
-        return { ...cached, fromCache: true };
-    }
-
-    const isGoogleNewsRedirect = url.includes('news.google.com/rss/articles/');
-    const fastTimeout = Math.min(options.timeout || 6500, 7500);
-    let partialLocalResult = null;
-
-    // 策略 A (首选秒级直连): 本地 HTTP + JSON-LD articleBody + Cheerio Readability 正文抽取
-    try {
-        const response = await axios.get(url, {
-            timeout: fastTimeout,
-            maxRedirects: 5,
-            httpsAgent: httpsAgentIgnoreTls,
-            headers: {
-                'User-Agent': config.webScraping.userAgent,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8'
-            }
-        });
-
-        const html = response.data;
-        if (typeof html === 'string' && html.length > 100) {
-            const $ = cheerio.load(html);
-            const resolvedUrl = response.request?.res?.responseUrl || url;
-
-            const rawOgImage =
-                $('meta[property="og:image"]').attr('content') ||
-                $('meta[property="og:image:secure_url"]').attr('content') ||
-                $('meta[property="og:image:url"]').attr('content') ||
-                $('meta[name="twitter:image"]').attr('content') ||
-                $('meta[name="twitter:image:src"]').attr('content') ||
-                $('link[rel="image_src"]').attr('href') ||
-                $('article img').first().attr('src') ||
-                null;
-
-            const imageUrl = normalizeValidImageUrl(rawOgImage, resolvedUrl);
-            const publishedTime = $('meta[property="article:published_time"]').attr('content') || null;
-
-            // 先从 JSON-LD 结构化数据中提取完整 articleBody（CNA、SCMP、BBC、卫报等权威外媒常将全文存于此处）
-            let jsonLdBody = '';
-            $('script[type="application/ld+json"]').each((_, el) => {
-                if (jsonLdBody.length >= 400) return;
-                try {
-                    const rawJson = $(el).html();
-                    if (!rawJson) return;
-                    const bodyMatch = rawJson.match(/"articleBody"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
-                    if (bodyMatch && bodyMatch[1]) {
-                        const decoded = JSON.parse(`"${bodyMatch[1]}"`);
-                        const cleanedLd = stripHtml(decoded).trim();
-                        if (cleanedLd.length > jsonLdBody.length) {
-                            jsonLdBody = cleanedLd;
-                        }
-                    }
-                } catch (_) {}
-            });
-
-            $('script, style, noscript, iframe, nav, footer, header, aside, form, .ad, .advertisement, .social-share, .related-articles, .newsletter').remove();
-
-            const pageTitle =
-                $('meta[property="og:title"]').attr('content') ||
-                $('h1').first().text().trim() ||
-                $('title').text().trim();
-
-            const metaDesc =
-                $('meta[property="og:description"]').attr('content') ||
-                $('meta[name="description"]').attr('content') ||
-                '';
-
-            const selectors = [
-                'article [itemprop="articleBody"] p',
-                '[itemprop="articleBody"] p',
-                'article .article-body p',
-                'article .story-body p',
-                'article .text-long p',
-                'article .c-article-body p',
-                'article p',
-                'main article p',
-                '.article-content p',
-                '.post-content p',
-                '.entry-content p',
-                'main p'
-            ];
-
-            let paragraphs = [];
-            for (const sel of selectors) {
-                const found = [];
-                $(sel).each((_, el) => {
-                    const txt = $(el).text().replace(/\s+/g, ' ').trim();
-                    if (txt.length >= 28 && !/^(Read more|Subscribe|Sign up|Copyright|All rights reserved|Advertisement|Follow us)/i.test(txt)) {
-                        found.push(txt);
-                    }
-                });
-                if (found.join('\n\n').length >= 200) {
-                    paragraphs = found;
-                    break;
-                }
-            }
-
-            if (paragraphs.length === 0) {
-                $('p').each((_, el) => {
-                    const txt = $(el).text().replace(/\s+/g, ' ').trim();
-                    if (txt.length >= 40 && !/^(Read more|Subscribe|Sign up|Copyright|All rights reserved)/i.test(txt)) {
-                        paragraphs.push(txt);
-                    }
-                });
-            }
-
-            const domBodyText = paragraphs.join('\n\n').trim();
-            const bestBodyText = (domBodyText.length >= jsonLdBody.length ? domBodyText : jsonLdBody) || stripHtml(metaDesc);
-
-            if (bestBodyText && bestBodyText.length >= 220) {
-                const result = {
-                    success: true,
-                    url: resolvedUrl,
-                    title: pageTitle,
-                    content: truncateText(bestBodyText, options.maxLength || 4500, ''),
-                    excerpt: truncateText(bestBodyText, 350),
-                    imageUrl,
-                    publishedTime,
-                    method: 'cheerio_readability'
-                };
-                fullTextCache.set(url, result);
-                return result;
-            } else if (bestBodyText && bestBodyText.length >= 60) {
-                partialLocalResult = {
-                    success: true,
-                    url: resolvedUrl,
-                    title: pageTitle,
-                    content: truncateText(bestBodyText, options.maxLength || 4500, ''),
-                    excerpt: truncateText(bestBodyText, 350),
-                    imageUrl,
-                    publishedTime,
-                    method: 'cheerio_readability'
-                };
-            }
-        }
-    } catch (htmlError) {
-        logger.debug('AGENT_TOOL', `本地正文提取未命中 (${url.substring(0, 60)}): ${htmlError.message}`);
-    }
-
-    // 策略 B (穿透增强回退): 当本地直连受反爬限制或正文较短时，调用 Jina Reader (严格限时 5.5 秒，绝不卡死)
-    if (config.agent.jinaReaderEnabled && !isGoogleNewsRedirect) {
-        try {
-            const jinaUrl = `https://r.jina.ai/${url}`;
-            const headers = {
-                'Accept': 'application/json',
-                'User-Agent': config.webScraping.userAgent
-            };
-            if (config.agent.jinaApiKey) {
-                headers['Authorization'] = `Bearer ${config.agent.jinaApiKey}`;
-            }
-
-            const response = await axios.get(jinaUrl, {
-                timeout: 5500,
-                httpsAgent: httpsAgentIgnoreTls,
-                headers
-            });
-
-            let title = '';
-            let content = '';
-            let publishedTime = null;
-            let imageUrl = null;
-
-            if (response.data && typeof response.data === 'object' && response.data.data) {
-                title = response.data.data.title || '';
-                content = response.data.data.content || '';
-                publishedTime = response.data.data.publishedTime || null;
-                imageUrl = normalizeValidImageUrl(response.data.data.image || response.data.data.imageUrl, url);
-            } else if (typeof response.data === 'string') {
-                content = response.data;
-                const titleMatch = content.match(/^Title:\s*(.+)$/m);
-                if (titleMatch) title = titleMatch[1].trim();
-            }
-
-            if (!imageUrl && content) {
-                const mdImgRegex = /!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/gi;
-                let mdMatch;
-                while ((mdMatch = mdImgRegex.exec(content)) !== null) {
-                    const valid = normalizeValidImageUrl(mdMatch[1], url);
-                    if (valid) {
-                        imageUrl = valid;
-                        break;
-                    }
-                }
-            }
-
-            const cleanedContent = cleanExtractedMarkdown(content);
-
-            if (cleanedContent && cleanedContent.length >= 150) {
-                const result = {
-                    success: true,
-                    url,
-                    title,
-                    content: truncateText(cleanedContent, options.maxLength || 4500, ''),
-                    excerpt: truncateText(cleanedContent, 350),
-                    imageUrl: imageUrl || partialLocalResult?.imageUrl || null,
-                    publishedTime: publishedTime || partialLocalResult?.publishedTime || null,
-                    method: 'jina_reader'
-                };
-                fullTextCache.set(url, result);
-                return result;
-            }
-        } catch (jinaError) {
-            logger.debug('AGENT_TOOL', `Jina全文提取跳过 (${url.substring(0, 60)}): ${jinaError.message}`);
-        }
-    }
-
-    if (partialLocalResult) {
-        fullTextCache.set(url, partialLocalResult);
-        return partialLocalResult;
-    }
-
-    return {
-        success: false,
-        url,
-        error: '无法提取该页面正文（可能受反爬保护或为重定向链接）'
-    };
 }
 
 /**
@@ -799,22 +572,6 @@ async function searchNewsImageByTitle(title, sourceDomain = '', timeout = 4500) 
     return null;
 }
 
-/**
- * 清理 Jina Reader 返回的 Markdown 文本中的链接和导航噪音
- */
-function cleanExtractedMarkdown(md = '') {
-    if (!md) return '';
-    return md
-        .replace(/^Title:.*$/gm, '')
-        .replace(/^URL Source:.*$/gm, '')
-        .replace(/^Markdown Content:.*$/gm, '')
-        .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-        .replace(/^[*\-+]\s+.{1,25}$/gm, '')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
-}
-
 module.exports = {
     createArticleId,
     cleanHeadlineSuffix,
@@ -823,7 +580,6 @@ module.exports = {
     parseRssUrlRobust,
     buildGoogleNewsDomainRssUrl,
     fetchFromGlobalSource,
-    extractFullArticleContent,
     fetchArticleLeadImage,
     searchNewsImageByTitle
 };

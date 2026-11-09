@@ -66,7 +66,6 @@ function parseArgs(argv = process.argv.slice(2)) {
         target: process.env.COREFEED_SITE_URL || config.agent?.siteUrl || `http://localhost:${defaultPort}`,
         secret: process.env.PUBLISH_SECRET || process.env.PUBLISH_API_KEY || config.agent?.publishSecret || '',
         limit: config.agent?.maxCuratedArticles || 30,
-        deepRead: config.agent?.deepReadTopCount !== undefined ? config.agent.deepReadTopCount : 8,
         imageLimit: config.agent?.maxCuratedArticles || 30,
         category: 'all',
         skipHarvest: false,
@@ -113,10 +112,6 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.limit = Math.max(1, parseInt(argv[++i], 10) || 30);
         } else if (arg.startsWith('--limit=')) {
             options.limit = Math.max(1, parseInt(eqVal(arg), 10) || 30);
-        } else if (arg === '--deep-read' && argv[i + 1] !== undefined) {
-            options.deepRead = Math.max(0, parseInt(argv[++i], 10));
-        } else if (arg.startsWith('--deep-read=')) {
-            options.deepRead = Math.max(0, parseInt(eqVal(arg), 10));
         } else if (arg === '--images' && argv[i + 1] !== undefined) {
             options.imageLimit = Math.max(0, parseInt(argv[++i], 10));
         } else if (arg.startsWith('--images=')) {
@@ -389,11 +384,10 @@ async function runAutoUpdate(customOptions = {}) {
     // Stage 1: Harvest (or load existing candidates)
     let harvestData = null;
     if (!opts.skipHarvest) {
-        logger.info('AG-AUTO', '[Stage 1/4] 正在执行全球新闻巡检与全文深读采集 (ag-harvest)...');
+        logger.info('AG-AUTO', '[Stage 1/4] 正在执行全球新闻巡检与候选集采集 (ag-harvest)...');
         harvestData = await runHarvest({
             out: opts.candidates,
             limit: Math.max(opts.limit + 5, 35),
-            deepRead: opts.deepRead,
             imageLimit: opts.imageLimit,
             category: opts.category
         });

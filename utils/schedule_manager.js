@@ -1,3 +1,12 @@
+/**
+ * 聚核 CoreFeed v2.0 — 每日定时调度与 GitHub 快照轮询管理器 (utils/schedule_manager.js)
+ *
+ * 核心职责：
+ *   1. 按北京时间 (`Asia/Shanghai`) 设定每日多个同步时间点（默认 `08:00`, `12:30`, `19:30`）
+ *   2. 方案 2B 模式下：定时任务与每 60 分钟后台轮询从 GitHub `ag-snapshot/latest.json` 拉取最新精编快照；
+ *      若远端无更新或网络波动，保持本地已发布的中文精编内容不变
+ *   3. 单机模式下：触发 `NewsAgentService.runGlobalPatrolPipeline` 采集并编译
+ */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -6,10 +15,6 @@ const config = require('../config');
 const logger = require('./logger');
 const { publishSnapshotToGitHub } = require('./github_sync');
 
-/**
- * 定时任务管理器 (CoreFeed v2.0)
- * 定时触发全球知名信源巡检、渐进式编译及今日要闻综述生成
- */
 class ScheduleManager {
     constructor(newsService, io, stateManager = null, newsAgentService = null, aiService = null, githubSyncManager = null) {
         this.newsService = newsService;
@@ -21,12 +26,6 @@ class ScheduleManager {
         this.currentTasks = [];
         this.githubSyncTimer = null;
         this.isRunning = false;
-    }
-
-    setServices({ newsAgentService, aiService, githubSyncManager }) {
-        if (newsAgentService) this.newsAgentService = newsAgentService;
-        if (aiService) this.aiService = aiService;
-        if (githubSyncManager) this.githubSyncManager = githubSyncManager;
     }
 
     /**
@@ -347,10 +346,6 @@ class ScheduleManager {
             nextExecution: this.getNextExecutionTime(),
             githubSync: this.githubSyncManager ? this.githubSyncManager.getStatus() : null
         };
-    }
-
-    async triggerUpdate() {
-        await this.executeUpdate();
     }
 
     restart() {

@@ -1,7 +1,16 @@
+/**
+ * 聚核 CoreFeed v2.0 — AI 编译、事件聚类与综述渲染服务 (services/ai_service.js)
+ *
+ * 核心职责：
+ *   1. 跨信源同事件聚类 (`mergeDuplicateArticlesSync`, `deduplicateWithLLM`) 与权威度/热度综合评分 (`selectTopQualityNews`)
+ *   2. 地区与领域规则分类 (`determineNewsRegionSync`, `determineNewsCategorySync`, `applyPreliminaryMetadata`)
+ *   3. 批量中文精编 (`enhanceNewsArticles`, `ensureBatchInChinese`)
+ *   4. 《全球要闻深度综述》富文本 HTML 与可点击角标 (`[NEWS_x]` -> `.news-ref-link`) 渲染 (`convertSummaryToRichHtml`)
+ */
 const axios = require('axios');
 const https = require('https');
 const config = require('../config');
-const { delay, truncateText } = require('../utils/helpers');
+const { truncateText } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const RateLimiter = require('../utils/rate_limiter');
 const { getSourceAuthorityScore } = require('../config/global_sources');
@@ -11,10 +20,6 @@ const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAli
 const VALID_REGIONS = ['中国', '美国', '欧洲', '日本', '韩国', '东南亚', '中东', '非洲', '拉美', '澳洲', '亚洲', '国际'];
 const VALID_CATEGORIES = ['政经', '外交', '科技', '财经', '军事', '社会', '能源', '国际'];
 
-/**
- * AI 编译与事件聚类推理服务 (CoreFeed v2.0)
- * 专注于：跨信源事件聚类、质量评分、规则预分类、结构化批量中文编译与每日要闻综述生成
- */
 class AIService {
     constructor(io = null, stateManager = null) {
         this.io = io;
@@ -213,19 +218,6 @@ class AIService {
             } catch (_) {}
         }
         return null;
-    }
-
-    /**
-     * 跨信源事件聚类与去重 (两级混合引擎：第一级高速词干/双字词预聚类 + 第二级 AI 大模型深度语义同事件归并)
-     */
-    async removeDuplicateNewsWithAI(articles, options = {}) {
-        const preClustered = this.mergeDuplicateArticlesSync(articles);
-        if (!preClustered || preClustered.length <= 1) return preClustered || [];
-
-        if (options.skipLLM) {
-            return preClustered;
-        }
-        return await this.deduplicateWithLLM(preClustered, options);
     }
 
     /**
@@ -737,44 +729,7 @@ ${itemsLines}`;
         } catch (err) {
             logger.debug('AI', `快速中文翻译回退请求异常: ${err.message}`);
         }
-        return trimmed;
-    }
-
-    /**
-     * 多段落长文并发中文精译（供“全文深读”在1秒内完成整篇外媒报道的中文分段翻译）
-     */
-    async translateParagraphsToChinese(text, maxChars = 3200) {
-        if (!text || typeof text !== 'string') return '';
-        const sliced = text.trim().slice(0, maxChars);
-        if (!sliced) return '';
-        if (this.isChineseText(sliced)) return sliced;
-
-        const rawParas = sliced
-            .split(/\n{2,}|\r\n{2,}|\n/)
-            .map(p => p.trim())
-            .filter(p => p.length >= 20);
-
-        if (rawParas.length === 0) {
-            return await this.translateTextToChinese(sliced);
-        }
-
-        // 将段落打包为 <= 950 字符的块并发请求 Google GTX
-        const chunks = [];
-        let currentChunk = '';
-        for (const p of rawParas) {
-            if ((currentChunk + '\n\n' + p).length > 950 && currentChunk) {
-                chunks.push(currentChunk);
-                currentChunk = p;
-            } else {
-                currentChunk = currentChunk ? `${currentChunk}\n\n${p}` : p;
-            }
-        }
-        if (currentChunk) chunks.push(currentChunk);
-
-        const translatedChunks = await Promise.all(
-            chunks.slice(0, 4).map(chunk => this.translateTextToChinese(chunk, 7000))
-        );
-        return translatedChunks.filter(Boolean).join('\n\n');
+            return trimmed;
     }
 
     /**
@@ -920,7 +875,7 @@ ${itemsLines}`;
             const relatedInfo = article.relatedSources?.length
                 ? ` (交叉印证媒体: ${article.relatedSources.map(r => r.name).join(', ')})`
                 : '';
-            const bodySnippet = truncateText(article.fullTextContent || article.content || article.description || '', 700);
+            const bodySnippet = truncateText(article.content || article.description || '', 700);
             return `[#${idx + 1}] 来源: ${sourceName}${relatedInfo}\n原标题: ${article.title}\n正文摘录: ${bodySnippet}`;
         }).join('\n\n---\n\n');
 

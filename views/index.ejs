@@ -1,10 +1,15 @@
+<%#
+  CoreFeed v2.0 · 全球要闻深度聚合主视图模板 (SSR + Hydration)
+  Architecture: Plan 2B (Antigravity Client Compilation + GitHub ag-snapshot Sync Hub)
+  Design System: design-taste-frontend v2.5.1 (Swiss Editorial Masthead & 12-Column Asymmetric Bento Grid)
+%>
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="聚核 CoreFeed · 全球知名信源实时聚合与深度阅读平台">
-    <title><%= config.siteName || '聚核 CoreFeed · 全球知名信源实时聚合与深读平台' %></title>
+    <meta name="description" content="聚核 CoreFeed · 全球权威媒体要闻深度聚合与态势综述平台">
+    <title><%= config.siteName || '聚核 CoreFeed · 全球要闻深度聚合' %></title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -31,7 +36,7 @@
         };
     </script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="/css/style.css?v=2.5.3">
+    <link rel="stylesheet" href="/css/style.css?v=2.5.4">
 </head>
 <body class="antialiased">
     <div class="kami-page">
@@ -204,10 +209,6 @@
                                 const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
                                 const hasMultiSources = relatedSources.length > 0;
                                 const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
-                                const encodedUrl = encodeURIComponent(item.url || '');
-                                const encodedTitle = encodeURIComponent(title);
-                                const encodedSource = encodeURIComponent(sourceName);
-                                const encodedSummary = encodeURIComponent(summary);
                                 const summaryClampClass = tier === 'lead' ? 'line-clamp-5' : (tier === 'secondary' ? 'line-clamp-4' : 'line-clamp-3');
                             %>
                             <article class="news-card news-card--<%= tier %> <%= spanClass %>" style="--card-index: <%= idx %>;">
@@ -279,19 +280,12 @@
                                 </div>
 
                                 <div class="card-footer">
-                                    <button type="button" onclick="app.openDeepRead('<%= encodedUrl %>', '<%= encodedTitle %>', '<%= encodedSource %>', '<%= encodedSummary %>')"
-                                        class="btn-read-more">
-                                        <i class="fa-solid fa-book-open-reader text-xs"></i>
-                                        <span>全文深读</span>
-                                    </button>
-                                    <div class="flex items-center gap-3">
-                                        <span class="card-timestamp"><%= timeStr %></span>
-                                        <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
-                                            class="btn-source-link">
-                                            <span>原文</span>
-                                            <span aria-hidden="true">↗</span>
-                                        </a>
-                                    </div>
+                                    <span class="card-timestamp"><%= timeStr %></span>
+                                    <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
+                                        class="btn-source-link">
+                                        <span>原文</span>
+                                        <span aria-hidden="true">↗</span>
+                                    </a>
                                 </div>
                             </article>
                             <% }); %>
@@ -338,31 +332,6 @@
                 </div>
             </section>
         </main>
-    </div>
-
-    <div id="deepReadModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex justify-end" onclick="if(event.target===this) app.closeDeepReadModal()">
-        <aside id="articleModal" class="taste-drawer-surface w-full max-w-2xl h-full flex flex-col justify-between overflow-hidden">
-            <div class="px-6 py-5 flex items-start justify-between gap-4" style="border-bottom: 1px solid var(--border-hairline); background: var(--bg-surface);">
-                <div class="min-w-0">
-                    <div class="flex items-center gap-2 mb-1.5">
-                        <span class="kami-tag">全文深读</span>
-                        <span id="deepReadSourceBadge" class="text-xs" style="color: var(--text-muted); font-family: var(--font-mono);"></span>
-                    </div>
-                    <h3 id="deepReadTitle" class="text-lg font-bold line-clamp-2" style="color: var(--text-primary); font-family: var(--font-display); margin: 0;">正在提取外媒原文...</h3>
-                </div>
-                <button type="button" id="btnCloseArticleModal" onclick="app.closeDeepReadModal()" class="btn-ghost btn-icon-only" aria-label="关闭全文深读">
-                    <i class="fa-solid fa-xmark text-sm"></i>
-                </button>
-            </div>
-            <div id="deepReadBody" class="p-6 sm:p-8 overflow-y-auto flex-1 space-y-5 text-sm leading-relaxed"></div>
-            <div class="px-6 py-4 flex items-center justify-between gap-3" style="border-top: 1px solid var(--border-hairline); background: var(--bg-surface);">
-                <a id="deepReadOriginalLink" href="#" target="_blank" rel="noopener noreferrer" class="btn-source-link">
-                    <span>在新窗口打开外媒源站原文</span>
-                    <span aria-hidden="true">↗</span>
-                </a>
-                <button type="button" onclick="app.closeDeepReadModal()" class="btn-ghost py-1.5 px-4 text-xs">关闭</button>
-            </div>
-        </aside>
     </div>
 
     <div id="settingsModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex items-center justify-center p-4" onclick="if(event.target===this) app.closeSettingsModal()">
@@ -416,8 +385,6 @@
                     </div>
                     <div style="color: var(--text-muted); font-family: var(--font-mono);">
                         最近同步：<span id="modalSyncLastTime"><%= (typeof githubSync !== 'undefined' && githubSync && (githubSync.lastSyncedAt || githubSync.lastSyncCheckAt)) ? new Date(githubSync.lastSyncedAt || githubSync.lastSyncCheckAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }) : (lastUpdated ? new Date(lastUpdated).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }) : '尚未同步') %></span>
-                        <span id="modalSyncPublishedBy" class="sr-only"></span>
-                        <span id="modalSyncSnapshotInfo" class="sr-only"></span>
                     </div>
                 </div>
             </div>
@@ -443,11 +410,10 @@
             clientId: <%- JSON.stringify((typeof clientId !== 'undefined' && clientId) || null) %>,
             githubSync: <%- JSON.stringify((typeof githubSync !== 'undefined' && githubSync) || null) %>,
             schedule: <%- JSON.stringify((typeof schedule !== 'undefined' && schedule) || null) %>,
-            summaryArticle: <%- JSON.stringify(summaryArticle || null) %>,
-            sourceMatrix: <%- JSON.stringify(sourceMatrix || []) %>
+            summaryArticle: <%- JSON.stringify(summaryArticle || null) %>
         };
     </script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/js/main.js?v=2.5.3"></script>
+    <script src="/js/main.js?v=2.5.4"></script>
 </body>
 </html>

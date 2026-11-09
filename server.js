@@ -1,3 +1,12 @@
+/**
+ * 聚核 CoreFeed v2.0 — 全球权威媒体要闻聚合与精编服务端主入口 (server.js)
+ *
+ * 架构概览 (方案 2B)：
+ *   - 采编与同步中枢：Antigravity 客户端完成 37 大国际权威信源并发采集、跨源聚类与中文深度精编后，
+ *     通过 Git Plumbing 推送至 GitHub `ag-snapshot/latest.json` 独立分支；
+ *   - 软路由只读拉取：服务端启动、每日定时任务 (08:00 / 12:30 / 19:30) 与每 60 分钟 ETag 轮询从 GitHub 同步最新快照；
+ *   - 界面渲染：基于 Taste Skill (design-taste-frontend v2.5.1) 的 Swiss Editorial Bento 网格 SSR + Socket.IO 实时推送。
+ */
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -204,7 +213,7 @@ app.get('/', (req, res) => {
         sourceMatrix,
         appVersion: '2.0.0',
         config: {
-            siteName: '聚核 CoreFeed · 全球知名信源实时聚合与深读平台',
+            siteName: '聚核 CoreFeed · 全球要闻深度聚合',
             aiModel: config.minimax.model || 'MiniMax-M2.5',
             aiConfigured: Boolean(config.minimax.apiKey),
             jinaReaderEnabled: config.agent.jinaReaderEnabled,
@@ -333,8 +342,8 @@ async function startServer() {
 
             logger.startup(config.server.port, networkHost);
             const matrixCount = getGlobalSourceMatrix().filter(s => s.enabled).length;
-            console.log(chalk.cyan(`   - 核心引擎:     CoreFeed v2.0 两阶段渐进式采集与编译 (${config.minimax.model})`));
-            console.log(chalk.cyan(`   - 全球信源矩阵: 已启用 ${matrixCount} 个国际权威信源 + Jina 全文深读`));
+            console.log(chalk.cyan(`   - 核心引擎:     CoreFeed v2.0 全球要闻精编与同步引擎 (${config.minimax.model})`));
+            console.log(chalk.cyan(`   - 全球信源矩阵: 已启用 ${matrixCount} 个国际权威信源 + GitHub 快照同步 (方案 2B)`));
 
             app.locals.services = services;
             scheduleManager.start();

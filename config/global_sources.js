@@ -7,10 +7,11 @@ const path = require('path');
 const MATRIX_SCHEMA_VERSION = '2.2';
 
 /**
- * 全球知名信源矩阵 v2.2 (Global Authoritative News Source Matrix)
- * 基于 2026 全球主流媒体 RSS 可靠性、正文完整度与原生配图覆盖率实测体系化重构：
+ * 聚核 CoreFeed v2.0 — 全球 37 大权威信源矩阵定义与采集策略 (config/global_sources.js, v2.2)
+ *
+ * 覆盖五大领域 (`wire`, `western`, `asiapacific`, `finance`, `tech`) 共 37 家国际权威媒体：
  * - 剔除已停更/冻结源（如 2023 年停更的旧版 CNN RSS、失效的旧版 DowJones/AP 地址及低质边缘站点）
- * - 优先选用原生携带高清配图 (media:content / media:thumbnail / enclosure) 及多段摘要/全文的官方源
+ * - 优先选用原生携带高清配图 (media:content / media:thumbnail / enclosure) 及多段导语摘要的官方源
  * - 支持多级自动降级：官方 RSS/Atom -> 页面 og:image / Bing News 配图补全 -> Google News 定向检索兜底
  */
 const DEFAULT_GLOBAL_SOURCES = [

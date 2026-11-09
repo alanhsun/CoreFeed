@@ -1,12 +1,16 @@
+/**
+ * 聚核 CoreFeed v2.0 — 内存状态与磁盘持久化管理服务 (services/state_manager.js)
+ *
+ * 核心职责：
+ *   - 集中维护 `newsData`、`allEnhancedNews`、`summaryArticle`、`lastUpdated`、`lastPublishedBy` 等运行时状态
+ *   - 基于 EventEmitter 向 `server.js` 与 WebSocket 广播状态变更 (`newsData-changed`, `summaryArticle-changed`)
+ *   - 持久化状态快照至 `data/state.json` 并在重启时恢复
+ */
 const EventEmitter = require('events');
 const logger = require('../utils/logger');
 const { writeJsonFile, readJsonFile } = require('../utils/helpers');
 const config = require('../config');
 
-/**
- * 状态管理服务
- * 替代全局变量，提供统一的状态管理和事件通知
- */
 class StateManager extends EventEmitter {
     constructor() {
         super();
@@ -25,8 +29,7 @@ class StateManager extends EventEmitter {
                 current: 0,
                 total: 0,
                 message: ''
-            },
-            aiConfig: null
+            }
         };
 
         // 设置最大监听器数量
@@ -120,15 +123,6 @@ class StateManager extends EventEmitter {
     updateSummaryArticle(summaryArticle) {
         this.set('summaryArticle', summaryArticle);
         logger.info('STATE', '摘要文章更新完成');
-    }
-
-    /**
-     * 更新AI配置
-     * @param {Object} aiConfig - AI配置信息
-     */
-    updateAiConfig(aiConfig) {
-        this.set('aiConfig', aiConfig);
-        logger.info('STATE', 'AI配置更新完成');
     }
 
     /**

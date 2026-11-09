@@ -1,31 +1,32 @@
+/**
+ * 聚核 CoreFeed v2.0 — 基础新闻源清洗与本地缓存持久化服务 (services/news_service.js)
+ *
+ * 核心职责：
+ *   1. 新闻条目时效过滤、HTML 标签剥离与敏感词过滤 (`filterAndCleanArticles`, `passesKeywordFilter`)
+ *   2. 辅助 API 数据源采集 (`fetchNewsApiArticles`, `fetchGnewsArticles`) 与自定义 RSS 字符串解析 (`parseRSSSources`)
+ *   3. 本地 JSON 持久化读写 (`loadLocalData`, `saveLocalData`) 与内存状态桥接
+ */
 const axios = require('axios');
 const path = require('path');
 const config = require('../config');
 const {
     retryAsync,
-    delay,
     stripHtml,
-    truncateText,
     isValidUrl,
     readJsonFile,
     writeJsonFile,
     ensureDirectoryExists
 } = require('../utils/helpers');
 const logger = require('../utils/logger');
-const { getGlobalSourceMatrix, getSourceAuthorityScore } = require('../config/global_sources');
-const { fetchFromGlobalSource, parseRssUrlRobust, createArticleId, cleanHeadlineSuffix } = require('./agent_tools');
+const { getSourceAuthorityScore } = require('../config/global_sources');
+const { createArticleId, cleanHeadlineSuffix } = require('./agent_tools');
 
-/**
- * 基础新闻源与本地缓存服务 (CoreFeed v2.0)
- * 负责对接全球知名信源矩阵、NewsAPI、Gnews、自定义RSS以及本地持久化数据管理
- */
 class NewsService {
     constructor(io = null, stateManager = null) {
         this.io = io;
         this.stateManager = stateManager;
         this.newsData = [];
         this.lastUpdated = null;
-        this.processedNewsIds = new Set();
     }
 
     setSocketIO(io) {
@@ -34,34 +35,6 @@ class NewsService {
 
     setStateManager(stateManager) {
         this.stateManager = stateManager;
-    }
-
-    /**
-     * 从全球知名信源矩阵获取文章
-     */
-    async fetchGlobalMatrixArticles() {
-        try {
-            const matrix = getGlobalSourceMatrix().filter(s => s.enabled);
-            const disabledSet = new Set((config.news.disabledSources || []).map(s => s.trim()));
-            const enabledSources = matrix.filter(s => !disabledSet.has(s.name) && !disabledSet.has(s.id));
-
-            const articles = [];
-            const concurrency = config.agent?.sourceConcurrency || 6;
-
-            for (let i = 0; i < enabledSources.length; i += concurrency) {
-                const batch = enabledSources.slice(i, i + concurrency);
-                const results = await Promise.all(
-                    batch.map(src => fetchFromGlobalSource(src).catch(() => []))
-                );
-                results.forEach(items => articles.push(...items));
-            }
-
-            logger.info('NEWS', `全球知名信源矩阵采集完成: ${articles.length} 条`);
-            return articles;
-        } catch (error) {
-            logger.warn('NEWS', `全球知名信源矩阵获取异常: ${error.message}`);
-            return [];
-        }
     }
 
     /**
@@ -166,58 +139,8 @@ class NewsService {
     }
 
     /**
-     * 从环境变量配置的额外 RSS 源获取新闻
+     * 解析环境变量中的自定义 RSS 源配置 (格式: 名称|URL,名称|URL)
      */
-    async fetchRSSArticles() {
-        const { rssSources, maxArticlesPerSource, sourceArticleCountsMap, disabledSources } = config.news;
-        if (!rssSources || typeof rssSources !== 'string' || !rssSources.trim()) {
-            return [];
-        }
-
-        const sources = this.parseRSSSources(rssSources);
-        const disabledSet = new Set(Array.isArray(disabledSources) ? disabledSources : []);
-
-        const enabledSources = sources.filter(s => {
-            const name = s.name || new URL(s.url).hostname;
-            return !disabledSet.has(name);
-        });
-
-        const results = await Promise.all(
-            enabledSources.map(async (rssSource) => {
-                try {
-                    const sourceName = rssSource.name || new URL(rssSource.url).hostname;
-                    const count = sourceArticleCountsMap[sourceName] || maxArticlesPerSource || 5;
-                    const feed = await parseRssUrlRobust(rssSource.url, 15000);
-                    const items = (feed.items || []).slice(0, count);
-
-                    return items
-                        .filter(item => item.title && item.link)
-                        .map(item => ({
-                            id: createArticleId(item.link, item.title),
-                            title: cleanHeadlineSuffix(item.title, sourceName),
-                            description: truncateText(stripHtml(item.contentSnippet || item.summary || item.description || item.title), 500),
-                            content: truncateText(stripHtml(item['content:encoded'] || item.content || item.description || item.title), 2500),
-                            url: item.link,
-                            urlToImage: null,
-                            publishedAt: item.isoDate || item.pubDate || new Date().toISOString(),
-                            source: {
-                                id: null,
-                                name: sourceName,
-                                authority: getSourceAuthorityScore(sourceName),
-                                strategy: 'rss'
-                            },
-                            author: item.creator || item.author || null,
-                            region: null
-                        }));
-                } catch (_) {
-                    return [];
-                }
-            })
-        );
-
-        return results.flat();
-    }
-
     parseRSSSources(rssSources) {
         if (!rssSources || typeof rssSources !== 'string') return [];
         return rssSources
@@ -231,25 +154,6 @@ class NewsService {
                 return { name: null, url: trimmed };
             })
             .filter(source => source.url && isValidUrl(source.url));
-    }
-
-    /**
-     * 获取所有原始新闻（供 Agent 流水线进一步聚类与编译）
-     */
-    async fetchAllNewsWithoutAIDedup() {
-        const [matrixArticles, newsApiArticles, gnewsArticles, rssArticles] = await Promise.all([
-            this.fetchGlobalMatrixArticles(),
-            this.fetchNewsApiArticles(),
-            this.fetchGnewsArticles(),
-            this.fetchRSSArticles()
-        ]);
-
-        let allArticles = [...matrixArticles, ...newsApiArticles, ...gnewsArticles, ...rssArticles];
-        allArticles = this.filterAndCleanArticles(allArticles);
-        allArticles = this.removeDuplicateArticles(allArticles);
-
-        allArticles.sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
-        return allArticles.slice(0, config.agent?.maxCandidatePool || 80);
     }
 
     /**
@@ -307,19 +211,6 @@ class NewsService {
             }
         }
         return true;
-    }
-
-    removeDuplicateArticles(articles = []) {
-        const seen = new Set();
-        return articles.filter(article => {
-            const key = (article.translatedTitle || article.title || '')
-                .toLowerCase()
-                .replace(/[^\u4e00-\u9fa5a-z0-9]/g, '')
-                .substring(0, 45);
-            if (!key || seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
     }
 
     async loadLocalData() {

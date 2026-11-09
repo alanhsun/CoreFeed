@@ -1,3 +1,13 @@
+/**
+ * 聚核 CoreFeed v2.0 — RESTful API 路由控制器 (routes/api.js)
+ *
+ * 核心路由模块：
+ *   0. `/api/image-proxy`        — 外媒新闻题图防盗链与跨境加速代理
+ *   1. `/api/agent/*`            — GitHub 快照拉取 (`pull-github`)、外部精编发布 (`publish`) 与同步状态 (`sync-status`)
+ *   2. `/api/sources/matrix`     — 全球 37 大知名信源矩阵查询与配置
+ *   3. `/api/news`, `/api/summary` — 新闻流多维筛选、增量分页与今日全球要闻深度综述
+ *   4. `/api/status`, `/api/config`, `/api/schedule/*` — 系统状态遥测、动态配置持久化与定时同步管理
+ */
 const express = require('express');
 const axios = require('axios');
 const https = require('https');
@@ -5,12 +15,13 @@ const config = require('../config');
 const { writeJsonFile, readJsonFile, isValidUrl, SimpleCache } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const { getGlobalSourceMatrix, saveGlobalSourceMatrixUpdate } = require('../config/global_sources');
+const { applySnapshotToRouter } = require('../utils/github_sync');
 
 const proxyHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
 
 /**
- * 初始化 API 路由 (CoreFeed v2.0 - 专注全球新闻采集、渐进编译与展示)
+ * 初始化 API 路由
  */
 function initializeApiRoutes(services, io, stateManager) {
     const router = express.Router();
@@ -135,7 +146,7 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    // ==================== 1. Agent 采集与深读接口 ====================
+    // ==================== 1. Agent 状态、GitHub 快照同步与发布接口 ====================
 
     /**
      * 获取 Agent 引擎状态、实时日志与信源巡检统计
@@ -207,7 +218,7 @@ function initializeApiRoutes(services, io, stateManager) {
     });
 
     /**
-     * 触发两阶段渐进式全球知名信源巡检与编译流水线
+     * 触发全球知名信源巡检与编译流水线（单机模式使用）
      */
     router.post('/agent/patrol', async (req, res) => {
         try {
@@ -221,50 +232,18 @@ function initializeApiRoutes(services, io, stateManager) {
             const {
                 categoryFilter = 'all',
                 maxDisplayCount = config.agent.maxCuratedArticles || 30,
-                deepReadCount = config.agent.deepReadTopCount || 8,
                 generateSummary = true
             } = req.body || {};
 
             const result = await newsAgentService.runGlobalPatrolPipeline({
                 categoryFilter,
                 maxDisplayCount: Number(maxDisplayCount),
-                deepReadCount: Number(deepReadCount),
                 generateSummary: Boolean(generateSummary)
             });
 
             res.json(result);
         } catch (error) {
             logger.error('API', 'Agent 巡检执行失败', error.message);
-            res.status(500).json({
-                success: false,
-                message: error.message
-            });
-        }
-    });
-
-    /**
-     * 单篇外媒报道即时全文深读 (Jina Reader + Cheerio + AI 中文精译解读)
-     */
-    router.post('/agent/deep-read', async (req, res) => {
-        try {
-            const { url, title, sourceName, existingSummary } = req.body || {};
-            if (!url) {
-                return res.status(400).json({
-                    success: false,
-                    message: '请提供新闻原文 URL'
-                });
-            }
-
-            const result = await newsAgentService.deepReadSingleArticle({
-                url,
-                title,
-                sourceName,
-                existingSummary
-            });
-
-            res.json(result);
-        } catch (error) {
-            logger.error('API', '单篇全文深读失败', error.message);
             res.status(500).json({
                 success: false,
                 message: error.message
@@ -285,181 +264,26 @@ function initializeApiRoutes(services, io, stateManager) {
                 });
             }
 
-            const {
-                news,
-                allEnhancedNews = null,
-                summaryArticle: rawSummaryArticle = null,
-                summary = null,
-                summaryMarkdown = null,
-                sourceStats = [],
-                lastUpdated = null,
-                publishedAt = null,
-                publishedBy: rawPublishedBy = null,
-                clientId: rawClientId = null
-            } = req.body || {};
-
-            const summaryArticle = rawSummaryArticle || summary || null;
-            const effectiveLastUpdated = lastUpdated || publishedAt || null;
-            const publishedBy = String(rawPublishedBy || rawClientId || '').trim() || null;
-
-            if (!Array.isArray(news) || news.length === 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: '推送的 news 数组不能为空'
-                });
-            }
-
-            const parsedDate = effectiveLastUpdated ? new Date(effectiveLastUpdated) : new Date();
-            const timestamp = isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
-            const nowIso = timestamp.toISOString();
-
-            const normalizeArticle = (item, idx) => {
-                const rawTitle = String(item?.title || item?.translatedTitle || `News #${idx + 1}`).trim();
-                const zhTitle = String(item?.translatedTitle || rawTitle).trim();
-                const rawDesc = String(item?.description || item?.summary || item?.translatedDescription || item?.content || rawTitle).trim();
-                const zhSummary = String(item?.summary || item?.translatedDescription || rawDesc).trim();
-                const sourceObj = (item?.source && typeof item.source === 'object')
-                    ? { ...item.source, name: String(item.source.name || 'Global Media').trim() }
-                    : { id: 'external', name: String(item?.source || item?.sourceName || 'Global Media').trim(), strategy: 'agent_publish' };
-                const relatedSources = Array.isArray(item?.relatedSources) ? item.relatedSources : [];
-                const keyPoints = Array.isArray(item?.keyPoints) ? item.keyPoints.filter(Boolean).map(String) : [];
-                const region = item?.region || aiService.determineNewsRegionSync(`${rawTitle} ${zhTitle}`, `${rawDesc} ${zhSummary}`, sourceObj.name, '国际');
-                const category = item?.category || aiService.determineNewsCategorySync(`${rawTitle} ${zhTitle}`, `${rawDesc} ${zhSummary}`, sourceObj.category || '', '国际');
-
-                return {
-                    ...item,
-                    id: item?.id || `ag-${Date.now()}-${idx + 1}`,
-                    title: rawTitle,
-                    translatedTitle: zhTitle,
-                    description: rawDesc,
-                    translatedDescription: zhSummary,
-                    summary: zhSummary,
-                    content: String(item?.content || item?.fullTextContent || rawDesc).trim(),
-                    fullTextContent: item?.fullTextContent || null,
-                    url: item?.url || '',
-                    urlToImage: item?.urlToImage || null,
-                    publishedAt: item?.publishedAt || nowIso,
-                    processedAt: item?.processedAt || nowIso,
-                    region,
-                    category,
-                    keyPoints,
-                    aiCompiled: item?.aiCompiled !== undefined ? Boolean(item.aiCompiled) : true,
-                    qualityScore: Number(item?.qualityScore) || 88,
-                    source: sourceObj,
-                    relatedSources,
-                    sourceCount: Number(item?.sourceCount) || (1 + relatedSources.length)
-                };
-            };
-
-            const normalizedNews = news.filter(Boolean).map((item, idx) => normalizeArticle(item, idx));
-            if (normalizedNews.length === 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: '推送的 news 数组不包含有效新闻对象'
-                });
-            }
-
-            const normalizedFullPool = Array.isArray(allEnhancedNews) && allEnhancedNews.length > 0
-                ? allEnhancedNews.filter(Boolean).map((item, idx) => normalizeArticle(item, idx))
-                : normalizedNews;
-            const normalizedStats = Array.isArray(sourceStats) ? sourceStats : [];
-
-            // 1. 同步更新 NewsService、StateManager、写入 data/news.json 并广播 news-updated
-            newsAgentService.lastSourceStats = normalizedStats;
-            await newsAgentService._publishNewsSnapshot(
-                normalizedNews,
-                normalizedFullPool,
-                normalizedStats,
-                timestamp,
-                'completed'
-            );
-            stateManager.set('lastUpdated', nowIso, false);
-            stateManager.set('lastSnapshotPublishedAt', nowIso, false);
-            if (publishedBy) {
-                stateManager.set('lastPublishedBy', publishedBy, false);
-            }
-
-            // 2. 处理并持久化今日深度综述 (支持完整对象、仅含 content 的对象或 Markdown 字符串)
-            let finalSummary = null;
-            const currentDate = timestamp.toLocaleDateString('zh-CN', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                weekday: 'long',
-                timeZone: 'Asia/Shanghai'
+            const applied = await applySnapshotToRouter(req.body || {}, {
+                stateManager,
+                newsAgentService,
+                aiService,
+                newsService,
+                io,
+                sourceLabel: 'Antigravity 客户端'
             });
-
-            const rawMdInput = typeof summaryArticle === 'string'
-                ? summaryArticle.trim()
-                : (typeof summaryMarkdown === 'string' ? summaryMarkdown.trim() : '');
-
-            if (rawMdInput) {
-                const firstLine = rawMdInput.split('\n').map(l => l.trim()).find(Boolean) || '';
-                const mdWithTitle = /^(#{2,4}\s|【)/.test(firstLine)
-                    ? `${currentDate} 全球要闻深度综述\n\n${rawMdInput}`
-                    : rawMdInput;
-                finalSummary = aiService.createSummaryArticleObject(mdWithTitle, normalizedNews, currentDate);
-            } else if (summaryArticle && typeof summaryArticle === 'object') {
-                const rawBody = String(summaryArticle.content || summaryArticle.markdown || '').trim();
-                const normalizedBody = rawBody
-                    ? rawBody.split('\n').map(l => l.trim()).filter(Boolean).join('\n\n')
-                    : '';
-                const htmlContent = summaryArticle.htmlContent
-                    || (normalizedBody ? aiService.convertSummaryToRichHtml(normalizedBody, normalizedNews) : '');
-
-                if (htmlContent || normalizedBody) {
-                    const plainForSummary = normalizedBody.replace(/\[NEWS_\d+\]/g, '').replace(/#+\s*/g, '');
-                    finalSummary = {
-                        title: summaryArticle.title || `${currentDate} 全球要闻深度综述`,
-                        content: normalizedBody || rawBody,
-                        htmlContent,
-                        newsCount: Number(summaryArticle.newsCount) || normalizedNews.length,
-                        regions: Array.isArray(summaryArticle.regions) && summaryArticle.regions.length > 0
-                            ? summaryArticle.regions
-                            : [...new Set(normalizedNews.map(n => n.region || '国际'))],
-                        generatedAt: summaryArticle.generatedAt || nowIso,
-                        summary: summaryArticle.summary || plainForSummary.slice(0, 160),
-                        wordCount: Number(summaryArticle.wordCount) || (normalizedBody || htmlContent).length
-                    };
-                }
-            }
-
-            if (finalSummary) {
-                stateManager.updateSummaryArticle(finalSummary);
-                await writeJsonFile(config.storage.summaryFile, {
-                    article: finalSummary,
-                    savedAt: new Date().toISOString(),
-                    version: '2.0'
-                });
-                if (io) {
-                    io.emit('summary-completed', {
-                        success: true,
-                        article: finalSummary
-                    });
-                }
-            }
-
-            // 3. 立即将内存状态持久化至 data/state.json，防止 5 分钟定时器覆盖
-            await stateManager.saveToFile();
-
-            newsAgentService.emitAgentEvent(
-                'Antigravity 客户端',
-                'completed',
-                `已同步发布 ${normalizedNews.length} 条精选新闻${finalSummary ? '及今日全球要闻深度综述' : ''}`,
-                { progress: 100, current: normalizedNews.length, total: normalizedFullPool.length }
-            );
 
             res.json({
-                success: true,
-                message: `成功发布 ${normalizedNews.length} 条全球精选新闻${finalSummary ? '与今日深度综述' : ''}`,
-                displayedCount: normalizedNews.length,
-                totalPoolCount: normalizedFullPool.length,
-                hasSummary: Boolean(finalSummary),
-                publishedAt: nowIso,
-                lastUpdated: nowIso,
-                publishedBy
+                ...applied,
+                message: `成功发布 ${applied.displayedCount} 条全球精选新闻${applied.hasSummary ? '与今日深度综述' : ''}`
             });
         } catch (error) {
+            if (error.statusCode === 400) {
+                return res.status(400).json({
+                    success: false,
+                    message: error.message
+                });
+            }
             logger.error('API', '接收外部发布新闻数据失败', error.message);
             res.status(500).json({
                 success: false,
@@ -717,7 +541,6 @@ function initializeApiRoutes(services, io, stateManager) {
             agent: {
                 jinaReaderEnabled: config.agent.jinaReaderEnabled,
                 maxCuratedArticles: config.agent.maxCuratedArticles,
-                deepReadTopCount: config.agent.deepReadTopCount,
                 freshnessHours: config.agent.freshnessHours,
                 githubSyncEnabled: Boolean(config.githubSync?.enabled ?? true),
                 githubPushEnabled: Boolean(config.githubSync?.pushEnabled ?? true),

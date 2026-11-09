@@ -1,14 +1,21 @@
 /**
- * CoreFeed v2.0 — Antigravity Path A 发布接口、CLI 流水线与早中晚自动调度端到端测试套件
+ * CoreFeed v2.0 — Plan 2B 发布接口、CLI 流水线、多客户端协同与 Swiss Editorial UI 端到端测试套件
  *
- * 覆盖范围 (7 项端到端测试)：
- *   1. `POST /api/agent/publish` 鉴权校验 (401/403) 与非法载荷拦截 (400)
- *   2. `POST /api/agent/publish` 正常发布、文件持久化 (`news.json`/`summary.json`/`state.json`) 与增量路由验证
- *   3. `scripts/ag-publish.js` 并查集 (`duplicateGroups`) 合并、`[NEWS_k]` 引注渲染与远程推送闭环
- *   4. 预编译深读 (`ag_precompiled`) 秒级直出验证，确保点击「全文深读」零外部网络阻塞
- *   5. `scripts/ag-harvest.js` CLI 参数解析与候选池导出契约验证
- *   6. 每日早中晚三次 (`08:00, 12:30, 19:30` 北京时间) 定时调度状态与动态配置 API 验证
- *   7. `scripts/ag-auto-update.js` 全自动四阶段流水线编排与免密钥编译兜底验证
+ * 覆盖范围 (14 项端到端测试)：
+ *   1. 服务与 CLI 模块导出契约校验
+ *   2. `POST /api/agent/publish` 鉴权校验 (401/200)
+ *   3. `POST /api/agent/publish` 非法载荷拦截 (400)
+ *   4. `POST /api/agent/publish` 状态落盘、`[NEWS_k]` 引注渲染与已移除旧路由 404 验证
+ *   5. `scripts/ag-publish.js` 并查集 (`duplicateGroups`) 合并与远程推送闭环
+ *   6. 每日早中晚三次 (`08:00, 12:30, 19:30` 北京时间) 定时调度与配置持久化
+ *   7. `scripts/ag-auto-update.js` 全自动四阶段流水线编排与免密钥编译兜底
+ *   8. 局域网直推 (`--site`/`--file`/`X-Publish-Secret`) 与独立自包含快照发布
+ *   9. Git Plumbing 孤儿分支 (`ag-snapshot/latest.json`) 无工作区污染发布
+ *  10. 软路由 `POST /api/agent/pull-github` 与 `GET /api/agent/sync-status` 同步闭环
+ *  11. 方案 2B 默认推送 GitHub 与 `publishedBy`/`clientId` 元数据透传
+ *  12. 多客户端 30 分钟冷却防冲突协调与 ETag `304 Not Modified` 轮询
+ *  13. Swiss Editorial Bento UI SSR (`?v=2.5.4`)、深读组件彻底移除与一键同步验证
+ *  14. 方案 2B 软路由防回退保护与英文生肉污染自动自愈验证
  *
  * 安全保证：测试开始前自动备份 `data/*.json` 至内存，测试结束后完整还原现场数据。
  */
@@ -120,9 +127,8 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.equal(typeof parsePublishArgs, 'function');
         assert.equal(typeof runPublish, 'function');
 
-        const hArgs = parseHarvestArgs(['--limit', '20', '--deep-read=4', '--images', '10', '--category', 'tech', '--translate-fallback']);
+        const hArgs = parseHarvestArgs(['--limit', '20', '--images', '10', '--category', 'tech', '--translate-fallback']);
         assert.equal(hArgs.limit, 20);
-        assert.equal(hArgs.deepRead, 4);
         assert.equal(hArgs.imageLimit, 10);
         assert.equal(hArgs.category, 'tech');
         assert.equal(hArgs.translateFallback, true);
@@ -249,7 +255,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.equal(resEmptyArr.status, 400);
     });
 
-    it('4. POST /api/agent/publish full state, [NEWS_1] citation rendering, pre-compiled deep-read & disk persistence', async () => {
+    it('4. POST /api/agent/publish full state, [NEWS_1] citation rendering, removed legacy routes 404 contract & disk persistence', async () => {
         process.env.PUBLISH_SECRET = 'ag-test-secret-999';
         const nowIso = new Date().toISOString();
 
@@ -262,8 +268,6 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
                 translatedDescription: '多家主要央行宣布启动跨境即时结算联合试点项目。',
                 summary: '多家主要央行今日宣布启动跨境数字结算联合试点，旨在降低国际贸易清算成本并提升透明度。',
                 content: 'Full article text for item 1...',
-                fullTextContent: 'Full article text for item 1 with more than 260 characters so single-article deep read cache hits immediately without external network requests. The new cross-border settlement rail connects major financial hubs across Europe and Asia with atomic settlement guarantees and real-time liquidity management.',
-                deepReadHtml: '<h3 class="summary-section-title">核心导读</h3><p class="summary-paragraph">多国央行联合启动跨境数字结算走廊。</p>',
                 url: 'https://www.reuters.com/markets/cbdc-settlement-2026',
                 urlToImage: 'https://www.reuters.com/resizer/sample1.jpg',
                 publishedAt: nowIso,
@@ -284,7 +288,6 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
                 translatedDescription: '独立冬季测试证实新型固态电池在零下15度环境下仍可保持千公里续航。',
                 summary: '最新第三方冬季严寒测试显示，新一代高能量密度固态电池在零下15摄氏度环境中成功实现1000公里续航。',
                 content: 'Full article text for item 2...',
-                deepReadAnalysis: '### 核心导读\n固态电池在零下15度严寒测试中保持千公里续航能力。',
                 url: 'https://www.bbc.com/news/technology-battery-2026',
                 urlToImage: 'https://www.bbc.com/images/sample2.jpg',
                 publishedAt: nowIso,
@@ -382,33 +385,16 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.equal(latestBody.data.summary.available, true);
         assert.ok(latestBody.data.summary.content.includes('class="news-ref-link"'));
 
-        // Verify POST /api/agent/deep-read with pre-compiled deepReadHtml and deepReadAnalysis
-        const resDeepRead1 = await fetch(`${baseUrl}/api/agent/deep-read`, {
+        // Verify removed legacy / Deep-Read endpoints return 404 Not Found
+        const resRemovedDeepRead = await fetch(`${baseUrl}/api/agent/deep-read`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url: 'https://www.reuters.com/markets/cbdc-settlement-2026',
-                title: '多国央行协调跨境数字结算新框架'
-            })
+            body: JSON.stringify({ url: 'https://www.reuters.com/markets/cbdc-settlement-2026' })
         });
-        assert.equal(resDeepRead1.status, 200);
-        const deepReadBody1 = await resDeepRead1.json();
-        assert.equal(deepReadBody1.success, true);
-        assert.equal(deepReadBody1.fromCache, true);
-        assert.ok(deepReadBody1.analysisHtml.includes('多国央行联合启动跨境数字结算走廊'));
+        assert.equal(resRemovedDeepRead.status, 404, 'Removed /api/agent/deep-read route must return 404');
 
-        const resDeepRead2 = await fetch(`${baseUrl}/api/agent/deep-read`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url: 'https://www.bbc.com/news/technology-battery-2026',
-                title: '新一代固态电池在冬季实测中实现千公里续航'
-            })
-        });
-        assert.equal(resDeepRead2.status, 200);
-        const deepReadBody2 = await resDeepRead2.json();
-        assert.equal(deepReadBody2.success, true);
-        assert.ok(deepReadBody2.analysisHtml.includes('固态电池在零下15度严寒测试中保持千公里续航能力'));
+        const resRemovedSystemPerf = await fetch(`${baseUrl}/api/system/performance`);
+        assert.equal(resRemovedSystemPerf.status, 404, 'Removed /api/system/performance route must return 404');
 
         // Verify GET / (homepage SSR HTML)
         const resHome = await fetch(`${baseUrl}/`);
@@ -618,7 +604,6 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             '--target', 'http://127.0.0.1:3120',
             '--secret=my-sec',
             '--limit', '25',
-            '--deep-read=6',
             '--images=20',
             '--category=tech',
             '--skip-harvest',
@@ -629,7 +614,6 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.equal(parsed.target, 'http://127.0.0.1:3120');
         assert.equal(parsed.secret, 'my-sec');
         assert.equal(parsed.limit, 25);
-        assert.equal(parsed.deepRead, 6);
         assert.equal(parsed.imageLimit, 20);
         assert.equal(parsed.category, 'tech');
         assert.equal(parsed.skipHarvest, true);
@@ -1432,19 +1416,34 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(!html.includes('id="cfgDeepReadCount"'), 'SSR HTML must NOT contain #cfgDeepReadCount');
             assert.ok(!html.includes('id="cfgFreshnessHours"'), 'SSR HTML must NOT contain #cfgFreshnessHours');
 
-            // (c) Verify v2.5.3 cache busting, Bento Grid span class purity (no md:col-span-2 override), editorial keypoints, and CSS Grid min-width: 0 locks
-            assert.ok(html.includes('/css/style.css?v=2.5.3'), 'SSR HTML should include cache-busted /css/style.css?v=2.5.3');
-            assert.ok(html.includes('/js/main.js?v=2.5.3'), 'SSR HTML should include cache-busted /js/main.js?v=2.5.3');
+            // (c) Verify v2.5.4 cache busting, Deep-Read removal, Bento Grid span class purity (no md:col-span-2 override), editorial keypoints, and CSS Grid min-width: 0 locks
+            assert.ok(html.includes('/css/style.css?v=2.5.4'), 'SSR HTML should include cache-busted /css/style.css?v=2.5.4');
+            assert.ok(html.includes('/js/main.js?v=2.5.4'), 'SSR HTML should include cache-busted /js/main.js?v=2.5.4');
             assert.ok(!html.includes('md:col-span-2'), 'SSR HTML must NOT include Tailwind md:col-span-2 that overrides .bento-span-* on desktop');
+            assert.ok(!html.includes('全文深读'), 'SSR HTML must NOT contain removed "全文深读" button');
+            assert.ok(!html.includes('btn-read-more'), 'SSR HTML must NOT contain .btn-read-more');
+            assert.ok(!html.includes('deepReadModal'), 'SSR HTML must NOT contain #deepReadModal');
+            assert.ok(!html.includes('articleModal'), 'SSR HTML must NOT contain #articleModal');
+            assert.ok(!html.includes('openDeepRead'), 'SSR HTML must NOT contain openDeepRead handler');
+            assert.ok(html.includes('card-timestamp'), 'SSR HTML .card-footer should retain .card-timestamp');
+            assert.ok(html.includes('btn-source-link'), 'SSR HTML .card-footer should retain .btn-source-link');
             assert.ok(html.includes('card-keypoints'), 'SSR HTML should render keypoints inside .card-keypoints');
             assert.ok(html.includes('card-keypoint-item'), 'SSR HTML should render keypoint items with .card-keypoint-item');
 
             const mainJsSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
             assert.ok(!mainJsSource.includes('md:col-span-2'), 'public/js/main.js must NOT include md:col-span-2');
+            assert.ok(!mainJsSource.includes('openDeepRead'), 'public/js/main.js must NOT include openDeepRead');
+            assert.ok(!mainJsSource.includes('closeDeepReadModal'), 'public/js/main.js must NOT include closeDeepReadModal');
+            assert.ok(!mainJsSource.includes('btn-read-more'), 'public/js/main.js must NOT include btn-read-more');
+            assert.ok(!mainJsSource.includes('/api/agent/deep-read'), 'public/js/main.js must NOT reference /api/agent/deep-read');
+            assert.ok(mainJsSource.includes('card-timestamp'), 'public/js/main.js should render .card-timestamp');
+            assert.ok(mainJsSource.includes('btn-source-link'), 'public/js/main.js should render .btn-source-link');
             assert.ok(mainJsSource.includes('card-keypoints'), 'public/js/main.js should render .card-keypoints');
             assert.ok(mainJsSource.includes('card-keypoint-item'), 'public/js/main.js should render .card-keypoint-item');
 
             const styleCssSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'style.css'), 'utf8');
+            assert.ok(!styleCssSource.includes('.btn-read-more'), 'public/css/style.css must NOT define .btn-read-more');
+            assert.ok(!styleCssSource.includes('.taste-drawer-surface'), 'public/css/style.css must NOT define .taste-drawer-surface');
             assert.ok(
                 styleCssSource.includes('minmax(0, 1.08fr) minmax(0, 0.92fr)'),
                 'public/css/style.css should lock .lead-bento-inner.has-media columns with minmax(0, 1.08fr) minmax(0, 0.92fr)'

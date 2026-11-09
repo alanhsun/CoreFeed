@@ -2,10 +2,10 @@
 
 ## Project Overview
 
-**聚核 CoreFeed v2.0** — A Global News Collector, Cross-Source Verifier & Reader built on Node.js, Express, and Socket.IO.
+**聚核 CoreFeed v2.0** — A Global News Collector, Cross-Source Verifier & Editorial Reader built on Node.js, Express, and Socket.IO.
 It supports **Dual-Mode Operation**:
-1. **Built-in Two-Stage Progressive Pipeline** (`Scout` -> `Curator` -> `Deep-Reader & Compiler` -> `Chief Editor`) with automated 3x/day Beijing Time scheduling (`08:00, 12:30, 19:30` `Asia/Shanghai`).
-2. **Antigravity Client Path A Pipeline** (`scripts/ag-harvest.js`, `scripts/ag-publish.js`, `scripts/ag-auto-update.js`, and `POST /api/agent/publish`) for external agent harvesting, Chinese compilation, Union-Find cross-source deduplication, and atomic live publishing across 30 world-renowned outlets (Reuters, AP, BBC, NYT, Bloomberg, WSJ, FT, SCMP, CNA, NHK, etc.).
+1. **Plan 2B Multi-Client GitHub Snapshot Hub (`ag-snapshot/latest.json`)**: Antigravity clients harvest 37 authoritative global & Chinese news outlets, compile Chinese headlines/summaries/keypoints and the daily Executive Briefing (`summaryArticle`), and publish to the `ag-snapshot` orphan branch via Git plumbing. Soft-router / web instances (`GITHUB_SYNC_ENABLED=true`) automatically pull and apply the snapshot at startup, at `08:00, 12:30, 19:30` (`Asia/Shanghai`), and every 60 minutes via ETag (`304 Not Modified`) polling.
+2. **Standalone Two-Stage Progressive Pipeline** (`Scout` -> `Curator` -> `Compiler` -> `Chief Editor`) when `GITHUB_SYNC_ENABLED=false`.
 
 - **Version**: v2.0.0
 - **Entry Point**: `server.js` (Default port `3120`)
@@ -16,14 +16,14 @@ It supports **Dual-Mode Operation**:
 # Start server (Node.js, port 3120)
 npm start
 
-# Run 4-stage automated harvest -> compile -> publish -> verify pipeline
+# Run 4-stage automated cooldown check -> harvest -> compile -> publish -> verify pipeline
 npm run ag:auto
 
-# Run Path A step-by-step CLI tools
+# Run step-by-step CLI tools
 npm run ag:harvest
 npm run ag:publish
 
-# Run 7-test E2E automated test suite (non-destructive backup/restore of data/)
+# Run 18-test E2E automated test suite (non-destructive backup/restore of data/)
 npm test
 ```
 
@@ -33,25 +33,26 @@ npm test
 server.js (Express + Socket.IO)
  ├── config/
  │    ├── index.js                 # Dynamic configuration (.env + data/settings.json)
- │    └── global_sources.js        # 30 Global Renowned News Source Matrix & Authority Weights (v2.2)
+ │    └── global_sources.js        # 37 Global & Chinese Authoritative News Sources (v2.5)
  ├── services/
- │    ├── news_agent_service.js    # Two-Stage Progressive Coordinator (Patrol & Single-Article Deep-Read)
- │    ├── agent_tools.js           # Collection & Extraction Tools (RSS / Google News Proxy / Jina / Cheerio)
- │    ├── ai_service.js            # Event Clustering, Rule Pre-classification, Batch Compiler & Keyless Fallback
- │    ├── news_service.js          # Base News Fetcher & Local Cache Persistence
+ │    ├── news_agent_service.js    # Two-Stage Progressive Coordinator (Patrol & Image Enrichment)
+ │    ├── agent_tools.js           # Collection & Lead Image Tools (RSS / Google News Proxy / Jina / og:image)
+ │    ├── ai_service.js            # Event Clustering, Rule Classification, Batch Compiler & Keyless Fallback
+ │    ├── news_service.js          # Article Filtering, Cleaning & Local JSON Persistence
  │    └── state_manager.js         # Centralized Pub/Sub State Manager
  ├── scripts/
  │    ├── ag-harvest.js            # CLI Harvester -> data/ag_candidates.json
- │    ├── ag-publish.js            # CLI Publisher -> POST /api/agent/publish
- │    └── ag-auto-update.js        # 4-Stage Automated Pipeline Orchestrator
+ │    ├── ag-publish.js            # CLI Publisher -> GitHub ag-snapshot/latest.json & POST /api/agent/publish
+ │    └── ag-auto-update.js        # 4-Stage Automated Pipeline Orchestrator with 30m Cooldown Guard
  ├── routes/
- │    └── api.js                   # RESTful API Routes (/api/agent/publish, /api/schedule/*, /api/news, etc.)
+ │    └── api.js                   # Core RESTful API Routes
  ├── utils/
- │    ├── schedule_manager.js      # Cron Scheduler (08:00, 12:30, 19:30 Asia/Shanghai + 10m freshness guard)
+ │    ├── github_sync.js           # Git Plumbing Snapshot Publisher, Cooldown Check & ETag Puller
+ │    ├── schedule_manager.js      # Cron Scheduler (08:00, 12:30, 19:30 Asia/Shanghai + 60m Polling)
  │    ├── rate_limiter.js          # Token Bucket Rate Limiter for LLM APIs
- │    ├── network_config.js        # Global HTTP Keep-Alive & Retry Setup
+ │    ├── network_config.js        # Global HTTP Keep-Alive Setup
  │    ├── logger.js                # Structured Color Logger & Metrics
  │    └── helpers.js               # File I/O, String Cleaning & SimpleCache
- ├── views/index.ejs + public/     # Kami (紙) Editorial News Reader UI
- └── tests/ag_pipeline.test.js     # E2E Test Suite (7 tests)
+ ├── views/index.ejs + public/     # Swiss Editorial Masthead & 12-Column Asymmetric Bento Grid UI
+ └── tests/                        # E2E Test Suites (ag_pipeline.test.js + deploy_router.test.js)
 ```

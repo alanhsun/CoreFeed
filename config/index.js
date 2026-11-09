@@ -1,3 +1,11 @@
+/**
+ * 聚核 CoreFeed v2.0 — 全局动态配置管理模块 (config/index.js)
+ *
+ * 合并优先级：
+ *   1. `data/settings.json` 动态持久化配置（通过 Web UI 设置弹窗或 `POST /api/config` 修改）
+ *   2. 环境变量 (`.env` / `process.env`)
+ *   3. 方案 2B 默认参数（GitHub `ag-snapshot/latest.json` 60m 自动同步、每日 08:00/12:30/19:30 定时同步）
+ */
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -60,25 +68,6 @@ function getBooleanConfig(key, defaultValue = false) {
     return str === 'true' || str === '1' || str === 'yes';
 }
 
-function parseSourceArticleCounts(sourceArticleCounts, defaultCount = 5) {
-    const counts = {};
-    if (!sourceArticleCounts || typeof sourceArticleCounts !== 'string' || sourceArticleCounts.trim() === '') {
-        return counts;
-    }
-    const pairs = sourceArticleCounts.split(',');
-    for (const pair of pairs) {
-        const trimmed = pair.trim();
-        if (trimmed.includes(':')) {
-            const [source, count] = trimmed.split(':').map(s => s.trim());
-            const numCount = parseInt(count, 10);
-            if (source && !isNaN(numCount) && numCount > 0) {
-                counts[source] = numCount;
-            }
-        }
-    }
-    return counts;
-}
-
 function parseUpdateTimes(updateTimesStr) {
     if (!updateTimesStr) return [];
     const rawList = Array.isArray(updateTimesStr)
@@ -137,7 +126,6 @@ function buildConfig() {
             jinaApiKey: getConfig('JINA_API_KEY', ''),
             maxCuratedArticles: getNumberConfig('AGENT_MAX_CURATED_ARTICLES', 30),
             maxCandidatePool: getNumberConfig('AGENT_MAX_CANDIDATE_POOL', 80),
-            deepReadTopCount: getNumberConfig('AGENT_DEEP_READ_COUNT', 10),
             sourceConcurrency: getNumberConfig('AGENT_SOURCE_CONCURRENCY', 8),
             enableGoogleNewsFallback: getBooleanConfig('AGENT_GNEWS_PROXY_FALLBACK', true),
             freshnessHours: getNumberConfig('AGENT_FRESHNESS_HOURS', 48),
@@ -175,27 +163,18 @@ function buildConfig() {
             syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)
         },
 
-        // 新闻API与源配置
+        // 新闻源与每日定时调度配置
         news: {
             apiKey: getConfig('NEWS_API_KEY', ''),
             newsApiEnabled: getBooleanConfig('NEWS_API_ENABLED', true),
             newsApiMaxArticles: getNumberConfig('NEWS_API_MAX_ARTICLES', 15),
             sources: parseSources(getConfig('NEWS_SOURCES', '')),
             rssSources: getConfig('RSS_SOURCES', ''),
-            webScrapingSources: getConfig('WEB_SCRAPING_SOURCES', ''),
-            updateInterval: getConfig('NEWS_UPDATE_INTERVAL', '0 */2 * * *'),
             autoUpdateEnabled: getBooleanConfig('AUTO_UPDATE_ENABLED', true),
-            updateTime: getConfig('UPDATE_TIME', '08:00'),
             updateTimes: parseUpdateTimes(getConfig('UPDATE_TIMES', getConfig('scheduleTimes', '08:00,12:30,19:30'))),
             scheduleTimes: parseUpdateTimes(getConfig('UPDATE_TIMES', getConfig('scheduleTimes', '08:00,12:30,19:30'))),
             timezone: getConfig('SCHEDULE_TIMEZONE', getConfig('timezone', 'Asia/Shanghai')),
-            updateFrequency: getConfig('UPDATE_FREQUENCY', 'daily'),
             maxArticlesPerSource: getNumberConfig('MAX_ARTICLES_PER_SOURCE', 5),
-            sourceArticleCounts: getConfig('SOURCE_ARTICLE_COUNTS', ''),
-            sourceArticleCountsMap: parseSourceArticleCounts(
-                getConfig('SOURCE_ARTICLE_COUNTS', ''),
-                getNumberConfig('MAX_ARTICLES_PER_SOURCE', 5)
-            ),
             disabledSources: parseSources(getConfig('DISABLED_SOURCES', ''))
         },
 
@@ -244,13 +223,6 @@ function buildConfig() {
             rateLimitBurst: getNumberConfig('AI_RATE_LIMIT_BURST', 5)
         },
 
-        // 缓存配置
-        cache: {
-            enabled: env === 'production' ? true : getBooleanConfig('CACHE_ENABLED', false),
-            ttl: getNumberConfig('CACHE_TTL', 3600),
-            maxSize: getNumberConfig('CACHE_MAX_SIZE', 200)
-        },
-
         // 日志配置
         logging: {
             level: getConfig('LOG_LEVEL', env === 'production' ? 'info' : 'debug'),
@@ -274,12 +246,7 @@ function buildConfig() {
                 'WEB_SCRAPING_USER_AGENT',
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
             ),
-            timeout: getNumberConfig('WEB_SCRAPING_TIMEOUT', 25000),
-            maxArticles: getNumberConfig('WEB_SCRAPING_MAX_ARTICLES', 5),
-            retries: getNumberConfig('WEB_SCRAPING_RETRIES', 2),
-            retryDelay: getNumberConfig('WEB_SCRAPING_RETRY_DELAY', 1500),
-            respectRobotsTxt: getBooleanConfig('WEB_SCRAPING_RESPECT_ROBOTS', false),
-            delayBetweenRequests: getNumberConfig('WEB_SCRAPING_DELAY', 500)
+            timeout: getNumberConfig('WEB_SCRAPING_TIMEOUT', 25000)
         },
 
         // Socket.IO配置

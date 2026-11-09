@@ -234,8 +234,7 @@ async function applySnapshotToRouter(
             description: rawDesc,
             translatedDescription: zhSummary,
             summary: zhSummary,
-            content: String(item?.content || item?.fullTextContent || rawDesc).trim(),
-            fullTextContent: item?.fullTextContent || null,
+            content: String(item?.content || rawDesc).trim(),
             url: item?.url || '',
             urlToImage: item?.urlToImage || null,
             publishedAt: item?.publishedAt || nowIso,
@@ -592,14 +591,6 @@ class GitHubSyncManager {
             ...options,
             syncManager: this
         });
-    }
-
-    async syncFromGitHub(options = {}) {
-        return this.pullAndApply(options);
-    }
-
-    async pullFromGithubBranch(options = {}) {
-        return this.pullAndApply(options);
     }
 
     async pullAndApply(options = {}) {

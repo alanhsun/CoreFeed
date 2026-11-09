@@ -1,6 +1,11 @@
 /**
- * 聚核 CoreFeed v2.0 · 全球知名信源实时聚合与深读前端控制器
- * Design Spec: design-taste-frontend v2.5.1 (Swiss Editorial & Asymmetric Bento)
+ * 聚核 CoreFeed v2.0 · 前端交互与实时状态同步控制器
+ *
+ * 核心职责：
+ *   1. 承接 SSR 首屏状态 (window.__INITIAL_STATE__) 并建立 Socket.IO 实时增量同步
+ *   2. 12 列不对称 Swiss Editorial Bento 网格动态渲染与多维筛选（地区/领域/信源/关键词）
+ *   3. 一键触发 GitHub 快照拉取 (POST /api/agent/pull-github) 与 60 秒轻量状态遥测轮询
+ *   4. 极简系统设置弹窗 (GET/POST /api/config) 与深浅色主题切换
  */
 class CoreFeedApp {
     constructor() {
@@ -13,8 +18,6 @@ class CoreFeedApp {
         this.schedule = init.schedule || null;
         this.clientId = init.clientId || init.githubSync?.clientId || '';
         this.summaryArticle = init.summaryArticle || null;
-        this.sourceMatrix = Array.isArray(init.sourceMatrix) ? init.sourceMatrix : [];
-        this.customSourcesDraft = [];
         this.collectionPhase = 'idle';
         this.isSyncingGithub = false;
 
@@ -61,7 +64,6 @@ class CoreFeedApp {
     initKeyboardShortcuts() {
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
-                this.closeDeepReadModal();
                 this.closeSettingsModal();
             }
         });
@@ -304,11 +306,6 @@ class CoreFeedApp {
             return true;
         });
 
-        const displayedEl = document.getElementById('displayedCountLabel');
-        if (displayedEl) displayedEl.textContent = filtered.length;
-        const totalPoolEl = document.getElementById('totalPoolCountLabel');
-        if (totalPoolEl) totalPoolEl.textContent = Math.max(this.totalNews, this.news.length);
-
         const loadMoreBtn = document.getElementById('loadMoreContainer');
         if (loadMoreBtn) {
             loadMoreBtn.classList.toggle('hidden', this.news.length >= this.totalNews);
@@ -348,11 +345,6 @@ class CoreFeedApp {
         const hasMultiSources = relatedSources.length > 0;
         const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
         const isCompiling = (this.collectionPhase === 'collected' || this.collectionPhase === 'compiling') && !item.aiCompiled;
-
-        const encodedUrl = encodeURIComponent(item.url || '');
-        const encodedTitle = encodeURIComponent(title);
-        const encodedSource = encodeURIComponent(sourceName);
-        const encodedSummary = encodeURIComponent(summary);
 
         const relatedLinksHtml = relatedSources.map(r => {
             if (r.url) {
@@ -438,19 +430,12 @@ class CoreFeedApp {
                 </div>
 
                 <div class="card-footer">
-                    <button type="button" onclick="app.openDeepRead('${encodedUrl}', '${encodedTitle}', '${encodedSource}', '${encodedSummary}')"
-                        class="btn-read-more">
-                        <i class="fa-solid fa-book-open-reader text-xs"></i>
-                        <span>全文深读</span>
-                    </button>
-                    <div class="flex items-center gap-3">
-                        <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
-                        <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
-                            class="btn-source-link">
-                            <span>原文</span>
-                            <span aria-hidden="true">↗</span>
-                        </a>
-                    </div>
+                    <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
+                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
+                        class="btn-source-link">
+                        <span>原文</span>
+                        <span aria-hidden="true">↗</span>
+                    </a>
                 </div>
             </article>
         `;
@@ -471,7 +456,7 @@ class CoreFeedApp {
         }
     }
 
-    // ==================== 5. 全球新闻采集、GitHub 快照同步、加载与全文深读 ====================
+    // ==================== 5. 状态遥测、GitHub 快照同步与增量加载 ====================
 
     async fetchStatus() {
         try {
@@ -543,8 +528,8 @@ class CoreFeedApp {
 
     renderModalSyncStatus() {
         const gh = this.githubSync || {};
-        const statusEl = document.getElementById('modalSyncStatusText') || document.getElementById('cfgSyncStatusText');
-        const syncedAtEl = document.getElementById('modalSyncLastTime') || document.getElementById('cfgLastSyncedAt');
+        const statusEl = document.getElementById('modalSyncStatusText');
+        const syncedAtEl = document.getElementById('modalSyncLastTime');
 
         const statusMap = {
             synced: '已同步最新',
@@ -577,7 +562,7 @@ class CoreFeedApp {
         if (this.isSyncingGithub) return;
         this.isSyncingGithub = true;
 
-        const headerBtn = document.getElementById('syncGithubBtn') || document.getElementById('btnSyncGithub');
+        const headerBtn = document.getElementById('syncGithubBtn');
         const headerIcon = document.getElementById('syncGithubBtnIcon');
         const headerText = document.getElementById('syncGithubBtnText');
 
@@ -686,97 +671,6 @@ class CoreFeedApp {
         }
     }
 
-    async openDeepRead(encodedUrl, encodedTitle, encodedSource, encodedSummary) {
-        const url = decodeURIComponent(encodedUrl || '');
-        const title = decodeURIComponent(encodedTitle || '');
-        const sourceName = decodeURIComponent(encodedSource || '');
-        const existingSummary = decodeURIComponent(encodedSummary || '');
-
-        const modal = document.getElementById('deepReadModal');
-        const titleEl = document.getElementById('deepReadTitle');
-        const sourceEl = document.getElementById('deepReadSourceBadge');
-        const bodyEl = document.getElementById('deepReadBody');
-        const linkEl = document.getElementById('deepReadOriginalLink');
-
-        if (!modal || !bodyEl) return;
-
-        modal.classList.remove('hidden');
-        if (titleEl) titleEl.textContent = title;
-        if (sourceEl) sourceEl.textContent = sourceName;
-        if (linkEl) linkEl.href = url;
-
-        const matchedItem = (this.news || []).find(item => item && (item.url === url || item.translatedTitle === title || item.title === title));
-        const keyPoints = Array.isArray(matchedItem?.keyPoints) ? matchedItem.keyPoints : [];
-
-        const instantLeadHtml = existingSummary ? `
-            <div class="summary-content mb-5">
-                <h3 class="summary-section-title">核心导读</h3>
-                <p class="summary-paragraph">${this.escapeHtml(existingSummary)}</p>
-                ${keyPoints.length > 0 ? `<ul class="summary-list">${keyPoints.map(kp => `<li>${this.escapeHtml(kp)}</li>`).join('')}</ul>` : ''}
-            </div>
-        ` : '';
-
-        bodyEl.innerHTML = `
-            ${instantLeadHtml}
-            <div class="p-5 rounded-md border space-y-3.5" style="background: var(--bg-subtle); border-color: var(--border-subtle);">
-                <div class="flex items-center gap-3">
-                    <i class="fa-solid fa-spinner fa-spin text-sm" style="color: var(--accent);"></i>
-                    <div>
-                        <div class="text-sm font-semibold" style="color: var(--text-primary);">正在实时提取 [${this.escapeHtml(sourceName)}] 报道全文并执行中文精译...</div>
-                        <div class="text-xs mt-0.5" style="color: var(--text-muted);">正在抽取原文完整段落、关键引语与背景脉络（通常需 2 至 8 秒）</div>
-                    </div>
-                </div>
-                <div class="space-y-2 pt-1">
-                    <div class="taste-skeleton-line" style="width: 92%;"></div>
-                    <div class="taste-skeleton-line" style="width: 84%;"></div>
-                    <div class="taste-skeleton-line" style="width: 68%;"></div>
-                </div>
-            </div>
-        `;
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 22000);
-
-        try {
-            const res = await fetch('/api/agent/deep-read', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, title, sourceName, existingSummary }),
-                signal: controller.signal
-            });
-            clearTimeout(timeoutId);
-            const data = await res.json();
-            if (!res.ok || !data.success) {
-                throw new Error(data.message || '全文深读请求失败');
-            }
-
-            bodyEl.innerHTML = `
-                <div class="space-y-6">
-                    <div class="summary-content">
-                        ${data.analysisHtml || instantLeadHtml}
-                    </div>
-                    <details class="kami-code-block text-xs">
-                        <summary class="cursor-pointer font-medium" style="color: var(--text-secondary);">查看抓取到的外媒原文摘录 (提取引擎: ${this.escapeHtml(data.extractionMethod || 'readability')})</summary>
-                        <pre class="mt-3 whitespace-pre-wrap max-h-60 overflow-y-auto" style="font-family: var(--font-sans); color: var(--text-secondary);">${this.escapeHtml(data.fullText || '')}</pre>
-                    </details>
-                </div>
-            `;
-        } catch (err) {
-            clearTimeout(timeoutId);
-            const errMsg = err.name === 'AbortError' ? '外媒原站响应超时，已为您展示核心编译摘要' : err.message;
-            bodyEl.innerHTML = `
-                ${instantLeadHtml}
-                <div class="p-4 rounded-md text-xs" style="background: var(--bg-subtle); border: 1px solid var(--border-subtle); color: var(--text-secondary);">
-                    提示：${this.escapeHtml(errMsg)}。您可以点击左下角链接直接访问外媒原报道页面。
-                </div>
-            `;
-        }
-    }
-
-    closeDeepReadModal() {
-        document.getElementById('deepReadModal')?.classList.add('hidden');
-    }
-
     // ==================== 6. 今日要闻深度综述 ====================
 
     renderSummaryArticle(article) {
@@ -795,14 +689,6 @@ class CoreFeedApp {
     }
 
     // ==================== 7. 极简系统设置弹窗 ====================
-
-    openSettings() {
-        return this.openSettingsModal();
-    }
-
-    closeSettings() {
-        return this.closeSettingsModal();
-    }
 
     async openSettingsModal() {
         const modal = document.getElementById('settingsModal');
