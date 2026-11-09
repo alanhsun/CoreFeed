@@ -73,7 +73,14 @@ if (config.server.env === 'production') {
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, 'public'), {
-    maxAge: config.server.env === 'production' ? '1h' : 0
+    maxAge: config.server.env === 'production' ? '1h' : 0,
+    etag: true,
+    lastModified: true,
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.css') || filePath.endsWith('.js')) {
+            res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        }
+    }
 }));
 
 // API 响应禁用缓存（图片代理 /api/image-proxy 除外）
@@ -270,7 +277,8 @@ async function startServer() {
         const preservedLastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
         const preservedAllEnhanced = stateManager.get('allEnhancedNews');
         let finalNewsData = stateManager.get('newsData');
-        if (Array.isArray(finalNewsData) && finalNewsData.length > 1 && aiService) {
+        const isAlreadyCompiled = Array.isArray(finalNewsData) && finalNewsData.length > 0 && finalNewsData.every(item => item && item.aiCompiled);
+        if (Array.isArray(finalNewsData) && finalNewsData.length > 1 && aiService && !isAlreadyCompiled) {
             const fixedMeta = finalNewsData.map(item => ({
                 ...item,
                 region: aiService.determineNewsRegionSync(

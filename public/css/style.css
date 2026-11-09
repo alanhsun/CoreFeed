@@ -498,10 +498,24 @@ html.dark .tab-btn.active {
     color: #FFFFFF;
 }
 
+#feedSearchWrapper {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
 .taste-search-box {
     position: relative;
     display: flex;
     align-items: center;
+    min-width: 260px;
+    flex: 1;
+}
+
+.taste-search-box .kami-input {
+    width: 100%;
+    padding-right: 32px;
 }
 
 .taste-search-clear {
@@ -564,6 +578,20 @@ html.dark .tab-btn.active {
     border: 1px solid var(--border-hairline);
     border-radius: var(--radius-md);
     padding: 12px 16px;
+    margin-bottom: 20px;
+}
+
+#regionFilterBar,
+#categoryFilterBar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+#categoryFilter {
+    padding-top: 10px;
+    margin-top: 10px;
 }
 
 .filter-row-label {
@@ -584,13 +612,14 @@ html.dark .tab-btn.active {
     gap: 18px;
 }
 
-@media (min-width: 768px) {
+@media (min-width: 768px) and (max-width: 1023px) {
     .bento-news-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 20px;
     }
-    .bento-news-grid .news-card--lead {
-        grid-column: span 2 / span 2;
+    .bento-news-grid > .news-card--lead,
+    .bento-news-grid > .news-card:last-child:nth-child(even) {
+        grid-column: 1 / -1;
     }
 }
 
@@ -599,12 +628,12 @@ html.dark .tab-btn.active {
         grid-template-columns: repeat(12, minmax(0, 1fr));
         gap: 22px;
     }
-    .bento-span-12 { grid-column: span 12 / span 12; }
-    .bento-span-8  { grid-column: span 8 / span 8; }
-    .bento-span-7  { grid-column: span 7 / span 7; }
-    .bento-span-6  { grid-column: span 6 / span 6; }
-    .bento-span-5  { grid-column: span 5 / span 5; }
-    .bento-span-4  { grid-column: span 4 / span 4; }
+    .bento-news-grid > .bento-span-12 { grid-column: span 12 / span 12; }
+    .bento-news-grid > .bento-span-8  { grid-column: span 8 / span 8; }
+    .bento-news-grid > .bento-span-7  { grid-column: span 7 / span 7; }
+    .bento-news-grid > .bento-span-6  { grid-column: span 6 / span 6; }
+    .bento-news-grid > .bento-span-5  { grid-column: span 5 / span 5; }
+    .bento-news-grid > .bento-span-4  { grid-column: span 4 / span 4; }
 }
 
 @media (max-width: 767px) {
@@ -632,6 +661,7 @@ html.dark .tab-btn.active {
 }
 
 .news-card {
+    min-width: 0;
     background: var(--bg-surface);
     border: 1px solid var(--border-hairline);
     border-radius: var(--radius-md);
@@ -643,6 +673,13 @@ html.dark .tab-btn.active {
     transition: transform 0.24s var(--ease-spring), box-shadow 0.24s var(--ease-spring), border-color 0.24s var(--ease-spring);
     animation: cardEnter 0.42s var(--ease-enter) both;
     animation-delay: calc(min(var(--card-index, 0), 8) * 32ms);
+}
+
+.news-card > div:first-child {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -715,15 +752,24 @@ html.dark .tab-btn.active {
     border-top: 2px solid var(--accent);
 }
 
+.lead-bento-inner {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
 @media (min-width: 1024px) {
     .news-card--lead .lead-bento-inner.has-media {
         display: grid;
-        grid-template-columns: 1.08fr 0.92fr;
+        grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
         align-items: stretch;
+        flex: 1;
     }
     .news-card--lead .lead-bento-inner.has-media .card-cover {
+        width: 100%;
         height: 100%;
-        min-height: 290px;
+        min-height: 300px;
         border-bottom: none;
         border-right: 1px solid var(--border-subtle);
     }
@@ -858,6 +904,7 @@ html.dark .tab-btn.active {
     flex-direction: column;
     gap: 11px;
     flex: 1;
+    min-width: 0;
 }
 
 .card-title {
@@ -892,6 +939,40 @@ html.dark .tab-btn.active {
     margin: 0;
 }
 
+.card-keypoints {
+    list-style: none;
+    margin: 2px 0 0;
+    padding: 10px 0 0;
+    border-top: 1px dashed var(--border-hairline);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.card-keypoint-item {
+    position: relative;
+    padding-left: 13px;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.card-keypoint-item::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.62em;
+    width: 4px;
+    height: 4px;
+    border-radius: 9999px;
+    background: var(--accent);
+    opacity: 0.85;
+}
+
 /* Card Footer & Action Controls */
 .card-footer {
     padding: 11px 18px;
@@ -916,6 +997,8 @@ html.dark .tab-btn.active {
     border: none;
     padding: 4px 0;
     cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
     transition: color 0.18s var(--ease-spring), transform 0.18s var(--ease-spring);
 }
 
@@ -936,6 +1019,8 @@ html.dark .tab-btn.active {
     border-radius: var(--radius-sm);
     border: 1px solid var(--border-hairline);
     background: var(--bg-subtle);
+    white-space: nowrap;
+    flex-shrink: 0;
     transition: all 0.18s var(--ease-spring);
 }
 
@@ -949,6 +1034,8 @@ html.dark .tab-btn.active {
     font-size: 11.5px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 /* ========== Tags, Callouts & Cross-Verification Banner ========== */
@@ -982,6 +1069,9 @@ html.dark .tab-btn.active {
 }
 
 .kami-callout {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
     background: var(--accent-tint);
     color: var(--text-primary);
     border-left: 2px solid var(--accent);
@@ -1000,6 +1090,51 @@ html.dark .tab-btn.active {
     font-weight: 700;
     color: var(--accent);
     font-variant-numeric: tabular-nums;
+}
+
+.card-footer > div {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.line-clamp-1,
+.line-clamp-2,
+.line-clamp-3,
+.line-clamp-4,
+.line-clamp-5 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.line-clamp-1 { -webkit-line-clamp: 1; }
+.line-clamp-2 { -webkit-line-clamp: 2; }
+.line-clamp-3 { -webkit-line-clamp: 3; }
+.line-clamp-4 { -webkit-line-clamp: 4; }
+.line-clamp-5 { -webkit-line-clamp: 5; }
+
+.hidden {
+    display: none !important;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 /* ========== Executive Briefing Long-Form Reader (#tabPanel-summary) ========== */

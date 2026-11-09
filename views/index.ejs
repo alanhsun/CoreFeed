@@ -31,7 +31,7 @@
         };
     </script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/style.css?v=2.5.2">
 </head>
 <body class="antialiased">
     <div class="kami-page">
@@ -58,17 +58,17 @@
 
             function computeBentoLayoutSSR(idx, total) {
                 if (total === 1) {
-                    return { tier: 'lead', spanClass: 'bento-span-12 md:col-span-2' };
+                    return { tier: 'lead', spanClass: 'bento-span-12' };
                 }
                 if (total === 2) {
                     return idx === 0
-                        ? { tier: 'lead', spanClass: 'bento-span-7 md:col-span-2' }
-                        : { tier: 'secondary', spanClass: 'bento-span-5 md:col-span-2' };
+                        ? { tier: 'lead', spanClass: 'bento-span-7' }
+                        : { tier: 'secondary', spanClass: 'bento-span-5' };
                 }
-                if (idx === 0) return { tier: 'lead', spanClass: 'bento-span-8 md:col-span-2' };
+                if (idx === 0) return { tier: 'lead', spanClass: 'bento-span-8' };
                 if (idx === 1) return { tier: 'secondary', spanClass: 'bento-span-4' };
                 if (total === 3 && idx === 2) {
-                    return { tier: 'secondary', spanClass: 'bento-span-12 md:col-span-2' };
+                    return { tier: 'secondary', spanClass: 'bento-span-12' };
                 }
                 if (idx === 2 || idx === 3) {
                     return { tier: 'secondary', spanClass: 'bento-span-6' };
@@ -76,7 +76,7 @@
                 const remCount = total - 4;
                 const tail = remCount % 3;
                 if (tail === 1 && idx === total - 1) {
-                    return { tier: 'compact', spanClass: 'bento-span-12 md:col-span-2' };
+                    return { tier: 'compact', spanClass: 'bento-span-12' };
                 }
                 if (tail === 2 && idx >= total - 2) {
                     return { tier: 'compact', spanClass: 'bento-span-6' };
@@ -268,11 +268,11 @@
                                             <p class="card-summary <%= summaryClampClass %>"><%= summary %></p>
 
                                             <% if (keyPoints.length > 0) { %>
-                                                <div class="pt-1 flex flex-wrap gap-1.5">
+                                                <ul class="card-keypoints">
                                                     <% keyPoints.forEach(function(kp) { %>
-                                                        <span class="kami-tag-neutral">· <%= kp %></span>
+                                                        <li class="card-keypoint-item"><%= kp %></li>
                                                     <% }); %>
-                                                </div>
+                                                </ul>
                                             <% } %>
                                         </div>
                                     </div>
@@ -448,6 +448,6 @@
         };
     </script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/js/main.js"></script>
+    <script src="/js/main.js?v=2.5.2"></script>
 </body>
 </html>

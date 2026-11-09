@@ -247,20 +247,20 @@ class CoreFeedApp {
     // ==================== 4. 渲染 12 列不对称 Bento 全球新闻网格 ====================
     computeBentoLayout(idx, total) {
         if (total === 1) {
-            return { tier: 'lead', spanClass: 'bento-span-12 md:col-span-2' };
+            return { tier: 'lead', spanClass: 'bento-span-12' };
         }
         if (total === 2) {
             return idx === 0
-                ? { tier: 'lead', spanClass: 'bento-span-7 md:col-span-2' }
-                : { tier: 'secondary', spanClass: 'bento-span-5 md:col-span-2' };
+                ? { tier: 'lead', spanClass: 'bento-span-7' }
+                : { tier: 'secondary', spanClass: 'bento-span-5' };
         }
         // Row 1 (idx 0 & 1): 8 + 4 = 12
-        if (idx === 0) return { tier: 'lead', spanClass: 'bento-span-8 md:col-span-2' };
+        if (idx === 0) return { tier: 'lead', spanClass: 'bento-span-8' };
         if (idx === 1) return { tier: 'secondary', spanClass: 'bento-span-4' };
 
         // If total === 3, idx 2 is the only item after Row 1 -> span 12
         if (total === 3 && idx === 2) {
-            return { tier: 'secondary', spanClass: 'bento-span-12 md:col-span-2' };
+            return { tier: 'secondary', spanClass: 'bento-span-12' };
         }
 
         // If total >= 4, Row 2 (idx 2 & 3) uses Dual Secondary Highlight (6 + 6 = 12)
@@ -272,7 +272,7 @@ class CoreFeedApp {
         const remCount = total - 4;
         const tail = remCount % 3;
         if (tail === 1 && idx === total - 1) {
-            return { tier: 'compact', spanClass: 'bento-span-12 md:col-span-2' };
+            return { tier: 'compact', spanClass: 'bento-span-12' };
         }
         if (tail === 2 && idx >= total - 2) {
             return { tier: 'compact', spanClass: 'bento-span-6' };
@@ -429,9 +429,9 @@ class CoreFeedApp {
                             </p>
 
                             ${keyPoints.length > 0 ? `
-                                <div class="pt-1 flex flex-wrap gap-1.5">
-                                    ${keyPoints.map(kp => `<span class="kami-tag-neutral">· ${this.escapeHtml(kp)}</span>`).join('')}
-                                </div>
+                                <ul class="card-keypoints">
+                                    ${keyPoints.map(kp => `<li class="card-keypoint-item">${this.escapeHtml(kp)}</li>`).join('')}
+                                </ul>
                             ` : ''}
                         </div>
                     </div>

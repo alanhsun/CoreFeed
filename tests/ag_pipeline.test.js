@@ -1432,6 +1432,27 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(!html.includes('id="cfgDeepReadCount"'), 'SSR HTML must NOT contain #cfgDeepReadCount');
             assert.ok(!html.includes('id="cfgFreshnessHours"'), 'SSR HTML must NOT contain #cfgFreshnessHours');
 
+            // (c) Verify v2.5.2 cache busting, Bento Grid span class purity (no md:col-span-2 override), editorial keypoints, and CSS Grid min-width: 0 locks
+            assert.ok(html.includes('/css/style.css?v=2.5.2'), 'SSR HTML should include cache-busted /css/style.css?v=2.5.2');
+            assert.ok(html.includes('/js/main.js?v=2.5.2'), 'SSR HTML should include cache-busted /js/main.js?v=2.5.2');
+            assert.ok(!html.includes('md:col-span-2'), 'SSR HTML must NOT include Tailwind md:col-span-2 that overrides .bento-span-* on desktop');
+            assert.ok(html.includes('card-keypoints'), 'SSR HTML should render keypoints inside .card-keypoints');
+            assert.ok(html.includes('card-keypoint-item'), 'SSR HTML should render keypoint items with .card-keypoint-item');
+
+            const mainJsSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
+            assert.ok(!mainJsSource.includes('md:col-span-2'), 'public/js/main.js must NOT include md:col-span-2');
+            assert.ok(mainJsSource.includes('card-keypoints'), 'public/js/main.js should render .card-keypoints');
+            assert.ok(mainJsSource.includes('card-keypoint-item'), 'public/js/main.js should render .card-keypoint-item');
+
+            const styleCssSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'style.css'), 'utf8');
+            assert.ok(
+                styleCssSource.includes('minmax(0, 1.08fr) minmax(0, 0.92fr)'),
+                'public/css/style.css should lock .lead-bento-inner.has-media columns with minmax(0, 1.08fr) minmax(0, 0.92fr)'
+            );
+            assert.ok(styleCssSource.includes('min-width: 0;'), 'public/css/style.css should include min-width: 0 defensive locks');
+            assert.ok(styleCssSource.includes('.card-keypoints'), 'public/css/style.css should define .card-keypoints');
+            assert.ok(styleCssSource.includes('.card-keypoint-item'), 'public/css/style.css should define .card-keypoint-item');
+
             // 13b. Verify GET /api/config exposes Method 2B and schedule fields
             const resGetCfg = await fetch(`${baseUrl}/api/config`);
             assert.equal(resGetCfg.status, 200);
