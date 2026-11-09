@@ -137,30 +137,12 @@ class ScheduleManager {
     }
 
     /**
-     * 执行完整定时更新流程 (优先检查 GitHub 快照中转同步 -> 若无新快照则执行本地信源采集与编译 -> 自动发布快照至 GitHub)
-     * 内置 10 分钟本地新鲜度防重与 30 分钟远端多客户端冷却窗口守卫。
+     * 执行完整定时更新流程
+     * 方案 2B (默认开启 GITHUB_SYNC_ENABLED)：仅从 GitHub ag-snapshot/latest.json 同步最新精编快照；
+     * 若远端快照暂未更新或网络异常，保持本地已有中文精编快照不变，绝不回退执行本地英文 RSS 抓取覆盖。
      */
     async executeUpdate() {
-        if (this.stateManager) {
-            const phase = this.stateManager.get('collectionPhase');
-            const lastUpdated = this.stateManager.get('lastUpdated');
-            const newsData = this.stateManager.get('newsData');
-            if (
-                phase === 'completed' &&
-                lastUpdated &&
-                Array.isArray(newsData) &&
-                newsData.length > 0 &&
-                Date.now() - new Date(lastUpdated).getTime() < 10 * 60 * 1000
-            ) {
-                logger.info('SCHEDULE', `检测到过去 10 分钟内已完成新鲜发布 (${lastUpdated})，跳过本次重复巡检`);
-                return;
-            }
-        }
-
         const githubSyncEnabled = Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true);
-        const cooldownMinutes = Number(
-            process.env.GITHUB_COOLDOWN_MINUTES ?? config.githubSync?.cooldownMinutes ?? config.agent?.githubCooldownMinutes ?? 30
-        );
         if (githubSyncEnabled && this.githubSyncManager) {
             try {
                 const syncResult = await this.githubSyncManager.pullAndApply({ force: false, trigger: 'schedule' });
@@ -177,20 +159,32 @@ class ScheduleManager {
                             }
                         });
                     }
-                    return;
+                    return syncResult;
                 }
-                if (syncResult && syncResult.skipped && syncResult.reason === 'already-up-to-date' && syncResult.publishedAt) {
-                    const ageMs = Date.now() - new Date(syncResult.publishedAt).getTime();
-                    if (!isNaN(ageMs) && ageMs >= -5 * 60 * 1000 && ageMs < cooldownMinutes * 60 * 1000) {
-                        logger.info(
-                            'SCHEDULE',
-                            `检测到远端 GitHub 快照在冷却窗口 (${cooldownMinutes}m) 内已最新 (${syncResult.publishedAt}, by=${syncResult.publishedBy || 'remote'})，跳过重复巡检`
-                        );
-                        return;
-                    }
-                }
+                logger.info(
+                    'SCHEDULE',
+                    `定时检查 GitHub 快照完成：远端暂无更新快照 (${syncResult?.publishedAt || 'unknown'}, reason=${syncResult?.reason || 'up-to-date'})，保持当前中文精编内容不变`
+                );
+                return syncResult;
             } catch (syncErr) {
-                logger.warn('SCHEDULE', `从 GitHub 快照中转拉取未命中，回退至本地巡检流水线: ${syncErr.message}`);
+                logger.warn('SCHEDULE', `定时从 GitHub 快照拉取失败，保持当前本地快照不变 (不回退本地 RSS 抓取): ${syncErr.message}`);
+                return null;
+            }
+        }
+
+        if (this.stateManager) {
+            const phase = this.stateManager.get('collectionPhase');
+            const lastUpdated = this.stateManager.get('lastUpdated');
+            const newsData = this.stateManager.get('newsData');
+            if (
+                phase === 'completed' &&
+                lastUpdated &&
+                Array.isArray(newsData) &&
+                newsData.length > 0 &&
+                Date.now() - new Date(lastUpdated).getTime() < 10 * 60 * 1000
+            ) {
+                logger.info('SCHEDULE', `检测到过去 10 分钟内已完成新鲜发布 (${lastUpdated})，跳过本次重复巡检`);
+                return null;
             }
         }
 

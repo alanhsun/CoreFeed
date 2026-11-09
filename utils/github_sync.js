@@ -132,6 +132,11 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
     // 5. 推送至远端仓库分支
     if (!skipPush) {
         runGit(['push', '--force', remote, `${commitSha}:refs/heads/${branch}`]);
+        try {
+            runGit(['update-ref', `refs/remotes/${remote}/${branch}`, commitSha]);
+        } catch (_) {
+            // ignore
+        }
     }
 
     return {
@@ -148,6 +153,26 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
         clientId: resolvedClientId,
         rawUrl: config.githubSync?.snapshotUrl || config.agent?.githubSnapshotUrl
     };
+}
+
+function hasChineseText(text) {
+    if (!text || typeof text !== 'string') return false;
+    return /[\u4e00-\u9fa5]/.test(text);
+}
+
+/**
+ * 检测本地状态中的新闻是否为空、非快照精编或包含未翻译的英文标题
+ */
+function isLocalNewsPolluted(newsList) {
+    if (!Array.isArray(newsList) || newsList.length === 0) {
+        return true;
+    }
+    return newsList.some((item) => {
+        if (!item || typeof item !== 'object') return true;
+        if (item.aiCompiled === false) return true;
+        const title = String(item.translatedTitle || item.title || '').trim();
+        return !title || !hasChineseText(title);
+    });
 }
 
 /**
@@ -252,11 +277,12 @@ async function applySnapshotToRouter(
         await newsService.saveLocalData(normalizedNews);
         stateManager.set('collectionPhase', 'completed', false);
         stateManager.set('sourceStats', normalizedStats, false);
-        stateManager.updateNewsData(normalizedNews, normalizedFullPool);
+        stateManager.updateNewsData(normalizedNews, normalizedFullPool, nowIso);
     }
 
     if (stateManager) {
         stateManager.set('lastUpdated', nowIso, false);
+        stateManager.set('lastSnapshotPublishedAt', nowIso, false);
         if (publishedBy) {
             stateManager.set('lastPublishedBy', publishedBy, false);
         }
@@ -443,7 +469,7 @@ class GitHubSyncManager {
 
     buildCandidateEndpoints(primaryUrl) {
         const cleanUrl = String(primaryUrl || '').trim();
-        const endpoints = [{ url: cleanUrl, headers: {} }];
+        const endpoints = [];
 
         const rawMatch = cleanUrl.match(
             /^https:\/\/raw\.githubusercontent\.com\/([^/?#]+)\/([^/?#]+)\/([^/?#]+)\/([^?#]+)$/
@@ -456,10 +482,13 @@ class GitHubSyncManager {
                     Accept: 'application/vnd.github.v3.raw'
                 }
             });
+            endpoints.push({ url: cleanUrl, headers: {} });
             endpoints.push({
                 url: `https://ghfast.top/${cleanUrl}`,
                 headers: {}
             });
+        } else {
+            endpoints.push({ url: cleanUrl, headers: {} });
         }
 
         return endpoints;
@@ -569,6 +598,10 @@ class GitHubSyncManager {
         return this.pullAndApply(options);
     }
 
+    async pullFromGithubBranch(options = {}) {
+        return this.pullAndApply(options);
+    }
+
     async pullAndApply(options = {}) {
         const {
             snapshotUrl = null,
@@ -591,9 +624,24 @@ class GitHubSyncManager {
         this.lastSyncCheckAt = new Date().toISOString();
 
         try {
+            const currentNewsBefore = this.stateManager ? (this.stateManager.get('newsData') || []) : [];
+            const stateLastUpdatedBefore = this.stateManager ? this.stateManager.get('lastUpdated') : null;
+            const stateSnapshotAtBefore = this.stateManager ? this.stateManager.get('lastSnapshotPublishedAt') : null;
+            const knownSyncedAt = stateSnapshotAtBefore || this.lastSyncedPublishedAt || null;
+            const stateUpdatedMs = stateLastUpdatedBefore ? new Date(stateLastUpdatedBefore).getTime() : 0;
+            const knownSyncedMs = knownSyncedAt ? new Date(knownSyncedAt).getTime() : 0;
+            const localPolluted = isLocalNewsPolluted(currentNewsBefore);
+            const localStateIntact =
+                !localPolluted &&
+                knownSyncedMs > 0 &&
+                !isNaN(knownSyncedMs) &&
+                stateUpdatedMs > 0 &&
+                !isNaN(stateUpdatedMs) &&
+                stateUpdatedMs === knownSyncedMs;
+
             const { data, sourceUrl, notModified, etag } = await this.fetchRemoteSnapshot(snapshotUrl, {
-                useEtag: !force,
-                force
+                useEtag: !force && localStateIntact,
+                force: force || !localStateIntact
             });
             const newsList = Array.isArray(data?.news)
                 ? data.news
@@ -608,24 +656,15 @@ class GitHubSyncManager {
             const remotePublishedAt = data.publishedAt || data.lastUpdated || null;
             const remotePublishedBy = String(data.publishedBy || data.clientId || '').trim() || null;
             const remoteMs = remotePublishedAt ? new Date(remotePublishedAt).getTime() : 0;
-            const currentNews = this.stateManager ? (this.stateManager.get('newsData') || []) : [];
-            const stateLastUpdated = this.stateManager ? this.stateManager.get('lastUpdated') : null;
-            const lastKnownTime = stateLastUpdated
-                ? Math.max(
-                    this.lastSyncedPublishedAt ? new Date(this.lastSyncedPublishedAt).getTime() : 0,
-                    new Date(stateLastUpdated).getTime()
-                )
-                : 0;
 
-            if (
-                !force &&
-                currentNews.length > 0 &&
+            const isSameRemoteSnapshot =
+                localStateIntact &&
                 (notModified ||
                     (remoteMs > 0 &&
                         !isNaN(remoteMs) &&
-                        !isNaN(lastKnownTime) &&
-                        remoteMs <= lastKnownTime))
-            ) {
+                        remoteMs === knownSyncedMs));
+
+            if (!force && isSameRemoteSnapshot) {
                 this.lastSyncStatus = 'up-to-date';
                 this.lastSyncError = null;
                 this.lastSyncSourceUrl = sourceUrl;
@@ -653,8 +692,8 @@ class GitHubSyncManager {
                     snapshotUrl: sourceUrl,
                     publishedAt: remotePublishedAt,
                     publishedBy: remotePublishedBy || this.lastSyncedPublishedBy,
-                    lastUpdated: stateLastUpdated || remotePublishedAt,
-                    displayedCount: currentNews.length
+                    lastUpdated: stateLastUpdatedBefore || remotePublishedAt,
+                    displayedCount: currentNewsBefore.length
                 };
             }
 
@@ -698,6 +737,10 @@ class GitHubSyncManager {
     getStatus() {
         const statePublishedBy = this.stateManager ? this.stateManager.get('lastPublishedBy') : null;
         const publishedBy = statePublishedBy || this.lastSyncedPublishedBy || null;
+        const lastSnapshotPublishedAt =
+            (this.stateManager && this.stateManager.get('lastSnapshotPublishedAt')) ||
+            this.lastSyncedPublishedAt ||
+            null;
         const clientId = String(
             config.githubSync?.clientId ||
             config.agent?.clientId ||
@@ -730,7 +773,8 @@ class GitHubSyncManager {
             lastSyncCheckAt: this.lastSyncCheckAt,
             lastSyncedAt: this.lastSyncedAt,
             lastSyncAt: this.lastSyncedAt || this.lastSyncCheckAt || null,
-            lastSyncedPublishedAt: this.lastSyncedPublishedAt,
+            lastSyncedPublishedAt: this.lastSyncedPublishedAt || lastSnapshotPublishedAt,
+            lastSnapshotPublishedAt,
             lastSyncedPublishedBy: publishedBy,
             publishedBy,
             lastPublishedBy: publishedBy,
@@ -746,5 +790,6 @@ module.exports = {
     publishSnapshotToGitHub,
     applySnapshotToRouter,
     checkRemoteSnapshotCooldown,
+    isLocalNewsPolluted,
     GitHubSyncManager
 };

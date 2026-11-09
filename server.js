@@ -275,6 +275,8 @@ async function startServer() {
         }
 
         const preservedLastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
+        const preservedSnapshotAt = stateManager.get('lastSnapshotPublishedAt');
+        const preservedPublishedBy = stateManager.get('lastPublishedBy');
         const preservedAllEnhanced = stateManager.get('allEnhancedNews');
         let finalNewsData = stateManager.get('newsData');
         const isAlreadyCompiled = Array.isArray(finalNewsData) && finalNewsData.length > 0 && finalNewsData.every(item => item && item.aiCompiled);
@@ -299,9 +301,15 @@ async function startServer() {
             const poolToKeep = Array.isArray(preservedAllEnhanced) && preservedAllEnhanced.length >= deduped.length
                 ? preservedAllEnhanced
                 : deduped;
-            stateManager.updateNewsData(deduped, poolToKeep);
+            stateManager.updateNewsData(deduped, poolToKeep, preservedLastUpdated);
             if (preservedLastUpdated) {
                 stateManager.set('lastUpdated', preservedLastUpdated, false);
+            }
+            if (preservedSnapshotAt) {
+                stateManager.set('lastSnapshotPublishedAt', preservedSnapshotAt, false);
+            }
+            if (preservedPublishedBy) {
+                stateManager.set('lastPublishedBy', preservedPublishedBy, false);
             }
         }
         logger.info('SYSTEM', '本地新闻库加载完成', {
@@ -331,8 +339,9 @@ async function startServer() {
             app.locals.services = services;
             scheduleManager.start();
 
+            const githubSyncEnabled = Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true);
             if (
-                (config.githubSync?.enabled ?? config.agent?.githubSyncEnabled) &&
+                githubSyncEnabled &&
                 (config.githubSync?.syncOnStartup ?? true) &&
                 process.env.NODE_ENV !== 'test'
             ) {
@@ -348,8 +357,8 @@ async function startServer() {
                 });
             }
 
-            // 启动自愈：仅当本地缓存的新闻存在未翻译条目或缺失配图时，才在后台执行自动补全
-            if (Array.isArray(finalNewsData) && finalNewsData.length > 0 && services.aiService && services.newsAgentService) {
+            // 启动自愈：仅当未启用 GitHub 快照同步 (单机模式) 且本地缓存的新闻存在未翻译条目或缺失配图时，才在后台执行自动补全
+            if (!githubSyncEnabled && Array.isArray(finalNewsData) && finalNewsData.length > 0 && services.aiService && services.newsAgentService) {
                 const hasUntranslated = finalNewsData.some(item => !services.aiService.isChineseText(item.translatedTitle) || !services.aiService.isChineseText(item.summary));
                 const hasMissingImages = finalNewsData.some(item => !item.urlToImage);
                 if (hasUntranslated || hasMissingImages) {

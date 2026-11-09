@@ -16,6 +16,7 @@ class StateManager extends EventEmitter {
             summaryArticle: null,
             sourceStats: [],
             lastUpdated: null,
+            lastSnapshotPublishedAt: null,
             lastPublishedBy: null,
             isUpdating: false,
             collectionPhase: 'idle', // idle | collecting | collected | compiling | completed
@@ -95,12 +96,15 @@ class StateManager extends EventEmitter {
      * 更新新闻数据
      * @param {Array} newsData - 新闻数据
      * @param {Array} allEnhanced - 所有增强新闻
+     * @param {Date|string|null} customLastUpdated - 可选自定义更新时间
      */
-    updateNewsData(newsData, allEnhanced = null) {
+    updateNewsData(newsData, allEnhanced = null, customLastUpdated = null) {
+        const effectiveUpdated = customLastUpdated || new Date();
         this.setBatch({
             newsData: newsData || [],
             allEnhancedNews: allEnhanced || this.state.allEnhancedNews,
-            lastUpdated: new Date()
+            lastUpdated: effectiveUpdated,
+            lastSnapshotPublishedAt: null
         });
         
         logger.info('STATE', `新闻数据更新`, { 
@@ -184,6 +188,7 @@ class StateManager extends EventEmitter {
                 summaryArticle: null,
                 sourceStats: [],
                 lastUpdated: null,
+                lastSnapshotPublishedAt: null,
                 lastPublishedBy: null,
                 isUpdating: false,
                 collectionPhase: 'idle',
@@ -277,6 +282,7 @@ class StateManager extends EventEmitter {
             allEnhancedCount: this.state.allEnhancedNews?.length || 0,
             hasSummary: !!this.state.summaryArticle,
             lastUpdated: this.state.lastUpdated,
+            lastSnapshotPublishedAt: this.state.lastSnapshotPublishedAt || null,
             lastPublishedBy: this.state.lastPublishedBy || null,
             isUpdating: this.state.isUpdating,
             collectionPhase: this.state.collectionPhase,

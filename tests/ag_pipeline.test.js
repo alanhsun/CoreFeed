@@ -32,7 +32,7 @@ const { app, server, io, services } = require('../server');
 const { parseArgs: parseHarvestArgs, runHarvest } = require('../scripts/ag-harvest');
 const { parseArgs: parsePublishArgs, runPublish } = require('../scripts/ag-publish');
 const { parseArgs: parseAutoArgs, runAutoUpdate } = require('../scripts/ag-auto-update');
-const { publishSnapshotToGitHub, checkRemoteSnapshotCooldown } = require('../utils/github_sync');
+const { publishSnapshotToGitHub, checkRemoteSnapshotCooldown, isLocalNewsPolluted } = require('../utils/github_sync');
 
 const DATA_DIR = config.storage.dataDir || path.join(__dirname, '..', 'data');
 const TRACKED_DATA_FILES = [
@@ -969,14 +969,14 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             const diskNews = JSON.parse(fs.readFileSync(config.storage.newsFile, 'utf8'));
             assert.equal(diskNews.news.length, 2);
 
-            // 10c. Calling POST /api/agent/pull-github again with unchanged publishedAt skips re-application
+            // 10c. Calling POST /api/agent/pull-github again with force: false and unchanged publishedAt skips re-application
             const resPull2 = await fetch(`${baseUrl}/api/agent/pull-github`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Publish-Secret': 'router-sync-sec-123'
                 },
-                body: JSON.stringify({ snapshotUrl: mockSnapshotUrl })
+                body: JSON.stringify({ snapshotUrl: mockSnapshotUrl, force: false })
             });
             assert.equal(resPull2.status, 200);
             const pullBody2 = await resPull2.json();
@@ -1432,9 +1432,9 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(!html.includes('id="cfgDeepReadCount"'), 'SSR HTML must NOT contain #cfgDeepReadCount');
             assert.ok(!html.includes('id="cfgFreshnessHours"'), 'SSR HTML must NOT contain #cfgFreshnessHours');
 
-            // (c) Verify v2.5.2 cache busting, Bento Grid span class purity (no md:col-span-2 override), editorial keypoints, and CSS Grid min-width: 0 locks
-            assert.ok(html.includes('/css/style.css?v=2.5.2'), 'SSR HTML should include cache-busted /css/style.css?v=2.5.2');
-            assert.ok(html.includes('/js/main.js?v=2.5.2'), 'SSR HTML should include cache-busted /js/main.js?v=2.5.2');
+            // (c) Verify v2.5.3 cache busting, Bento Grid span class purity (no md:col-span-2 override), editorial keypoints, and CSS Grid min-width: 0 locks
+            assert.ok(html.includes('/css/style.css?v=2.5.3'), 'SSR HTML should include cache-busted /css/style.css?v=2.5.3');
+            assert.ok(html.includes('/js/main.js?v=2.5.3'), 'SSR HTML should include cache-busted /js/main.js?v=2.5.3');
             assert.ok(!html.includes('md:col-span-2'), 'SSR HTML must NOT include Tailwind md:col-span-2 that overrides .bento-span-* on desktop');
             assert.ok(html.includes('card-keypoints'), 'SSR HTML should render keypoints inside .card-keypoints');
             assert.ok(html.includes('card-keypoint-item'), 'SSR HTML should render keypoint items with .card-keypoint-item');
@@ -1549,6 +1549,188 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             services.scheduleManager.stop();
             delete process.env.AI_API_KEY;
             await new Promise((resolve) => mockUiGhServer.close(() => resolve()));
+        }
+    });
+
+    it('14. Plan 2B Router Protection: ScheduleManager never falls back to local RSS patrol when GitHub snapshot is older than cooldown, and GitHubSyncManager overwrites polluted/newer local English RSS state', async () => {
+        const threeHoursAgoIso = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+        let mockServerFail = false;
+        const mockSnapshotEtag = '"router-protect-etag-1"';
+        const mockChineseSnapshot = {
+            version: '2.0',
+            publishedAt: threeHoursAgoIso,
+            lastUpdated: threeHoursAgoIso,
+            publishedBy: 'antigravity-cloud-vm',
+            clientId: 'antigravity-cloud-vm',
+            news: [
+                {
+                    id: 'zh-snap-1',
+                    title: 'European Central Bank Announces New Cross-Border Payment Framework',
+                    translatedTitle: '欧洲央行宣布启动新一代跨境数字支付结算框架',
+                    summary: '欧洲央行正式发布新一代跨境实时清算标准，旨在降低欧元区与亚太市场间的跨境汇兑成本。',
+                    url: 'https://www.reuters.com/markets/ecb-payment-framework-2026',
+                    region: '欧洲',
+                    category: '财经',
+                    keyPoints: ['欧洲央行发布跨境清算新标准', '大幅降低跨国汇兑与结算成本'],
+                    aiCompiled: true,
+                    source: { id: 'reuters', name: 'Reuters (路透社)' }
+                }
+            ],
+            summary: {
+                title: '2026年11月9日 全球要闻深度综述（路由器防回退测试）',
+                content: '### 全球财经\n欧洲央行宣布启动新一代跨境数字支付结算框架 [NEWS_1]。'
+            },
+            sourceStats: [{ id: 'reuters', name: 'Reuters', count: 1, status: 'ok' }]
+        };
+
+        const mockGhServer = http.createServer((req, res) => {
+            if (mockServerFail) {
+                res.writeHead(500);
+                res.end('Internal Server Error');
+                return;
+            }
+            if (req.url && req.url.startsWith('/alanhsun/CoreFeed/ag-snapshot/latest.json')) {
+                const inm = req.headers['if-none-match'];
+                if (inm && inm === mockSnapshotEtag) {
+                    res.writeHead(304, { ETag: mockSnapshotEtag });
+                    res.end();
+                    return;
+                }
+                res.writeHead(200, {
+                    'Content-Type': 'application/json',
+                    ETag: mockSnapshotEtag
+                });
+                res.end(JSON.stringify(mockChineseSnapshot));
+                return;
+            }
+            res.writeHead(404);
+            res.end('Not Found');
+        });
+
+        await new Promise((resolve, reject) => {
+            mockGhServer.listen(0, '127.0.0.1', (err) => (err ? reject(err) : resolve()));
+        });
+        const ghPort = mockGhServer.address().port;
+        const mockSnapshotUrl = `http://127.0.0.1:${ghPort}/alanhsun/CoreFeed/ag-snapshot/latest.json`;
+
+        const originalRunPatrol = services.newsAgentService.runGlobalPatrolPipeline;
+        let patrolCallCount = 0;
+        services.newsAgentService.runGlobalPatrolPipeline = async (...args) => {
+            patrolCallCount += 1;
+            return originalRunPatrol.apply(services.newsAgentService, args);
+        };
+
+        try {
+            process.env.GITHUB_SNAPSHOT_URL = mockSnapshotUrl;
+            process.env.PUBLISH_SECRET = 'router-protect-sec';
+
+            // Initial sync so local state holds the 3-hour-old Chinese snapshot and ETag is cached
+            const initialPull = await services.githubSyncManager.pullAndApply({
+                snapshotUrl: mockSnapshotUrl,
+                force: true,
+                trigger: 'startup'
+            });
+            assert.equal(initialPull.applied, true);
+            assert.equal(stateManager.get('lastUpdated'), threeHoursAgoIso);
+            assert.equal(stateManager.get('lastSnapshotPublishedAt'), threeHoursAgoIso);
+            assert.equal(isLocalNewsPolluted(stateManager.get('newsData')), false);
+
+            // 14a. Remote snapshot is 3 hours old (> 30m cooldown) and already synced -> ScheduleManager.executeUpdate() MUST NOT call runGlobalPatrolPipeline()
+            await services.scheduleManager.executeUpdate();
+            assert.equal(
+                patrolCallCount,
+                0,
+                'ScheduleManager.executeUpdate() must NEVER fall back to runGlobalPatrolPipeline() when remote snapshot is older than 30m cooldown'
+            );
+            assert.equal(
+                stateManager.get('newsData')[0].translatedTitle,
+                '欧洲央行宣布启动新一代跨境数字支付结算框架',
+                'Existing Chinese news must remain intact when remote snapshot has not changed'
+            );
+
+            // Also verify when remote GitHub server is unreachable (500): ScheduleManager.executeUpdate() still never falls back to local RSS patrol
+            mockServerFail = true;
+            await services.scheduleManager.executeUpdate();
+            assert.equal(
+                patrolCallCount,
+                0,
+                'ScheduleManager.executeUpdate() must NEVER fall back to runGlobalPatrolPipeline() when GitHub snapshot fetch fails'
+            );
+            assert.equal(
+                stateManager.get('newsData')[0].translatedTitle,
+                '欧洲央行宣布启动新一代跨境数字支付结算框架'
+            );
+            mockServerFail = false;
+
+            // 14b. Simulate router 19:30 local English RSS pollution (newer lastUpdated > remotePublishedAt, untranslated English title, ETag cached)
+            const newerPollutedIso = new Date().toISOString();
+            stateManager.updateNewsData(
+                [
+                    {
+                        id: 'en-polluted-1',
+                        title: 'Breaking English RSS News Without Translation',
+                        translatedTitle: 'Breaking English RSS News Without Translation',
+                        summary: 'Raw English RSS summary scraped locally without AI key',
+                        aiCompiled: false
+                    }
+                ],
+                null,
+                newerPollutedIso
+            );
+            assert.equal(isLocalNewsPolluted(stateManager.get('newsData')), true);
+            assert.ok(
+                new Date(stateManager.get('lastUpdated')).getTime() > new Date(threeHoursAgoIso).getTime(),
+                'Polluted local state has a newer lastUpdated timestamp than the 3h-old GitHub snapshot'
+            );
+
+            // Calling pullAndApply({ force: false }) (or scheduleManager.executeUpdate()) must bypass 304 ETag and timestamp lockout and heal the state
+            const healRes = await services.githubSyncManager.pullAndApply({
+                snapshotUrl: mockSnapshotUrl,
+                force: false,
+                trigger: 'schedule'
+            });
+            assert.equal(healRes.applied, true, 'pullAndApply({ force: false }) must overwrite polluted English RSS state even when localLastUpdated > remotePublishedAt');
+            assert.equal(healRes.skipped, false);
+            assert.equal(
+                stateManager.get('newsData')[0].translatedTitle,
+                '欧洲央行宣布启动新一代跨境数字支付结算框架',
+                'Chinese GitHub snapshot headline must be restored after healing'
+            );
+            assert.equal(stateManager.get('lastUpdated'), threeHoursAgoIso);
+            assert.equal(stateManager.get('lastSnapshotPublishedAt'), threeHoursAgoIso);
+
+            // 14c. When remotePublishedAt !== lastSnapshotPublishedAt even if stateManager.lastUpdated is newer than remotePublishedAt, pullAndApply({ force: false }) overwrites
+            stateManager.set('lastUpdated', new Date(Date.now() + 60 * 1000).toISOString(), false);
+            stateManager.set('lastSnapshotPublishedAt', new Date(Date.now() - 6 * 3600 * 1000).toISOString(), false);
+            const divergedRes = await services.githubSyncManager.pullAndApply({
+                snapshotUrl: mockSnapshotUrl,
+                force: false,
+                trigger: 'periodic'
+            });
+            assert.equal(divergedRes.applied, true, 'pullAndApply({ force: false }) must overwrite when lastSnapshotPublishedAt !== remotePublishedAt');
+            assert.equal(stateManager.get('lastSnapshotPublishedAt'), threeHoursAgoIso);
+
+            // 14d. Calling POST /api/agent/pull-github without force (e.g. Web UI "同步最新" button) defaults to force: true and always overwrites
+            const resWebUiDefault = await fetch(`${baseUrl}/api/agent/pull-github`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'CoreFeed-WebUI'
+                },
+                body: JSON.stringify({
+                    trigger: 'ui'
+                })
+            });
+            assert.equal(resWebUiDefault.status, 200);
+            const webUiDefaultBody = await resWebUiDefault.json();
+            assert.equal(webUiDefaultBody.success, true);
+            assert.equal(webUiDefaultBody.applied, true, 'POST /api/agent/pull-github without explicit force: false must default to force: true and apply');
+            assert.equal(webUiDefaultBody.skipped, false);
+        } finally {
+            services.newsAgentService.runGlobalPatrolPipeline = originalRunPatrol;
+            delete process.env.GITHUB_SNAPSHOT_URL;
+            delete process.env.PUBLISH_SECRET;
+            await new Promise((resolve) => mockGhServer.close(() => resolve()));
         }
     });
 });

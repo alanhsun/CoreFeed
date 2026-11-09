@@ -593,7 +593,7 @@ class CoreFeedApp {
                     'X-Requested-With': 'CoreFeed-WebUI'
                 },
                 body: JSON.stringify({
-                    force: options.force !== undefined ? Boolean(options.force) : false,
+                    force: options.force !== undefined ? Boolean(options.force) : true,
                     trigger: 'ui'
                 })
             });

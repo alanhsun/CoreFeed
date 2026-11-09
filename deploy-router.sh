@@ -178,6 +178,27 @@ post_schedule_config() {
   return 1
 }
 
+pull_github_snapshot() {
+  _payload='{"force":true,"trigger":"ui"}'
+  _url="http://127.0.0.1:${APP_PORT}/api/agent/pull-github"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -X POST "$_url" -H "X-Requested-With: CoreFeed-WebUI" -H "Content-Type: application/json" -d "$_payload" >/dev/null 2>&1 && return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO- --header="X-Requested-With: CoreFeed-WebUI" --header="Content-Type: application/json" --post-data="$_payload" "$_url" >/dev/null 2>&1 && return 0
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    docker exec "${CONTAINER_NAME}" node -e '
+      fetch("http://127.0.0.1:3120/api/agent/pull-github", {
+        method: "POST",
+        headers: { "X-Requested-With": "CoreFeed-WebUI", "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true, trigger: "ui" })
+      }).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1));
+    ' >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
 echo "========================================================"
 echo "🚀 聚核 CoreFeed v2.0 -> 软路由快速更新与部署"
 echo "   安装目录: ${REMOTE_DIR}"
@@ -288,8 +309,8 @@ docker run -d \
   --restart unless-stopped \
   -p "${APP_PORT}:3120" \
   -e NODE_ENV=production \
-  -e PORT=3120 \
   -e TZ=Asia/Shanghai \
+  -e PORT=3120 \
   --env-file "${REMOTE_DIR}/.env" \
   -v "${REMOTE_DIR}/data:/app/data" \
   -v "${REMOTE_DIR}/logs:/app/logs" \
@@ -310,6 +331,9 @@ while [ "$WAIT_COUNT" -lt "$WAIT_RETRIES" ]; do
   if post_schedule_config; then
     SCHEDULE_SYNCED="1"
     echo "⏰ 已激活每日早中晚三次 (08:00, 12:30, 19:30 Asia/Shanghai) 自动更新调度"
+    if pull_github_snapshot; then
+      echo "🔄 已从 GitHub 快照分支 (ag-snapshot/latest.json) 强制同步最新中文精编要闻"
+    fi
     break
   fi
   WAIT_COUNT=$((WAIT_COUNT + 1))

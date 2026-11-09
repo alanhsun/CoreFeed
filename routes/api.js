@@ -188,10 +188,11 @@ function initializeApiRoutes(services, io, stateManager) {
                 });
             }
 
+            const forcePull = req.body?.force !== undefined ? Boolean(req.body.force) : true;
             const result = await githubSyncManager.pullAndApply({
                 snapshotUrl: req.body?.snapshotUrl || null,
-                force: Boolean(req.body?.force),
-                trigger: req.body?.trigger || 'api'
+                force: forcePull,
+                trigger: req.body?.trigger || (isWebUiDefaultPull ? 'ui' : 'api')
             });
 
             res.json(result);
@@ -373,6 +374,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 'completed'
             );
             stateManager.set('lastUpdated', nowIso, false);
+            stateManager.set('lastSnapshotPublishedAt', nowIso, false);
             if (publishedBy) {
                 stateManager.set('lastPublishedBy', publishedBy, false);
             }
