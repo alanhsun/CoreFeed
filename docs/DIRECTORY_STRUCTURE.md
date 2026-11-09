@@ -21,7 +21,7 @@ CoreFeed/
 ├── scripts/
 │   ├── ag-harvest.js              # Stage 1：全球信源并发采集与候选池导出 CLI
 │   ├── ag-publish.js              # Stage 2：并查集二次聚类、引注渲染与 GitHub 快照发布 CLI
-│   └── ag-auto-update.js          # 全自动多客户端协同更新编排脚本 (冷却预检->采集->编译->发布->核验)
+│   └── ag-auto-update.js          # 全自动多客户端协同更新与常驻定时守护进程 (--daemon / --status)
 ├── routes/
 │   └── api.js                     # 核心 RESTful API 路由定义
 ├── middleware/
@@ -40,6 +40,6 @@ CoreFeed/
 │   ├── js/main.js                 # 前端控制器、多维筛选与实时渐进渲染
 │   └── images/logo.png            # 品牌 Logo
 └── tests/
-    ├── ag_pipeline.test.js        # 发布接口、CLI 流水线与方案 2B 协同端到端测试套件 (14 项测试)
+    ├── ag_pipeline.test.js        # 发布接口、CLI 流水线与方案 2B 协同端到端测试套件 (15 项测试)
     └── deploy_router.test.js      # 软路由一键部署与热更新脚本端到端测试套件 (4 项测试)
 ```

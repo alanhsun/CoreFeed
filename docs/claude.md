@@ -19,11 +19,15 @@ npm start
 # Run 4-stage automated cooldown check -> harvest -> compile -> publish -> verify pipeline
 npm run ag:auto
 
+# Start resident background scheduled daemon (08:00, 12:30, 19:30 Asia/Shanghai) & check status
+npm run ag:daemon
+npm run ag:status
+
 # Run step-by-step CLI tools
 npm run ag:harvest
 npm run ag:publish
 
-# Run 18-test E2E automated test suite (non-destructive backup/restore of data/)
+# Run 19-test E2E automated test suite (non-destructive backup/restore of data/)
 npm test
 ```
 

@@ -1,7 +1,7 @@
 /**
  * CoreFeed v2.0 — Plan 2B 发布接口、CLI 流水线、多客户端协同与 Swiss Editorial UI 端到端测试套件
  *
- * 覆盖范围 (14 项端到端测试)：
+ * 覆盖范围 (15 项端到端测试)：
  *   1. 服务与 CLI 模块导出契约校验
  *   2. `POST /api/agent/publish` 鉴权校验 (401/200)
  *   3. `POST /api/agent/publish` 非法载荷拦截 (400)
@@ -16,6 +16,7 @@
  *  12. 多客户端 30 分钟冷却防冲突协调与 ETag `304 Not Modified` 轮询
  *  13. Swiss Editorial Bento UI SSR (`?v=2.5.4`)、深读组件彻底移除与一键同步验证
  *  14. 方案 2B 软路由防回退保护与英文生肉污染自动自愈验证
+ *  15. 无人值守 100% 纯正中文编译契约 (`<=32` 字标题、`80-130` 字摘要、3 条中文要点、引注综述) 与 `ag:daemon` / `ag:status` 调度支持
  *
  * 安全保证：测试开始前自动备份 `data/*.json` 至内存，测试结束后完整还原现场数据。
  */
@@ -38,7 +39,7 @@ const stateManager = require('../services/state_manager');
 const { app, server, io, services } = require('../server');
 const { parseArgs: parseHarvestArgs, runHarvest } = require('../scripts/ag-harvest');
 const { parseArgs: parsePublishArgs, runPublish } = require('../scripts/ag-publish');
-const { parseArgs: parseAutoArgs, runAutoUpdate } = require('../scripts/ag-auto-update');
+const { parseArgs: parseAutoArgs, runAutoUpdate, getDaemonStatus, getNextExecutionTime } = require('../scripts/ag-auto-update');
 const { publishSnapshotToGitHub, checkRemoteSnapshotCooldown, isLocalNewsPolluted } = require('../utils/github_sync');
 
 const DATA_DIR = config.storage.dataDir || path.join(__dirname, '..', 'data');
@@ -48,7 +49,8 @@ const TRACKED_DATA_FILES = [
     'state.json',
     'settings.json',
     'ag_candidates.json',
-    'ag_compiled.json'
+    'ag_compiled.json',
+    'ag_daemon_status.json'
 ];
 
 describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () => {
@@ -1730,6 +1732,161 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             delete process.env.GITHUB_SNAPSHOT_URL;
             delete process.env.PUBLISH_SECRET;
             await new Promise((resolve) => mockGhServer.close(() => resolve()));
+        }
+    });
+
+    it('15. Unattended Chinese compilation contract (100% Chinese titles/summaries/keyPoints/briefing) & ag:daemon / ag:status schedule support', async () => {
+        // 15a. Verify package.json and ecosystem.config.js expose daemon & status scripts
+        const pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+        assert.ok(pkgJson.scripts['ag:daemon'], 'package.json must define ag:daemon script');
+        assert.ok(pkgJson.scripts['ag:status'], 'package.json must define ag:status script');
+        assert.ok(pkgJson.scripts['ag:daemon:status'], 'package.json must define ag:daemon:status script');
+        assert.ok(pkgJson.scripts['pm2:daemon'], 'package.json must define pm2:daemon script');
+        assert.ok(pkgJson.scripts['ag:daemon'].includes('ag-auto-update.js') && pkgJson.scripts['ag:daemon'].includes('--daemon'));
+        assert.ok(pkgJson.scripts['ag:status'].includes('ag-auto-update.js') && pkgJson.scripts['ag:status'].includes('--status'));
+
+        const ecosystemConfig = require('../ecosystem.config.js');
+        assert.ok(Array.isArray(ecosystemConfig.apps), 'ecosystem.config.js must export apps array');
+        const daemonApp = ecosystemConfig.apps.find(a => a.name === 'corefeed-ag-daemon');
+        assert.ok(daemonApp, 'ecosystem.config.js should include corefeed-ag-daemon app');
+        assert.ok(String(daemonApp.script).includes('ag-auto-update.js'));
+
+        // 15b. Verify parseAutoArgs(--daemon / --status), getNextExecutionTime, and getDaemonStatus
+        const daemonArgs = parseAutoArgs(['--daemon', '--client-id=daemon-test-node']);
+        assert.equal(daemonArgs.daemon, true);
+        assert.equal(daemonArgs.clientId, 'daemon-test-node');
+
+        const statusArgs = parseAutoArgs(['--status']);
+        assert.equal(statusArgs.status, true);
+
+        assert.equal(typeof getNextExecutionTime, 'function');
+        const nextIso = getNextExecutionTime(['08:00', '12:30', '19:30']);
+        const nextDate = new Date(nextIso);
+        assert.ok(!isNaN(nextDate.getTime()) && nextDate.getTime() > Date.now(), 'getNextExecutionTime must return a future ISO date');
+        const utcHm = `${String(nextDate.getUTCHours()).padStart(2, '0')}:${String(nextDate.getUTCMinutes()).padStart(2, '0')}`;
+        assert.ok(['00:00', '04:30', '11:30'].includes(utcHm), `UTC time ${utcHm} must match 08:00, 12:30, or 19:30 Asia/Shanghai`);
+
+        assert.equal(typeof getDaemonStatus, 'function');
+        const dStatus = getDaemonStatus({ clientId: 'daemon-test-node' });
+        assert.deepEqual(dStatus.scheduleTimes, ['08:00', '12:30', '19:30']);
+        assert.equal(dStatus.timezone, 'Asia/Shanghai');
+        assert.ok(dStatus.nextExecution, 'getDaemonStatus must report nextExecution');
+        assert.ok(dStatus.nextExecutionShanghai && dStatus.nextExecutionShanghai.includes('Asia/Shanghai'));
+        assert.deepEqual(dStatus.cronExpressions.UTC, ['0 0 * * *', '30 4 * * *', '30 11 * * *']);
+
+        // 15c. Verify unattended runAutoUpdate compiles raw English candidates into 100% pure Chinese articles + briefing and pushes to ag-snapshot
+        const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'corefeed-unattended-zh-'));
+        const bareRemoteDir = path.join(tmpRoot, 'remote.git');
+        const workRepoDir = path.join(tmpRoot, 'work');
+        const candidatesPath = path.join(tmpRoot, 'ag_candidates.json');
+        const compiledPath = path.join(tmpRoot, 'ag_compiled.json');
+        const nowIso = new Date().toISOString();
+
+        try {
+            fs.mkdirSync(bareRemoteDir, { recursive: true });
+            fs.mkdirSync(workRepoDir, { recursive: true });
+            execFileSync('git', ['init', '--bare', bareRemoteDir], { stdio: 'ignore' });
+            execFileSync('git', ['init', workRepoDir], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'config', 'user.name', 'Test User'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'remote', 'add', 'origin', bareRemoteDir], { stdio: 'ignore' });
+            fs.writeFileSync(path.join(workRepoDir, 'README.md'), '# Test\n', 'utf8');
+            execFileSync('git', ['-C', workRepoDir, 'add', 'README.md'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'commit', '-m', 'init'], { stdio: 'ignore' });
+            execFileSync('git', ['-C', workRepoDir, 'branch', '-M', 'main'], { stdio: 'ignore' });
+
+            const englishCandidates = [
+                {
+                    id: 'en-cand-1',
+                    title: 'Federal Reserve Signals Steady Interest Rate Policy Amid Global Trade Shifts',
+                    description: 'Central bank policymakers emphasized data-dependent monetary policy decisions while inflation moderates across major economies.',
+                    content: 'Federal Reserve officials indicated on Monday that interest rates will remain steady as inflation continues to cool and global supply chains stabilize.',
+                    url: 'https://www.reuters.com/markets/fed-policy-steady-2026',
+                    urlToImage: 'https://www.reuters.com/img/fed.jpg',
+                    publishedAt: nowIso,
+                    region: '美国',
+                    category: '财经',
+                    source: { id: 'reuters', name: 'Reuters (路透社)', authority: 99 },
+                    relatedSources: [],
+                    sourceCount: 1
+                },
+                {
+                    id: 'en-cand-2',
+                    title: 'European Space Agency Launches Next-Generation Earth Observation Satellite',
+                    description: 'The new orbital sensor will monitor ocean temperatures, polar ice thickness, and carbon emissions with unprecedented precision.',
+                    content: 'European Space Agency engineers confirmed successful orbital insertion of the Sentinel-Next satellite from Kourou spaceport.',
+                    url: 'https://www.bbc.com/news/science-esa-satellite-2026',
+                    urlToImage: 'https://www.bbc.com/img/esa.jpg',
+                    publishedAt: nowIso,
+                    region: '欧洲',
+                    category: '科技',
+                    source: { id: 'bbc', name: 'BBC News (英国广播公司)', authority: 95 },
+                    relatedSources: [],
+                    sourceCount: 1
+                }
+            ];
+
+            fs.writeFileSync(candidatesPath, JSON.stringify({
+                harvestedAt: nowIso,
+                rawCount: 2,
+                candidateCount: 2,
+                sourceStats: [{ id: 'reuters', name: 'Reuters', count: 1, status: 'ok' }],
+                fullCandidates: englishCandidates,
+                llmInput: englishCandidates.map((c, idx) => ({
+                    index: idx + 1,
+                    id: c.id,
+                    sourceName: c.source.name,
+                    title: c.title,
+                    excerpt: c.description
+                }))
+            }, null, 2), 'utf8');
+
+            process.env.PUBLISH_SECRET = 'unattended-zh-sec';
+            config.githubSync.pushEnabled = true;
+            const autoRes = await runAutoUpdate({
+                candidates: candidatesPath,
+                compiled: compiledPath,
+                target: baseUrl,
+                secret: 'unattended-zh-sec',
+                skipHarvest: true,
+                useExistingCompiled: false,
+                fallbackCompile: true,
+                force: true,
+                pushToGithub: true,
+                repoDir: workRepoDir,
+                clientId: 'unattended-daemon-test'
+            });
+
+            assert.equal(autoRes.success, true);
+            assert.equal(autoRes.displayedCount, 2);
+            assert.equal(autoRes.healthVerified, true);
+            assert.ok(autoRes.githubSync && autoRes.githubSync.pushed, 'Unattended runAutoUpdate must push snapshot to GitHub ag-snapshot');
+
+            const liveNews = stateManager.get('newsData');
+            assert.equal(liveNews.length, 2);
+            assert.equal(isLocalNewsPolluted(liveNews), false, 'Unattended compiled output must NEVER be flagged as polluted English RSS');
+
+            for (const item of liveNews) {
+                assert.equal(item.aiCompiled, true, 'Every article must have aiCompiled: true');
+                assert.ok(/[\u4e00-\u9fff]/.test(item.translatedTitle), `translatedTitle must contain Chinese characters: ${item.translatedTitle}`);
+                assert.ok(item.translatedTitle.length <= 32, `translatedTitle length (${item.translatedTitle.length}) must be <= 32: ${item.translatedTitle}`);
+                assert.ok(/[\u4e00-\u9fff]/.test(item.summary), `summary must contain Chinese characters: ${item.summary}`);
+                assert.ok(
+                    item.summary.length >= 80 && item.summary.length <= 130,
+                    `summary length (${item.summary.length}) must be 80-130 chars: ${item.summary}`
+                );
+                assert.ok(Array.isArray(item.keyPoints) && item.keyPoints.length === 3, 'Each article must have strictly 3 keyPoints');
+                for (const kp of item.keyPoints) {
+                    assert.ok(/[\u4e00-\u9fff]/.test(kp), `keyPoint must contain Chinese characters: ${kp}`);
+                }
+            }
+
+            const liveSummary = stateManager.get('summaryArticle');
+            assert.ok(liveSummary && /[\u4e00-\u9fff]/.test(liveSummary.title), 'summaryArticle must have a Chinese title');
+            assert.ok(liveSummary.htmlContent.includes('class="news-ref-link"'), 'summaryArticle must render [NEWS_k] citation links');
+        } finally {
+            delete process.env.PUBLISH_SECRET;
+            fs.rmSync(tmpRoot, { recursive: true, force: true });
         }
     });
 });

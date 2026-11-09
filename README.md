@@ -25,6 +25,7 @@
 - **`npm run ag:harvest` (`scripts/ag-harvest.js`)**：并发采集全球 37 大信源、跨源去重、补全缺失 `og:image` 高清配图，输出候选池 `data/ag_candidates.json`。
 - **`npm run ag:publish` (`scripts/ag-publish.js`)**：读取编译结果 `data/ag_compiled.json`，执行并查集（Union-Find）二次语义合并、渲染 `[NEWS_k]` 引注锚点，默认通过 Git Plumbing 无感推送至 GitHub `ag-snapshot/latest.json` 独立孤儿分支，并支持向目标站点 `POST /api/agent/publish` 实时推送。
 - **`npm run ag:auto` (`scripts/ag-auto-update.js`)**：端到端四阶段闭环编排（**30 分钟多客户端冷却预检** → `Harvest` → `AI/Fallback Compile` → **推送 `ag-snapshot/latest.json` 及目标站点** → `/api/health` 在线健康核验）。
+- **`npm run ag:daemon` / `npm run ag:status` (`scripts/ag-auto-update.js --daemon` / `--status`)**：本机后台常驻定时采编守护进程（严格按 `Asia/Shanghai` 北京时间每日 `08:00, 12:30, 19:30` 自动执行全流程采编、100% 纯正中文编译并推送到 `origin/ag-snapshot/latest.json`）及运行状态/PID/下次执行时间查询工具。
 
 ### 3. 瑞士纸媒风 12 列不对称 Bento 网格阅读体验 (`views/index.ejs` & `public/css/style.css`)
 - 采用温暖宣纸白 (`#F6F5F1`) 与深曜石碳黑 (`#090A0C`) 双主题，搭配国际朱砂红 (`#C83214`) 单一高纯度视觉强调色与 1px 裸露分割线。
@@ -93,7 +94,7 @@ CoreFeed/
 │   ├── css/style.css              # Swiss Editorial & Asymmetric Bento 设计系统样式表
 │   └── js/main.js                 # 前端状态水合、Bento 动态渲染、多维筛选与实时同步控制器
 └── tests/
-    ├── ag_pipeline.test.js        # 发布接口、CLI 流水线与方案 2B 协同端到端测试套件 (14 项测试)
+    ├── ag_pipeline.test.js        # 发布接口、CLI 流水线与方案 2B 协同端到端测试套件 (15 项测试)
     └── deploy_router.test.js      # 软路由一键部署与热更新脚本端到端测试套件 (4 项测试)
 ```
 
@@ -126,6 +127,53 @@ node scripts/ag-auto-update.js --force --client-id=alan-windows-pc --site http:/
 # 仅将已编译的 data/ag_compiled.json 推送至 GitHub ag-snapshot 及软路由：
 node scripts/ag-publish.js --site http://10.10.20.10:3120 --file data/ag_compiled.json
 ```
+
+### 本机与多平台定时任务配置（每日早 08:00、中 12:30、晚 19:30 自动采集与推送）
+
+无论在云端 Antigravity 容器还是本地 Windows / macOS / Linux 电脑上，均可按以下任一方式（或双重保障组合）配置每天早 `08:00`、中 `12:30`、晚 `19:30`（北京时间 `Asia/Shanghai`）自动新闻收集、中文精编与 GitHub `ag-snapshot` 推送：
+
+#### 1) 方式 A：本机常驻定时守护进程（跨平台通用，开箱即用）
+```bash
+# 直接在前台或 nohup 后台启动内置 Asia/Shanghai 时区的定时采编守护进程
+npm run ag:daemon
+
+# 或在 Linux / 云端容器中使用 nohup 后台常驻运行（自动记录 PID 至 logs/ag-daemon.pid 及状态至 data/ag_daemon_status.json）
+nohup node scripts/ag-auto-update.js --daemon --client-id=antigravity-cloud-vm --target=http://127.0.0.1:3120 > logs/ag-daemon.log 2>&1 &
+
+# 随时查看守护进程在线状态、PID、下次触发时间 (北京时间 & UTC) 及最近一次快照发布信息
+npm run ag:status
+
+# 若已安装 PM2，也可一键将定时采编守护进程纳入 PM2 生产环境托管
+npm run pm2:daemon
+```
+
+#### 2) 方式 B：Antigravity 客户端内置 `schedule` 定时唤醒任务
+在 Antigravity 对话中可通过内置 `schedule` 工具（设置 `IsDaemon=true`）注册每日早、中、晚常驻 Cron 任务：
+
+| 档期 | 北京时间 (`Asia/Shanghai`, `UTC+8`) | UTC 时间 (`Etc/UTC`, `UTC+0`) | 美西时间 (`America/Los_Angeles`, `UTC-8`) |
+|---|---|---|---|
+| **早间档 (08:00 CST)** | `0 8 * * *` | `0 0 * * *` (`00:00 UTC`) | `0 16 * * *` (`16:00 PST`) |
+| **午间档 (12:30 CST)** | `30 12 * * *` | `30 4 * * *` (`04:30 UTC`) | `30 20 * * *` (`20:30 PST`) |
+| **晚间档 (19:30 CST)** | `30 19 * * *` | `30 11 * * *` (`11:30 UTC`) | `30 3 * * *` (`03:30 PST`) |
+
+标准定时唤醒 Prompt 模板：
+> 在 `/home/antigravity/alanhsun/CoreFeed` 执行定时新闻收集与中文精编发布：运行 `npm run ag:harvest` 采集候选集，将 `data/ag_candidates.json` 全部候选新闻深度编译为 100% 纯正中文（`<=32` 字标题、`80-130` 字摘要、3 条核心要点、同事件 `duplicateGroups` 及带 `[NEWS_k]` 引注的《今日全球要闻深度综述》）写入 `data/ag_compiled.json`，随后运行 `node scripts/ag-publish.js --github --force` 推送至 `origin/ag-snapshot` (`latest.json`) 并同步更新本地 `:3120` 服务（或直接执行 `node scripts/ag-auto-update.js --force`）。
+
+#### 3) 方式 C：本地电脑操作系统定时任务（Windows 任务计划程序 / macOS & Linux Crontab）
+- **Windows PowerShell（一键注册早 08:00、中 12:30、晚 19:30 三个计划任务）**：
+  ```powershell
+  $RepoDir = "C:\path\to\CoreFeed"
+  schtasks /Create /F /SC DAILY /ST 08:00 /TN "CoreFeed_Morning_0800" /TR "cmd /c cd /d `"$RepoDir`" && npm run ag:auto"
+  schtasks /Create /F /SC DAILY /ST 12:30 /TN "CoreFeed_Midday_1230"  /TR "cmd /c cd /d `"$RepoDir`" && npm run ag:auto"
+  schtasks /Create /F /SC DAILY /ST 19:30 /TN "CoreFeed_Evening_1930" /TR "cmd /c cd /d `"$RepoDir`" && npm run ag:auto"
+  ```
+- **macOS / Linux (`crontab -e`)**：
+  ```cron
+  CRON_TZ=Asia/Shanghai
+  0 8 * * * cd /path/to/CoreFeed && /usr/bin/env node scripts/ag-auto-update.js >> logs/ag-cron.log 2>&1
+  30 12 * * * cd /path/to/CoreFeed && /usr/bin/env node scripts/ag-auto-update.js >> logs/ag-cron.log 2>&1
+  30 19 * * * cd /path/to/CoreFeed && /usr/bin/env node scripts/ag-auto-update.js >> logs/ag-cron.log 2>&1
+  ```
 
 ---
 
@@ -184,7 +232,7 @@ cp .env.example .env
 npm start
 ```
 
-### 2. 运行端到端自动化测试套件 (18/18 测试用例)
+### 2. 运行端到端自动化测试套件 (19/19 测试用例)
 ```bash
 npm test
 ```

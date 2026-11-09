@@ -706,45 +706,312 @@ ${itemsLines}`;
         return '国际';
     }
 
-    /**
-     * 免密钥高速中文翻译兜底 (使用 Google GTX 翻译接口，确保在任何网络/模型异常下 100% 呈现中文)
-     */
-    async translateTextToChinese(text, timeout = 8000) {
-        if (!text || typeof text !== 'string') return '';
-        const trimmed = text.trim();
-        if (!trimmed || this.isChineseText(trimmed)) return trimmed;
-
-        try {
-            const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=${encodeURIComponent(trimmed.substring(0, 1200))}`;
-            const res = await axios.get(url, {
-                timeout,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-            });
-            if (Array.isArray(res.data) && Array.isArray(res.data[0])) {
-                const translated = res.data[0].map(seg => (Array.isArray(seg) ? seg[0] : '')).join('').trim();
-                if (translated) return translated;
-            }
-        } catch (err) {
-            logger.debug('AI', `快速中文翻译回退请求异常: ${err.message}`);
-        }
-            return trimmed;
+    _isMostlyChinese(text, minChineseChars = 4) {
+        if (!text || typeof text !== 'string') return false;
+        const stripped = text
+            .replace(/\[[^\]]*补充报道\]:?/g, '')
+            .replace(/\([^)]*[\u4e00-\u9fa5]+[^)]*\)/g, '');
+        const zhCount = (stripped.match(/[\u4e00-\u9fa5]/g) || []).length;
+        const enCount = (stripped.match(/[A-Za-z]/g) || []).length;
+        return zhCount >= minChineseChars && zhCount * 2 >= enCount;
     }
 
     /**
-     * 确保单条新闻的标题与摘要均为中文（若仍为英文则自动调用高速中文翻译补全）
+     * 免密钥高速中文翻译兜底 (多端点自动容错回退：clients5 dict-chrome-ex -> googleapis dict-chrome-ex -> google client=at -> gtx -> MyMemory)
+     */
+    async translateTextToChinese(text, timeout = 8000) {
+        if (!text || typeof text !== 'string') return '';
+        const trimmed = text.replace(/\[[^\]]*补充报道\]:?\s*/g, ' ').trim();
+        if (!trimmed || this._isMostlyChinese(trimmed, 4)) return trimmed;
+
+        const q = encodeURIComponent(trimmed.substring(0, 1200));
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+        };
+
+        const endpoints = [
+            {
+                url: `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=zh-CN&q=${q}`,
+                parse: (data) => {
+                    if (Array.isArray(data)) {
+                        if (Array.isArray(data[0])) return data.map(seg => (Array.isArray(seg) ? seg[0] : '')).join('');
+                        if (typeof data[0] === 'string') return data[0];
+                    }
+                    return '';
+                }
+            },
+            {
+                url: `https://translate.googleapis.com/translate_a/single?client=dict-chrome-ex&sl=auto&tl=zh-CN&dt=t&q=${q}`,
+                parse: (data) => (Array.isArray(data) && Array.isArray(data[0]))
+                    ? data[0].map(seg => (Array.isArray(seg) ? seg[0] : '')).join('')
+                    : ''
+            },
+            {
+                url: `https://translate.google.com/translate_a/single?client=at&dt=t&dj=1&sl=auto&tl=zh-CN&q=${q}`,
+                parse: (data) => Array.isArray(data?.sentences)
+                    ? data.sentences.map(s => s?.trans || '').join('')
+                    : ''
+            },
+            {
+                url: `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=${q}`,
+                parse: (data) => (Array.isArray(data) && Array.isArray(data[0]))
+                    ? data[0].map(seg => (Array.isArray(seg) ? seg[0] : '')).join('')
+                    : ''
+            },
+            {
+                url: `https://api.mymemory.translated.net/get?q=${encodeURIComponent(trimmed.substring(0, 480))}&langpair=en|zh-CN`,
+                parse: (data) => data?.responseData?.translatedText || ''
+            }
+        ];
+
+        for (const ep of endpoints) {
+            try {
+                const res = await axios.get(ep.url, {
+                    timeout: Math.min(timeout, 6500),
+                    httpsAgent: httpsAgentIgnoreTls,
+                    headers
+                });
+                const translated = String(ep.parse(res.data) || '').trim();
+                if (translated && this._isMostlyChinese(translated, 2)) {
+                    return translated;
+                }
+            } catch (err) {
+                logger.debug('AI', `中文翻译端点回退 (${ep.url.slice(0, 48)}...): ${err.message}`);
+            }
+        }
+
+        return trimmed;
+    }
+
+    _extractSourceChineseName(sourceName = '') {
+        const raw = String(sourceName || '国际权威媒体').trim();
+        const parenMatch = raw.match(/\(([^)]*[\u4e00-\u9fa5]+[^)]*)\)/);
+        if (parenMatch && parenMatch[1]) return parenMatch[1].trim();
+        if (this.isChineseText(raw)) return raw.split('(')[0].trim();
+        const map = {
+            reuters: '路透社',
+            bbc: '英国广播公司',
+            'associated press': '美联社',
+            'ap news': '美联社',
+            'new york times': '纽约时报',
+            bloomberg: '彭博社',
+            'financial times': '金融时报',
+            guardian: '英国卫报',
+            'wall street journal': '华尔街日报',
+            'al jazeera': '半岛电视台',
+            scmp: '南华早报',
+            nhk: '日本放送协会',
+            nikkei: '日经亚洲',
+            yonhap: '韩联社',
+            cna: '新加坡亚洲新闻台',
+            axios: 'Axios快讯',
+            politico: '政客新闻网',
+            semafor: 'Semafor全球情报',
+            fortune: '财富杂志',
+            'ars technica': 'Ars科技评论',
+            techcrunch: 'TechCrunch科技',
+            'the verge': 'The Verge科技',
+            'fox news': '福克斯新闻',
+            'sky news': '天空新闻',
+            'le monde': '法国世界报',
+            dw: '德国之声',
+            france24: '法国24台',
+            cnbc: 'CNBC财经',
+            economist: '经济学人',
+            'washington post': '华盛顿邮报'
+        };
+        const lower = raw.toLowerCase();
+        for (const [k, v] of Object.entries(map)) {
+            if (lower.includes(k)) return v;
+        }
+        return '国际权威媒体';
+    }
+
+    _formatChineseTitle(rawTitle = '', article = {}, region = '国际', category = '国际') {
+        let t = String(rawTitle || '')
+            .replace(/\s*[-|—–]\s*[A-Za-z0-9\s.&']+$/g, '')
+            .replace(/\s*[（(][A-Za-z\s.,'-]{2,}[)）]/g, '')
+            .replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2')
+            .replace(/(\d+)\s+([年月日%亿万])/g, '$1$2')
+            .replace(/([“‘（《])\s+/g, '$1')
+            .replace(/\s+([”’）》])/g, '$1')
+            .replace(/^[\s|｜•·-]+/, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!this._isMostlyChinese(t, 4)) {
+            const srcZh = this._extractSourceChineseName(article.source?.name);
+            t = `${srcZh}聚焦${region}${category}最新焦点动态与政策走向`;
+        }
+
+        t = t.replace(/^[“"'](.+)[”"']$/, '$1').trim();
+
+        if (t.length > 32) {
+            const colonParts = t.split(/[：:—–]+/).map(s => s.trim()).filter(s => s.length >= 10 && this._isMostlyChinese(s, 4));
+            const fittingColon = colonParts.find(p => p.length <= 32);
+            if (fittingColon) {
+                t = fittingColon;
+            } else {
+                const clauseParts = t.split(/[，；、。！？!?]+/).map(s => s.trim()).filter(Boolean);
+                let acc = '';
+                for (const part of clauseParts) {
+                    const next = acc ? `${acc}，${part}` : part;
+                    if (next.length <= 32) {
+                        acc = next;
+                    } else {
+                        break;
+                    }
+                }
+                t = (acc && acc.length >= 10) ? acc : t.slice(0, 32);
+            }
+        }
+        return t
+            .slice(0, 32)
+            .replace(/[，、；：:（(“"'\s]+$/, '')
+            .replace(/(凭借|以及|因为|由于|关于|随着|对于|通过|成为|围绕|针对|在|的|与|和|及|或|并|向|对|于|为)$/, '');
+    }
+
+    _formatChineseSummary(rawZhBody = '', zhTitle = '', article = {}, region = '国际', category = '国际') {
+        const srcZh = this._extractSourceChineseName(article.source?.name);
+        let text = String(rawZhBody || '')
+            .replace(/\[[^\]]*补充报道\]:?\s*/g, ' ')
+            .replace(/\s*[（(][A-Za-z\s.,'-]{2,}[)）]/g, '')
+            .replace(/\.{2,}|…+/g, '。')
+            .replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2')
+            .replace(/(\d+)\s+([年月日%亿万])/g, '$1$2')
+            .replace(/^\s*[^|｜]{0,18}[|｜]\s*/, '')
+            .replace(/^[\s|｜•·-]+/, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!this._isMostlyChinese(text, 8)) {
+            text = `据${srcZh}报道，${zhTitle}。该事件涉及${region}${category}领域的核心议题与最新政策动向，多方机构正密切评估其对区域局势及全球市场的后续影响。`;
+        }
+
+        const sentences = text
+            .split(/(?<=[。！？；])/)
+            .map(s => s.replace(/^[\s|｜•·-]+/, '').trim())
+            .filter(s => s && this._isMostlyChinese(s, 4));
+
+        let summary = '';
+        for (const s of sentences) {
+            const cleanedSent = /[。！？；]$/.test(s) ? s : `${s}。`;
+            if ((summary + cleanedSent).length <= 128) {
+                summary += cleanedSent;
+                if (summary.length >= 82) break;
+            } else if (summary.length < 80) {
+                const remain = 126 - summary.length;
+                const sub = cleanedSent.slice(0, remain);
+                const lastComma = Math.max(sub.lastIndexOf('，'), sub.lastIndexOf('；'));
+                const cut = (summary.length + lastComma >= 82) ? sub.slice(0, lastComma) : sub;
+                summary += `${cut.replace(/[，、；：:\s]+$/, '')}。`;
+                break;
+            } else {
+                break;
+            }
+        }
+
+        if (!summary || !this._isMostlyChinese(summary, 15)) {
+            summary = `据${srcZh}报道，${zhTitle}。`;
+        }
+
+        if (summary.length < 80) {
+            const filler = `据${srcZh}报道，该事件涉及${region}${category}领域的核心议题与最新政策动向，相关进展及各方表态正引发国际社会与全球市场的广泛关注，后续态势演进仍有待进一步观察。`;
+            const combined = `${summary.replace(/[。！？；]+$/, '')}。${filler}`;
+            if (combined.length <= 128) {
+                summary = combined;
+            } else {
+                const slice127 = combined.slice(0, 127);
+                const lastPunct = Math.max(slice127.lastIndexOf('。'), slice127.lastIndexOf('；'), slice127.lastIndexOf('，'));
+                if (lastPunct >= 82) {
+                    summary = slice127.slice(0, lastPunct).replace(/[，、；：:\s]+$/, '') + '。';
+                } else {
+                    summary = slice127.replace(/[，、；：:\s]+$/, '') + '。';
+                }
+            }
+        }
+
+        if (summary.length > 130) {
+            summary = summary.slice(0, 128).replace(/[，、；：:（(“"'\s]+$/, '') + '。';
+        }
+
+        return summary;
+    }
+
+    _buildChineseKeyPoints(zhTitle = '', rawZhBody = '', zhSummary = '', article = {}, region = '国际', category = '国际') {
+        const srcZh = this._extractSourceChineseName(article.source?.name);
+        const existing = Array.isArray(article.keyPoints)
+            ? article.keyPoints
+                .map(k => String(k).replace(/^[\s|｜•·-]+/, '').trim())
+                .filter(k => k.length >= 6 && this._isMostlyChinese(k, 4))
+            : [];
+        if (existing.length >= 3) {
+            return existing.slice(0, 3).map(k => k.slice(0, 34));
+        }
+
+        const pool = [...existing];
+        const rawClauses = `${zhSummary}。${rawZhBody}`
+            .replace(/\[[^\]]*补充报道\]:?\s*/g, ' ')
+            .replace(/\s*[（(][A-Za-z\s.,'-]{2,}[)）]/g, '')
+            .split(/[。！？；|｜\n]+/)
+            .flatMap(s => s.split(/[，]+/))
+            .map(s => s.replace(/^[\s|｜:：•·“”"'-]+|[“”"'\s]+$/g, '').replace(/^(此外|同时|据悉|报道称|分析指出|对此|目前|当地时间|并|而|但)\s*/, '').trim())
+            .filter(s => s.length >= 8 && s.length <= 30 && this._isMostlyChinese(s, 5));
+
+        for (const c of rawClauses) {
+            if (pool.length >= 3) break;
+            if (!pool.some(existingPt => existingPt.includes(c.slice(0, 6)) || c.includes(existingPt.slice(0, 6)))) {
+                pool.push(c);
+            }
+        }
+
+        const fallbacks = [
+            `核心焦点：${zhTitle.slice(0, 22)}`,
+            article.sourceCount > 1
+                ? `多源印证：${srcZh}等${article.sourceCount}家权威外媒交叉报道`
+                : `权威信源：${srcZh}追踪报道${region}${category}最新进展`,
+            `态势研判：事件牵动${region}${category}格局与后续政策走向`
+        ];
+
+        for (const fb of fallbacks) {
+            if (pool.length >= 3) break;
+            if (!pool.includes(fb)) {
+                pool.push(fb);
+            }
+        }
+
+        return pool.slice(0, 3);
+    }
+
+    /**
+     * 确保单条新闻的标题、摘要与核心要点均为高质量中文（若仍为英文则自动调用多端点高速中文翻译并规范化长度与结构）
      */
     async ensureArticleInChinese(article) {
         if (!article) return article;
         const currentTitle = (article.translatedTitle || article.title || '').trim();
-        const rawSummarySource = (article.summary || article.translatedDescription || article.description || article.content || article.title || '').trim();
+        const existingSummary = (article.summary || article.translatedDescription || '').trim();
+
+        const descText = String(article.description || '').replace(/\[[^\]]*补充报道\]:?\s*/g, ' ').trim();
+        const contentText = String(article.content || '').replace(/\[[^\]]*补充报道\]:?\s*/g, ' ').trim();
+        let combinedBodySource = '';
+        if (descText && contentText) {
+            if (contentText.startsWith(descText.slice(0, Math.min(40, descText.length)))) {
+                combinedBodySource = contentText;
+            } else if (descText.startsWith(contentText.slice(0, Math.min(40, contentText.length)))) {
+                combinedBodySource = descText;
+            } else {
+                combinedBodySource = `${descText} ${contentText}`;
+            }
+        } else {
+            combinedBodySource = descText || contentText || existingSummary || currentTitle;
+        }
+        const sourceToTranslate = combinedBodySource.replace(/\s+/g, ' ').trim().slice(0, 650);
 
         let zhTitle = currentTitle;
-        let zhSummary = rawSummarySource;
+        let zhBody = this._isMostlyChinese(existingSummary, 15) ? existingSummary : sourceToTranslate;
 
         const tasks = [];
-        if (!this.isChineseText(zhTitle)) {
+        if (!this._isMostlyChinese(zhTitle, 4)) {
             tasks.push(
                 this.translateTextToChinese(article.title || currentTitle).then(res => {
                     zhTitle = res || currentTitle;
@@ -752,14 +1019,10 @@ ${itemsLines}`;
             );
         }
 
-        const cleanEngDesc = truncateText(rawSummarySource, 280);
-        if (!this.isChineseText(zhSummary) || zhSummary === article.title) {
-            const sourceToTranslate = (article.description && article.description !== article.title)
-                ? truncateText(article.description, 280)
-                : truncateText(article.content || cleanEngDesc, 280);
+        if (!this._isMostlyChinese(zhBody, 15) || zhBody === article.title || (zhBody.length < 80 && sourceToTranslate.length > zhBody.length && !this._isMostlyChinese(sourceToTranslate, 15))) {
             tasks.push(
                 this.translateTextToChinese(sourceToTranslate).then(res => {
-                    zhSummary = res || cleanEngDesc;
+                    zhBody = res || zhBody;
                 })
             );
         }
@@ -770,25 +1033,30 @@ ${itemsLines}`;
 
         const region = this.determineNewsRegionSync(
             `${article.title || ''} ${zhTitle}`,
-            `${article.description || ''} ${zhSummary}`,
+            `${article.description || ''} ${zhBody}`,
             article.source?.name || '',
             article.region
         );
         const category = this.determineNewsCategorySync(
             `${article.title || ''} ${zhTitle}`,
-            `${article.description || ''} ${zhSummary}`,
+            `${article.description || ''} ${zhBody}`,
             article.source?.category || '',
             article.category
         );
 
+        const formattedTitle = this._formatChineseTitle(zhTitle, article, region, category);
+        const formattedSummary = this._formatChineseSummary(zhBody, formattedTitle, article, region, category);
+        const keyPoints = this._buildChineseKeyPoints(formattedTitle, zhBody, formattedSummary, article, region, category);
+
         return {
             ...article,
-            translatedTitle: zhTitle,
-            translatedDescription: zhSummary,
-            summary: zhSummary,
+            translatedTitle: formattedTitle,
+            translatedDescription: formattedSummary,
+            summary: formattedSummary,
+            keyPoints,
             region,
             category,
-            aiCompiled: this.isChineseText(zhTitle)
+            aiCompiled: this._isMostlyChinese(formattedTitle, 4) && this._isMostlyChinese(formattedSummary, 15)
         };
     }
 

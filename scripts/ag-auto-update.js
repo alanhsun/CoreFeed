@@ -9,6 +9,7 @@
  *   - Stage 3 (Publish) : 调用 `ag-publish.js` 将编译产物推送至 `POST /api/agent/publish` 落盘并触发全站 WebSocket 广播；
  *   - Stage 4 (Verify)  : 校验目标站点 `/api/health` 与 `/api/news` 在线健康状态，确保闭环更新成功。
  */
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -85,6 +86,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         snapshotUrl: process.env.GITHUB_SNAPSHOT_URL || config.githubSync?.snapshotUrl || null,
         snapshotOut: process.env.AG_SNAPSHOT_OUT || null,
         daemon: false,
+        status: false,
         targetExplicit: Boolean(process.env.COREFEED_SITE_URL)
     };
 
@@ -180,30 +182,34 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.snapshotOut = path.resolve(eqVal(arg));
         } else if (arg === '--daemon') {
             options.daemon = true;
+        } else if (arg === '--status') {
+            options.status = true;
         }
     }
 
     return options;
 }
 
-function extractFallbackKeyPoints(article) {
-    if (Array.isArray(article.keyPoints) && article.keyPoints.length > 0) {
+const sharedFallbackAiService = new AIService(null, stateManager);
+
+function extractFallbackKeyPoints(article, aiServiceInstance = null) {
+    const svc = aiServiceInstance || sharedFallbackAiService;
+    if (typeof svc._buildChineseKeyPoints === 'function') {
+        const zhTitle = article.translatedTitle || article.title || '';
+        const zhSummary = article.summary || article.translatedDescription || article.description || '';
+        return svc._buildChineseKeyPoints(
+            zhTitle,
+            zhSummary,
+            zhSummary,
+            article,
+            article.region || '国际',
+            article.category || '国际'
+        );
+    }
+    if (Array.isArray(article.keyPoints) && article.keyPoints.length >= 3) {
         return article.keyPoints.slice(0, 3);
     }
-    const text = String(article.summary || article.translatedDescription || article.translatedTitle || '').trim();
-    if (!text) return [];
-    const clauses = text
-        .split(/[。；！？!?]+/)
-        .map(s => s.trim())
-        .filter(s => s.length >= 6 && s.length <= 60);
-    if (clauses.length >= 2) {
-        return clauses.slice(0, 3);
-    }
-    const subClauses = text
-        .split(/[，,、]+/)
-        .map(s => s.trim())
-        .filter(s => s.length >= 6 && s.length <= 45);
-    return subClauses.slice(0, 2);
+    return [];
 }
 
 async function probeAiEndpointReachable(aiService, timeoutMs = 2500) {
@@ -425,6 +431,7 @@ async function runAutoUpdate(customOptions = {}) {
         const canUseRemoteAi = !opts.fallbackCompile && (await probeAiEndpointReachable(aiService, 2500));
         let compiledArticles = [];
         let summaryArticle = null;
+        let duplicateGroups = [];
 
         if (canUseRemoteAi) {
             compilationMode = 'ai-endpoint';
@@ -438,11 +445,57 @@ async function runAutoUpdate(customOptions = {}) {
             const translated = await aiService.ensureBatchInChinese(prelim, 8);
             compiledArticles = translated.map(item => ({
                 ...item,
-                keyPoints: extractFallbackKeyPoints(item),
+                keyPoints: extractFallbackKeyPoints(item, aiService),
                 aiCompiled: true,
                 processedAt: new Date().toISOString()
             }));
-            summaryArticle = aiService._buildFallbackSummaryObject(compiledArticles.slice(0, opts.limit), currentDate);
+
+            if (compiledArticles.length > opts.limit && typeof aiService._calculateArticleSimilarity === 'function') {
+                for (let i = 0; i < compiledArticles.length; i++) {
+                    for (let j = i + 1; j < compiledArticles.length; j++) {
+                        if (aiService._calculateArticleSimilarity(compiledArticles[i], compiledArticles[j]) >= 0.30) {
+                            duplicateGroups.push([i + 1, j + 1]);
+                        }
+                    }
+                }
+            }
+
+            let summaryTargetArticles = compiledArticles;
+            if (duplicateGroups.length > 0 && compiledArticles.length > 1) {
+                const n = compiledArticles.length;
+                const parent = Array.from({ length: n }, (_, i) => i);
+                const find = (x) => {
+                    while (parent[x] !== x) {
+                        parent[x] = parent[parent[x]];
+                        x = parent[x];
+                    }
+                    return x;
+                };
+                const union = (a, b) => {
+                    const ra = find(a);
+                    const rb = find(b);
+                    if (ra !== rb) {
+                        if (ra < rb) parent[rb] = ra;
+                        else parent[ra] = rb;
+                    }
+                };
+                for (const [a, b] of duplicateGroups) {
+                    if (a >= 1 && a <= n && b >= 1 && b <= n) {
+                        union(a - 1, b - 1);
+                    }
+                }
+                const clusterMap = new Map();
+                for (let i = 0; i < n; i++) {
+                    const root = find(i);
+                    if (!clusterMap.has(root)) clusterMap.set(root, []);
+                    clusterMap.get(root).push(compiledArticles[i]);
+                }
+                summaryTargetArticles = Array.from(clusterMap.values())
+                    .map(g => aiService._mergeArticleCluster(g))
+                    .filter(Boolean);
+            }
+
+            summaryArticle = aiService._buildFallbackSummaryObject(summaryTargetArticles.slice(0, opts.limit), currentDate);
         }
 
         compiledData = {
@@ -450,7 +503,7 @@ async function runAutoUpdate(customOptions = {}) {
             mode: compilationMode,
             publishedBy,
             clientId: publishedBy,
-            duplicateGroups: [],
+            duplicateGroups,
             articles: compiledArticles.map((item, idx) => ({
                 index: idx + 1,
                 id: item.id,
@@ -458,7 +511,7 @@ async function runAutoUpdate(customOptions = {}) {
                 summary: item.summary || item.translatedDescription || item.description || item.title,
                 region: item.region || '国际',
                 category: item.category || '国际',
-                keyPoints: extractFallbackKeyPoints(item)
+                keyPoints: extractFallbackKeyPoints(item, aiService)
             })),
             summaryMarkdown: summaryArticle?.content || '',
             summaryArticle
@@ -528,33 +581,277 @@ async function runAutoUpdate(customOptions = {}) {
     return result;
 }
 
-function startAutoUpdateDaemon(cliOpts = {}) {
+function formatShanghaiTimestamp(isoStr) {
+    if (!isoStr) return null;
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return null;
+    const sh = new Date(d.getTime() + 8 * 3600000);
+    const yyyy = sh.getUTCFullYear();
+    const mm = String(sh.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(sh.getUTCDate()).padStart(2, '0');
+    const hh = String(sh.getUTCHours()).padStart(2, '0');
+    const mi = String(sh.getUTCMinutes()).padStart(2, '0');
+    const ss = String(sh.getUTCSeconds()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss} Asia/Shanghai`;
+}
+
+function getNextExecutionTime(updateTimes = null) {
+    const times = Array.isArray(updateTimes) && updateTimes.length > 0
+        ? updateTimes
+        : (Array.isArray(config.news?.updateTimes) && config.news.updateTimes.length > 0
+            ? config.news.updateTimes
+            : ['08:00', '12:30', '19:30']);
+
+    const now = new Date();
+    const shanghaiOffsetMs = 8 * 3600000;
+    const shNow = new Date(now.getTime() + shanghaiOffsetMs);
+    const shYear = shNow.getUTCFullYear();
+    const shMonth = shNow.getUTCMonth();
+    const shDate = shNow.getUTCDate();
+
+    let nextExecution = null;
+    for (const time of times) {
+        const [hour, minute] = String(time).split(':').map(Number);
+        if (isNaN(hour) || isNaN(minute)) continue;
+        const execTime = new Date(Date.UTC(shYear, shMonth, shDate, hour - 8, minute, 0, 0));
+        if (execTime > now && (!nextExecution || execTime < nextExecution)) {
+            nextExecution = execTime;
+        }
+    }
+
+    if (!nextExecution) {
+        for (const time of times) {
+            const [hour, minute] = String(time).split(':').map(Number);
+            if (isNaN(hour) || isNaN(minute)) continue;
+            const execTime = new Date(Date.UTC(shYear, shMonth, shDate + 1, hour - 8, minute, 0, 0));
+            if (!nextExecution || execTime < nextExecution) {
+                nextExecution = execTime;
+            }
+        }
+    }
+
+    return nextExecution ? nextExecution.toISOString() : null;
+}
+
+function getDaemonPaths() {
+    const dataDir = config.storage?.dataDir || path.join(__dirname, '..', 'data');
+    const logsDir = path.join(__dirname, '..', 'logs');
+    return {
+        dataDir,
+        logsDir,
+        statusFile: path.join(dataDir, 'ag_daemon_status.json'),
+        pidFile: path.join(logsDir, 'ag-daemon.pid'),
+        logFile: path.join(logsDir, 'ag-daemon.log'),
+        stateFile: path.join(dataDir, 'state.json'),
+        compiledFile: path.join(dataDir, 'ag_compiled.json')
+    };
+}
+
+function isPidAlive(pid) {
+    const num = Number(pid);
+    if (!Number.isInteger(num) || num <= 0) return false;
+    try {
+        process.kill(num, 0);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function getDaemonStatus(cliOpts = {}) {
+    const opts = { ...parseArgs([]), ...cliOpts };
+    const paths = getDaemonPaths();
     const times = Array.isArray(config.news?.updateTimes) && config.news.updateTimes.length > 0
         ? config.news.updateTimes
         : ['08:00', '12:30', '19:30'];
     const timezone = config.news?.timezone || 'Asia/Shanghai';
-    logger.info('AG-AUTO', `启动 Method 2B 定时守护进程: 计划时间 [${times.join(', ')}] (${timezone}), clientId=${cliOpts.clientId}`);
+    const nextExecution = getNextExecutionTime(times);
+    const nextExecutionShanghai = formatShanghaiTimestamp(nextExecution);
+
+    let savedStatus = null;
+    if (fs.existsSync(paths.statusFile)) {
+        try {
+            savedStatus = JSON.parse(fs.readFileSync(paths.statusFile, 'utf8'));
+        } catch (_) {}
+    }
+
+    let pid = savedStatus?.pid || null;
+    if (!pid && fs.existsSync(paths.pidFile)) {
+        try {
+            const rawPid = parseInt(fs.readFileSync(paths.pidFile, 'utf8').trim(), 10);
+            if (!isNaN(rawPid)) pid = rawPid;
+        } catch (_) {}
+    }
+
+    const running = isPidAlive(pid);
+
+    let lastPublishedAt = savedStatus?.lastPublishedAt || null;
+    let lastPublishedBy = savedStatus?.lastPublishedBy || null;
+    if (fs.existsSync(paths.stateFile)) {
+        try {
+            const st = JSON.parse(fs.readFileSync(paths.stateFile, 'utf8'));
+            lastPublishedAt = st.lastSnapshotPublishedAt || st.lastUpdated || lastPublishedAt;
+            lastPublishedBy = st.lastPublishedBy || lastPublishedBy;
+        } catch (_) {}
+    } else if (fs.existsSync(paths.compiledFile)) {
+        try {
+            const comp = JSON.parse(fs.readFileSync(paths.compiledFile, 'utf8'));
+            lastPublishedAt = comp.publishedAt || comp.compiledAt || lastPublishedAt;
+            lastPublishedBy = comp.publishedBy || comp.clientId || lastPublishedBy;
+        } catch (_) {}
+    }
+
+    const cronExpressions = {
+        Asia_Shanghai: times.map(t => {
+            const [h, m] = String(t).split(':').map(Number);
+            return `${m} ${h} * * *`;
+        }),
+        UTC: times.map(t => {
+            const [h, m] = String(t).split(':').map(Number);
+            const utcH = (h - 8 + 24) % 24;
+            return `${m} ${utcH} * * *`;
+        })
+    };
+
+    return {
+        running,
+        pid: running ? pid : null,
+        startedAt: savedStatus?.startedAt || null,
+        clientId: savedStatus?.clientId || opts.clientId,
+        target: savedStatus?.target || opts.target,
+        scheduleTimes: times,
+        timezone,
+        cronExpressions,
+        nextExecution,
+        nextExecutionShanghai,
+        lastRunAt: savedStatus?.lastRunAt || null,
+        lastRunStatus: savedStatus?.lastRunStatus || 'idle',
+        lastPublishedAt,
+        lastPublishedAtShanghai: formatShanghaiTimestamp(lastPublishedAt),
+        lastPublishedBy,
+        statusFile: paths.statusFile,
+        pidFile: paths.pidFile,
+        logFile: paths.logFile
+    };
+}
+
+function appendDaemonLog(message) {
+    try {
+        const paths = getDaemonPaths();
+        fs.mkdirSync(paths.logsDir, { recursive: true });
+        const line = `[${new Date().toISOString()}] ${message}\n`;
+        fs.appendFileSync(paths.logFile, line, 'utf8');
+    } catch (_) {}
+}
+
+function persistDaemonStatus(patch = {}, cliOpts = {}) {
+    try {
+        const paths = getDaemonPaths();
+        fs.mkdirSync(paths.dataDir, { recursive: true });
+        fs.mkdirSync(paths.logsDir, { recursive: true });
+        let current = {};
+        if (fs.existsSync(paths.statusFile)) {
+            try {
+                current = JSON.parse(fs.readFileSync(paths.statusFile, 'utf8'));
+            } catch (_) {}
+        }
+        const times = Array.isArray(config.news?.updateTimes) && config.news.updateTimes.length > 0
+            ? config.news.updateTimes
+            : ['08:00', '12:30', '19:30'];
+        const nextExecution = getNextExecutionTime(times);
+        const updated = {
+            ...current,
+            pid: process.pid,
+            clientId: cliOpts.clientId || current.clientId || 'antigravity-client',
+            target: cliOpts.target || current.target || 'http://localhost:3120',
+            scheduleTimes: times,
+            timezone: config.news?.timezone || 'Asia/Shanghai',
+            nextExecution,
+            nextExecutionShanghai: formatShanghaiTimestamp(nextExecution),
+            updatedAt: new Date().toISOString(),
+            ...patch
+        };
+        fs.writeFileSync(paths.statusFile, JSON.stringify(updated, null, 2), 'utf8');
+        fs.writeFileSync(paths.pidFile, `${process.pid}\n`, 'utf8');
+        return updated;
+    } catch (_) {
+        return null;
+    }
+}
+
+function startAutoUpdateDaemon(cliOpts = {}) {
+    const opts = { ...parseArgs([]), ...cliOpts };
+    const times = Array.isArray(config.news?.updateTimes) && config.news.updateTimes.length > 0
+        ? config.news.updateTimes
+        : ['08:00', '12:30', '19:30'];
+    const timezone = config.news?.timezone || 'Asia/Shanghai';
+    const startedAt = new Date().toISOString();
+
+    persistDaemonStatus({
+        startedAt,
+        lastRunStatus: 'scheduled-waiting'
+    }, opts);
+
+    const nextIso = getNextExecutionTime(times);
+    const startMsg = `启动 Method 2B 定时守护进程 (PID=${process.pid}): 计划时间 [${times.join(', ')}] (${timezone}), 下次执行=${formatShanghaiTimestamp(nextIso)} (${nextIso}), clientId=${opts.clientId}`;
+    logger.info('AG-AUTO', startMsg);
+    appendDaemonLog(startMsg);
+
+    const tasks = [];
     for (const time of times) {
         const [hour, minute] = String(time).split(':').map(Number);
         if (isNaN(hour) || isNaN(minute)) continue;
         const expr = `${minute} ${hour} * * *`;
-        cron.schedule(
+        const task = cron.schedule(
             expr,
             async () => {
+                const runStartIso = new Date().toISOString();
+                appendDaemonLog(`[CRON ${time} ${timezone}] 开始执行自动采编与 GitHub 快照发布...`);
+                persistDaemonStatus({
+                    lastRunAt: runStartIso,
+                    lastRunSlot: time,
+                    lastRunStatus: 'running'
+                }, opts);
                 try {
-                    await runAutoUpdate(cliOpts);
+                    const res = await runAutoUpdate(opts);
+                    const doneMsg = `[CRON ${time} ${timezone}] 执行成功: mode=${res.mode}, displayed=${res.displayedCount}, publishedAt=${res.publishedAt}, githubPushed=${Boolean(res.githubSync?.pushed || res.githubSync?.pulledFromRemote)}`;
+                    logger.success('AG-AUTO', doneMsg);
+                    appendDaemonLog(doneMsg);
+                    persistDaemonStatus({
+                        lastRunAt: runStartIso,
+                        lastCompletedAt: new Date().toISOString(),
+                        lastRunStatus: 'success',
+                        lastPublishedAt: res.publishedAt,
+                        lastPublishedBy: res.publishedBy
+                    }, opts);
                 } catch (err) {
-                    logger.error('AG-AUTO', `定时自动更新任务执行失败 (${time}):`, err.message);
+                    const errMsg = `定时自动更新任务执行失败 (${time}): ${err.message}`;
+                    logger.error('AG-AUTO', errMsg);
+                    appendDaemonLog(`[ERROR] ${errMsg}`);
+                    persistDaemonStatus({
+                        lastRunAt: runStartIso,
+                        lastRunStatus: `error: ${err.message}`
+                    }, opts);
                 }
             },
             { scheduled: true, timezone }
         );
+        tasks.push(task);
     }
+
+    return {
+        tasks,
+        status: getDaemonStatus(opts)
+    };
 }
 
 if (require.main === module) {
     const cliOpts = parseArgs(process.argv.slice(2));
-    if (cliOpts.daemon) {
+    if (cliOpts.status) {
+        const status = getDaemonStatus(cliOpts);
+        console.log(JSON.stringify(status, null, 2));
+        process.exit(0);
+    } else if (cliOpts.daemon) {
         startAutoUpdateDaemon(cliOpts);
     } else {
         runAutoUpdate(cliOpts)
@@ -569,4 +866,10 @@ if (require.main === module) {
     }
 }
 
-module.exports = { runAutoUpdate, parseArgs, startAutoUpdateDaemon };
+module.exports = {
+    runAutoUpdate,
+    parseArgs,
+    startAutoUpdateDaemon,
+    getDaemonStatus,
+    getNextExecutionTime
+};
