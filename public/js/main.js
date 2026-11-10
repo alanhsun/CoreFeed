@@ -344,7 +344,7 @@ class CoreFeedApp {
         const summaryClampClass = tier === 'lead' ? 'line-clamp-5' : (tier === 'secondary' ? 'line-clamp-4' : 'line-clamp-3');
 
         return `
-            <article class="news-card news-card--${tier} ${spanClass}" style="--card-index: ${idx};">
+            <article class="news-card news-card--${tier} ${spanClass}">
                 <div>
                     <div class="card-meta-header">
                         <div class="card-meta-left">
@@ -369,13 +369,13 @@ class CoreFeedApp {
                             ` : ''}
                             <div class="card-cover-fallback">
                                 <div class="fallback-plate-top">
-                                    <span>DISPATCH // ${indexNum}</span>
                                     <span>${this.escapeHtml(region)}</span>
+                                    <span>${this.escapeHtml(category)}</span>
                                 </div>
-                                <div class="fallback-plate-watermark">${indexNum}</div>
+                                <div class="fallback-plate-watermark">CoreFeed</div>
                                 <div class="fallback-plate-bottom">
                                     <span class="fallback-plate-source">${this.escapeHtml(sourceName)}</span>
-                                    <span class="fallback-plate-cat">${this.escapeHtml(category)}</span>
+                                    <span class="fallback-plate-cat">要闻简报</span>
                                 </div>
                             </div>
                         </a>
@@ -383,7 +383,7 @@ class CoreFeedApp {
                         <div class="card-body">
                             ${hasMultiSources ? `
                                 <div class="kami-callout flex flex-col gap-0.5">
-                                    <div class="kami-callout-title">CROSS-VERIFIED · ${relatedSources.length + 1} 家权威外媒交叉印证</div>
+                                    <div class="kami-callout-title">${relatedSources.length + 1} 家权威外媒交叉印证</div>
                                     <div class="truncate text-xs" style="color: var(--text-body);">同题报道：${relatedLinksHtml}</div>
                                 </div>
                             ` : ''}
@@ -666,7 +666,7 @@ class CoreFeedApp {
 
         if (titleEl) titleEl.textContent = article.title || '今日全球要闻深度综述';
         if (metaEl) {
-            metaEl.textContent = `生成时间：${new Date(article.generatedAt || Date.now()).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} · 涵盖 ${(article.regions || []).join('、')} · 共 ${article.wordCount || 0} 字`;
+            metaEl.textContent = `生成时间：${new Date(article.generatedAt || Date.now()).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} / 涵盖 ${(article.regions || []).join('、')}（${article.wordCount || 0} 字）`;
         }
         if (bodyEl) {
             bodyEl.innerHTML = article.htmlContent || '';

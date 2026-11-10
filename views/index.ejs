@@ -13,7 +13,7 @@
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&family=Noto+Serif+SC:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;1,6..72,400&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -21,15 +21,15 @@
             theme: {
                 extend: {
                     colors: {
-                        parchment: '#F6F5F1',
+                        parchment: '#F3F3F1',
                         ivory: '#FFFFFF',
-                        sand: '#EBE8DF',
+                        sand: '#EAE9E4',
                         brand: '#C83214',
                         brandLight: '#A6260C',
                         ink: '#141413',
-                        warm: '#2B2A27',
-                        olive: '#46443F',
-                        stone: '#68665E'
+                        warm: '#242422',
+                        olive: '#383734',
+                        stone: '#62605B'
                     }
                 }
             }
@@ -97,13 +97,10 @@
 
         <header class="kami-masthead">
             <div class="kami-masthead-eyebrow">
-                <span class="kami-edition-mark">
-                    <span class="kami-edition-dot"></span>
-                    <span>GLOBAL INTELLIGENCE DISPATCH</span>
-                </span>
+                <span class="kami-edition-mark">全球权威外媒精编要闻</span>
                 <div class="kami-masthead-meta" style="margin-top: 0;">
                     <span id="mastheadDate"><%= todayStr %></span>
-                    <span class="kami-meta-dot">·</span>
+                    <span class="kami-meta-dot">/</span>
                     <span id="lastUpdateTime"><span id="lastUpdatedLabel"><span id="lastUpdatedText"><%= updatedTimeStr %></span></span></span>
                 </div>
             </div>
@@ -145,11 +142,11 @@
                 </div>
 
                 <div id="feedSearchWrapper" class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
-                    <select id="sourceFilterSelect" onchange="app.applyFilters()" class="kami-input text-xs sm:text-sm py-2 px-3 cursor-pointer">
+                    <select id="sourceFilterSelect" onchange="app.applyFilters()" aria-label="按媒体来源筛选" class="kami-input text-xs sm:text-sm py-2 px-3 cursor-pointer">
                         <option value="全部">全部媒体来源</option>
                     </select>
                     <div id="searchInput" class="taste-search-box flex-1 sm:w-72">
-                        <input id="localFilterInput" type="text" placeholder="搜索中文标题、摘要或外媒关键词..."
+                        <input id="localFilterInput" type="text" aria-label="搜索新闻关键词" placeholder="搜索中文标题、摘要或外媒关键词..."
                             oninput="app.applyFilters()"
                             class="kami-input w-full text-xs sm:text-sm py-2 pl-3.5 pr-8">
                         <button id="btnClearSearch" type="button" onclick="app.clearSearch()" class="taste-search-clear hidden" title="清空搜索" aria-label="清空搜索">
@@ -199,7 +196,7 @@
                                 const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
                                 const summaryClampClass = tier === 'lead' ? 'line-clamp-5' : (tier === 'secondary' ? 'line-clamp-4' : 'line-clamp-3');
                             %>
-                            <article class="news-card news-card--<%= tier %> <%= spanClass %>" style="--card-index: <%= idx %>;">
+                            <article class="news-card news-card--<%= tier %> <%= spanClass %>">
                                 <div>
                                     <div class="card-meta-header">
                                         <div class="card-meta-left">
@@ -224,13 +221,13 @@
                                             <% } %>
                                             <div class="card-cover-fallback">
                                                 <div class="fallback-plate-top">
-                                                    <span>DISPATCH // <%= indexNum %></span>
                                                     <span><%= region %></span>
+                                                    <span><%= category %></span>
                                                 </div>
-                                                <div class="fallback-plate-watermark"><%= indexNum %></div>
+                                                <div class="fallback-plate-watermark">CoreFeed</div>
                                                 <div class="fallback-plate-bottom">
                                                     <span class="fallback-plate-source"><%= sourceName %></span>
-                                                    <span class="fallback-plate-cat"><%= category %></span>
+                                                    <span class="fallback-plate-cat">要闻简报</span>
                                                 </div>
                                             </div>
                                         </a>
@@ -238,7 +235,7 @@
                                         <div class="card-body">
                                             <% if (hasMultiSources) { %>
                                                 <div class="kami-callout flex flex-col gap-0.5">
-                                                    <div class="kami-callout-title">CROSS-VERIFIED · <%= relatedSources.length + 1 %> 家权威外媒交叉印证</div>
+                                                    <div class="kami-callout-title"><%= relatedSources.length + 1 %> 家权威外媒交叉印证</div>
                                                     <div class="truncate text-xs" style="color: var(--text-body);">
                                                         同题报道：<% relatedSources.forEach(function(r, rIdx) { %><% if (rIdx > 0) { %>、<% } %><% if (r.url) { %><a href="<%= r.url %>" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="<%= r.title || r.name %>"><%= r.name %></a><% } else { %><span><%= r.name %></span><% } %><% }); %>
                                                     </div>
@@ -292,15 +289,12 @@
                 <div id="summarySection">
                     <article id="summaryContent" class="kami-card taste-briefing-sheet">
                         <div class="pb-6" style="border-bottom: 1px solid var(--border-hairline);">
-                            <div class="text-xs uppercase tracking-widest mb-2" style="color: var(--text-muted); font-family: var(--font-mono);">
-                                DAILY GLOBAL SYNTHESIS · 全球态势综述
-                            </div>
                             <h2 id="summaryTitle" class="taste-briefing-title">
                                 <%= summaryArticle ? summaryArticle.title : '今日全球要闻深度综述' %>
                             </h2>
                             <p id="summaryMeta" class="text-xs mt-2.5 tabular-nums" style="color: var(--text-muted); font-family: var(--font-mono);">
                                 <% if (summaryArticle) { %>
-                                    生成时间：<%= new Date(summaryArticle.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) %> · 涵盖 <%= (summaryArticle.regions || []).join('、') %> · 共 <%= summaryArticle.wordCount || 0 %> 字
+                                    生成时间：<%= new Date(summaryArticle.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) %> / 涵盖 <%= (summaryArticle.regions || []).join('、') %>（<%= summaryArticle.wordCount || 0 %> 字）
                                 <% } else { %>
                                     点击右上角「同步最新」获取最新一期全球要闻深度综述
                                 <% } %>

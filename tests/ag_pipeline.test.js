@@ -1468,6 +1468,11 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(styleCssSource.includes('min-width: 0;'), 'public/css/style.css should include min-width: 0 defensive locks');
             assert.ok(styleCssSource.includes('.card-keypoints'), 'public/css/style.css should define .card-keypoints');
             assert.ok(styleCssSource.includes('.card-keypoint-item'), 'public/css/style.css should define .card-keypoint-item');
+            assert.ok(!styleCssSource.includes('Instrument Serif') && !styleCssSource.includes('Plus Jakarta Sans'), 'public/css/style.css must NOT use banned fonts Instrument Serif or Plus Jakarta Sans');
+            assert.ok(styleCssSource.includes('Newsreader') && styleCssSource.includes('Geist'), 'public/css/style.css should pair Newsreader display with Geist sans');
+            assert.ok(!html.includes('DISPATCH // 01') && !mainJsSource.includes('DISPATCH // 01'), 'SSR and client markup must NOT render pseudo-technical DISPATCH // 01 eyebrow');
+            assert.ok(!html.includes('kami-edition-dot'), 'SSR HTML must NOT render decorative status dot');
+            assert.ok(styleCssSource.includes('--t-body:            1rem;') && styleCssSource.includes('font-size: var(--t-body);'), 'public/css/style.css should render .card-summary at 16px (1rem) in ink');
 
             // 13b. Verify GET /api/config exposes Method 2B and schedule fields
             const resGetCfg = await fetch(`${baseUrl}/api/config`);
