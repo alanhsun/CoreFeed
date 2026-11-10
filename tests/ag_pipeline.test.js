@@ -1453,6 +1453,18 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
                 styleCssSource.includes('minmax(0, 1.08fr) minmax(0, 0.92fr)'),
                 'public/css/style.css should lock .lead-bento-inner.has-media columns with minmax(0, 1.08fr) minmax(0, 0.92fr)'
             );
+            assert.ok(
+                styleCssSource.includes('aspect-ratio: 16 / 9;'),
+                'public/css/style.css should lock .card-cover to unified 16:9 aspect ratio'
+            );
+            assert.ok(
+                styleCssSource.includes('object-position: center 22%;'),
+                'public/css/style.css should set upper-third object-position on .card-cover-img'
+            );
+            assert.ok(
+                !styleCssSource.includes('height: 196px;') && !styleCssSource.includes('height: 168px;'),
+                'public/css/style.css must NOT use fixed pixel heights that distort image proportions'
+            );
             assert.ok(styleCssSource.includes('min-width: 0;'), 'public/css/style.css should include min-width: 0 defensive locks');
             assert.ok(styleCssSource.includes('.card-keypoints'), 'public/css/style.css should define .card-keypoints');
             assert.ok(styleCssSource.includes('.card-keypoint-item'), 'public/css/style.css should define .card-keypoint-item');
