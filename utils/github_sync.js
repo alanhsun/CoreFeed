@@ -226,6 +226,17 @@ async function applySnapshotToRouter(
             ? aiService.determineNewsCategorySync(`${rawTitle} ${zhTitle}`, `${rawDesc} ${zhSummary}`, sourceObj.category || '', '国际')
             : '国际');
 
+        const rawFull = String(item?.fullText || item?.content || rawDesc).trim();
+        const origParas = Array.isArray(item?.originalParagraphs) && item.originalParagraphs.length > 0
+            ? item.originalParagraphs.map(p => String(p).trim()).filter(Boolean)
+            : (rawFull ? rawFull.split(/\n+/).map(p => p.trim()).filter(p => p.length >= 10) : []);
+        const zhParas = Array.isArray(item?.translatedParagraphs) && item.translatedParagraphs.length > 0
+            ? item.translatedParagraphs.map(p => String(p).trim()).filter(Boolean)
+            : (item?.translatedContent
+                ? String(item.translatedContent).split(/\n+/).map(p => p.trim()).filter(Boolean)
+                : [zhSummary]);
+        const zhFullContent = String(item?.translatedContent || zhParas.join('\n\n')).trim();
+
         return {
             ...item,
             id: item?.id || `ag-${Date.now()}-${idx + 1}`,
@@ -235,6 +246,10 @@ async function applySnapshotToRouter(
             translatedDescription: zhSummary,
             summary: zhSummary,
             content: String(item?.content || rawDesc).trim(),
+            fullText: rawFull,
+            originalParagraphs: origParas,
+            translatedContent: zhFullContent,
+            translatedParagraphs: zhParas,
             url: item?.url || '',
             urlToImage: item?.urlToImage || null,
             publishedAt: item?.publishedAt || nowIso,

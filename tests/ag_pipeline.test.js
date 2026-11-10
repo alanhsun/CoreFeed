@@ -1947,6 +1947,18 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
                 for (const kp of item.keyPoints) {
                     assert.ok(/[\u4e00-\u9fff]/.test(kp), `keyPoint must contain Chinese characters: ${kp}`);
                 }
+                assert.ok(Array.isArray(item.translatedParagraphs) && item.translatedParagraphs.length >= 1, 'Each article must include pre-translated full-text paragraphs (translatedParagraphs)');
+                assert.ok(item.translatedParagraphs.every(p => /[\u4e00-\u9fff]/.test(p)), 'Every paragraph in translatedParagraphs must contain Chinese characters');
+                assert.ok(typeof item.translatedContent === 'string' && /[\u4e00-\u9fff]/.test(item.translatedContent), 'Each article must include translatedContent in Chinese');
+            }
+
+            const remoteSnapshotJson = JSON.parse(
+                execFileSync('git', ['-C', bareRemoteDir, 'show', 'ag-snapshot:latest.json'], { encoding: 'utf8' })
+            );
+            assert.equal(remoteSnapshotJson.news.length, 2);
+            for (const snapItem of remoteSnapshotJson.news) {
+                assert.ok(Array.isArray(snapItem.translatedParagraphs) && snapItem.translatedParagraphs.length >= 1, 'GitHub ag-snapshot latest.json must include translatedParagraphs for every news item');
+                assert.ok(/[\u4e00-\u9fff]/.test(snapItem.translatedContent || ''), 'GitHub ag-snapshot latest.json must include Chinese translatedContent');
             }
 
             const liveSummary = stateManager.get('summaryArticle');

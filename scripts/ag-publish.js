@@ -280,12 +280,24 @@ async function runPublish(customOptions = {}) {
         const keyPoints = Array.isArray(comp.keyPoints)
             ? comp.keyPoints.map(k => String(k).trim()).filter(Boolean).slice(0, 4)
             : (Array.isArray(article.keyPoints) ? article.keyPoints : []);
+        const fullText = comp.fullText || article.fullText || article.content || article.description || '';
+        const originalParagraphs = (Array.isArray(comp.originalParagraphs) && comp.originalParagraphs.length > 0)
+            ? comp.originalParagraphs
+            : (Array.isArray(article.originalParagraphs) ? article.originalParagraphs : []);
+        const translatedParagraphs = (Array.isArray(comp.translatedParagraphs) && comp.translatedParagraphs.length > 0)
+            ? comp.translatedParagraphs.map(p => String(p).trim()).filter(Boolean)
+            : (Array.isArray(article.translatedParagraphs) ? article.translatedParagraphs.map(p => String(p).trim()).filter(Boolean) : []);
+        const translatedContent = comp.translatedContent || article.translatedContent || translatedParagraphs.join('\n\n') || '';
 
         return {
             ...article,
+            fullText,
+            originalParagraphs,
             translatedTitle: zhTitle,
             translatedDescription: zhSummary,
             summary: zhSummary,
+            translatedContent,
+            translatedParagraphs,
             region,
             category,
             keyPoints,
@@ -350,6 +362,10 @@ async function runPublish(customOptions = {}) {
                 if (!Array.isArray(merged.keyPoints) || merged.keyPoints.length === 0) {
                     merged.keyPoints = compiledMember.keyPoints || [];
                 }
+                if (!Array.isArray(merged.translatedParagraphs) || merged.translatedParagraphs.length === 0) {
+                    merged.translatedParagraphs = compiledMember.translatedParagraphs || [];
+                    merged.translatedContent = compiledMember.translatedContent || '';
+                }
                 merged.aiCompiled = true;
                 merged.processedAt = nowIso;
             }
@@ -365,23 +381,66 @@ async function runPublish(customOptions = {}) {
         });
     }
 
-    // 3. 若 compiledData 仅按去重后顺序提供 articles，或部分条目未命中中文翻译，确保最终列表全部拥有合规中文元数据
-    const needFallbackChinese = annotatedCandidates.some(a => !aiService.isChineseText(a.translatedTitle || '') || !aiService.isChineseText(a.summary || ''));
+    // 3. 确保最终发布的新闻全部具备中文标题、中文摘要与原文全文中文分段译文 (translatedParagraphs)
+    const needFallbackChinese = annotatedCandidates.some(
+        a => !aiService.isChineseText(a.translatedTitle || '') || !aiService.isChineseText(a.summary || '')
+    );
     if (needFallbackChinese && opts.fallbackCompile) {
         annotatedCandidates = await aiService.ensureBatchInChinese(annotatedCandidates, 6);
     }
 
-    const allEnhancedNews = annotatedCandidates.map(article => ({
-        ...article,
-        translatedTitle: article.translatedTitle || article.title,
-        translatedDescription: article.translatedDescription || article.summary || article.description || article.title,
-        summary: article.summary || article.translatedDescription || article.description || article.title,
-        region: normalizeRegion(article.region, '国际'),
-        category: normalizeCategory(article.category, '国际'),
-        keyPoints: Array.isArray(article.keyPoints) ? article.keyPoints : [],
-        aiCompiled: Boolean(article.aiCompiled || aiService.isChineseText(article.translatedTitle || '')),
-        processedAt: article.processedAt || nowIso
-    }));
+    // 若部分条目尚未生成原文全文中文分段译文 (translatedParagraphs)，在发布阶段统一预译补齐并写入 GitHub 快照
+    const missingFullTextIdx = [];
+    annotatedCandidates.forEach((a, idx) => {
+        if (!Array.isArray(a.translatedParagraphs) || a.translatedParagraphs.length === 0) {
+            missingFullTextIdx.push(idx);
+        }
+    });
+    if (missingFullTextIdx.length > 0) {
+        const isTestEnv = process.env.NODE_ENV === 'test';
+        if (!isTestEnv || opts.fallbackCompile) {
+            const toEnrich = missingFullTextIdx.map(idx => annotatedCandidates[idx]);
+            const enriched = await aiService.ensureBatchInChinese(toEnrich, 6);
+            enriched.forEach((item, eIdx) => {
+                const targetIdx = missingFullTextIdx[eIdx];
+                annotatedCandidates[targetIdx] = {
+                    ...annotatedCandidates[targetIdx],
+                    fullText: annotatedCandidates[targetIdx].fullText || item.fullText,
+                    originalParagraphs: annotatedCandidates[targetIdx].originalParagraphs?.length
+                        ? annotatedCandidates[targetIdx].originalParagraphs
+                        : item.originalParagraphs,
+                    translatedParagraphs: item.translatedParagraphs,
+                    translatedContent: item.translatedContent
+                };
+            });
+        }
+    }
+
+    const allEnhancedNews = annotatedCandidates.map(article => {
+        const finalSummary = article.summary || article.translatedDescription || article.description || article.title;
+        const rawFull = article.fullText || article.content || article.description || '';
+        const origParas = (Array.isArray(article.originalParagraphs) && article.originalParagraphs.length > 0)
+            ? article.originalParagraphs
+            : aiService._splitIntoParagraphs(rawFull);
+        const zhParas = (Array.isArray(article.translatedParagraphs) && article.translatedParagraphs.length > 0)
+            ? article.translatedParagraphs
+            : [finalSummary];
+        return {
+            ...article,
+            fullText: rawFull,
+            originalParagraphs: origParas,
+            translatedTitle: article.translatedTitle || article.title,
+            translatedDescription: article.translatedDescription || finalSummary,
+            summary: finalSummary,
+            translatedParagraphs: zhParas,
+            translatedContent: article.translatedContent || zhParas.join('\n\n'),
+            region: normalizeRegion(article.region, '国际'),
+            category: normalizeCategory(article.category, '国际'),
+            keyPoints: Array.isArray(article.keyPoints) ? article.keyPoints : [],
+            aiCompiled: Boolean(article.aiCompiled || aiService.isChineseText(article.translatedTitle || '')),
+            processedAt: article.processedAt || nowIso
+        };
+    });
 
     const finalNews = allEnhancedNews.slice(0, opts.limit);
 

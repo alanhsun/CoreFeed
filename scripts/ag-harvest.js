@@ -94,27 +94,28 @@ async function runHarvest(customOptions = {}) {
 
     logger.info(
         'AG-HARVEST',
-        `[3/4] 正在并发补全缺失高清题图 (前 ${Math.min(opts.imageLimit, candidates.length)} 篇)...`
+        `[3/4] 正在并发补全缺失高清题图与外媒原文全文 (前 ${Math.min(opts.imageLimit, candidates.length)} 篇)...`
     );
 
     const enrichTasks = [];
     if (opts.imageLimit > 0) {
-        enrichTasks.push(agentService._enrichMissingArticleImages(candidates.slice(0, opts.imageLimit)));
-    }
-    if (opts.translateFallback) {
-        enrichTasks.push(
-            aiService.ensureBatchInChinese(candidates, 8).then(translated => {
-                candidates = translated.map((item, idx) => ({
-                    ...item,
-                    urlToImage: item.urlToImage || candidates[idx]?.urlToImage || null,
-                    content: candidates[idx]?.content || item.content || ''
-                }));
-            })
-        );
+        const topSlice = candidates.slice(0, opts.imageLimit);
+        enrichTasks.push(agentService._enrichMissingArticleImages(topSlice));
+        enrichTasks.push(agentService._enrichMissingArticleFullTexts(topSlice));
     }
 
     if (enrichTasks.length > 0) {
         await Promise.all(enrichTasks);
+    }
+
+    if (opts.translateFallback) {
+        const translated = await aiService.ensureBatchInChinese(candidates, 8);
+        candidates = translated.map((item, idx) => ({
+            ...item,
+            urlToImage: item.urlToImage || candidates[idx]?.urlToImage || null,
+            content: item.content || candidates[idx]?.content || '',
+            fullText: item.fullText || candidates[idx]?.fullText || item.content || ''
+        }));
     }
 
     const llmInput = candidates.map((a, idx) => ({
@@ -129,7 +130,8 @@ async function runHarvest(customOptions = {}) {
         categoryHint: a.category || '国际',
         publishedAt: a.publishedAt,
         url: a.url,
-        excerpt: truncateText(a.content || a.description || a.title || '', 700)
+        excerpt: truncateText(a.fullText || a.content || a.description || a.title || '', 700),
+        fullText: truncateText(a.fullText || a.content || a.description || '', 4500)
     }));
 
     const payload = {

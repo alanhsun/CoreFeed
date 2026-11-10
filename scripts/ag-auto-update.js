@@ -574,6 +574,10 @@ async function runAutoUpdate(customOptions = {}) {
                 id: item.id,
                 translatedTitle: item.translatedTitle || item.title,
                 summary: item.summary || item.translatedDescription || item.description || item.title,
+                fullText: item.fullText || item.content || item.description || '',
+                originalParagraphs: Array.isArray(item.originalParagraphs) ? item.originalParagraphs : [],
+                translatedContent: item.translatedContent || (Array.isArray(item.translatedParagraphs) ? item.translatedParagraphs.join('\n\n') : ''),
+                translatedParagraphs: Array.isArray(item.translatedParagraphs) ? item.translatedParagraphs : [],
                 region: item.region || '国际',
                 category: item.category || '国际',
                 keyPoints: extractFallbackKeyPoints(item, aiService)

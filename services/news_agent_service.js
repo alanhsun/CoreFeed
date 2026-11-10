@@ -486,6 +486,66 @@ class NewsAgentService {
         }
     }
 
+    /**
+     * 在采集阶段并发抓取候选报道的原文完整正文（供采编阶段直接完成原文全文中文翻译并随快照上传 GitHub）
+     */
+    async _enrichMissingArticleFullTexts(articles) {
+        if (!Array.isArray(articles) || articles.length === 0) return;
+
+        const concurrency = 6;
+        for (let i = 0; i < articles.length; i += concurrency) {
+            const slice = articles.slice(i, i + concurrency);
+            await Promise.all(
+                slice.map(async (article) => {
+                    if (!article) return;
+                    const existingRaw = String(article.fullText || article.content || article.description || '')
+                        .replace(/\[[^\]]*补充报道\]:?\s*/g, '\n\n')
+                        .trim();
+
+                    const isTestEnv = process.env.NODE_ENV === 'test';
+                    const isLocalUrl = /^https?:\/\/(127\.0\.0\.1|localhost)/i.test(article.url || '');
+
+                    if (existingRaw.length < 450 && article.url && (!isTestEnv || isLocalUrl)) {
+                        try {
+                            let extracted = await extractFullArticleContent(article.url, { timeout: 6000, maxLength: 5500 });
+                            if ((!extracted || !extracted.content || extracted.content.length < 220) && Array.isArray(article.relatedSources)) {
+                                for (const rel of article.relatedSources.slice(0, 2)) {
+                                    if (rel?.url && rel.url !== article.url) {
+                                        const relExt = await extractFullArticleContent(rel.url, { timeout: 5000, maxLength: 5500 });
+                                        if (relExt?.success && (relExt.content || '').length >= 220) {
+                                            extracted = relExt;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (extracted?.success && extracted.content && extracted.content.length > existingRaw.length) {
+                                article.fullText = extracted.content;
+                                article.fullTextContent = extracted.content;
+                                if ((article.content || '').length < extracted.content.length) {
+                                    article.content = extracted.content;
+                                }
+                            }
+                        } catch (_) {}
+                    }
+
+                    const finalRaw = String(article.fullText || article.content || article.description || article.title || '')
+                        .replace(/\[[^\]]*补充报道\]:?\s*/g, '\n\n')
+                        .trim();
+                    if (!article.fullText && finalRaw) {
+                        article.fullText = finalRaw;
+                    }
+                    if (!Array.isArray(article.originalParagraphs) || article.originalParagraphs.length === 0) {
+                        article.originalParagraphs = stripHtml(finalRaw)
+                            .split(/\n+/)
+                            .map(p => p.trim())
+                            .filter(p => p.length >= 10);
+                    }
+                })
+            );
+        }
+    }
+
     _basicCleanArticles(articles) {
         const cutoff = Date.now() - (config.agent.freshnessHours || 48) * 3600000;
         return articles.filter(a => {
@@ -499,7 +559,7 @@ class NewsAgentService {
     }
 
     /**
-     * 抓取外媒原文全文并执行分段中文翻译（供点击卡片主体弹出原文全文中文翻译使用）
+     * 获取外媒原文全文中文翻译（优先直接读取采集阶段预译并随 GitHub 快照同步的 translatedParagraphs，缺失时才实时兜底提取翻译）
      */
     async translateArticleFullText(articleInfo = {}) {
         const {
@@ -526,14 +586,38 @@ class NewsAgentService {
             allPool.find(a => a && a.url === url) ||
             null;
 
+        // 若该新闻在抓取/编译阶段已预生成全文中文翻译并存入 GitHub 快照，直接零延迟返回
+        if (matchedArticle && Array.isArray(matchedArticle.translatedParagraphs) && matchedArticle.translatedParagraphs.length > 0) {
+            const prebuiltRes = {
+                success: true,
+                url,
+                title: matchedArticle.translatedTitle || translatedTitle || matchedArticle.title || title || '原文全文中文翻译',
+                originalTitle: matchedArticle.title || title || '',
+                sourceName: matchedArticle.source?.name || sourceName || 'Global Media',
+                region: matchedArticle.region || '国际',
+                category: matchedArticle.category || '国际',
+                summary: matchedArticle.summary || existingSummary || '',
+                keyPoints: Array.isArray(matchedArticle.keyPoints) ? matchedArticle.keyPoints : [],
+                extractionMethod: 'snapshot_pretranslated',
+                fullText: matchedArticle.fullText || matchedArticle.content || matchedArticle.description || '',
+                translatedText: matchedArticle.translatedContent || matchedArticle.translatedParagraphs.join('\n\n'),
+                translatedParagraphs: matchedArticle.translatedParagraphs,
+                originalParagraphs: Array.isArray(matchedArticle.originalParagraphs) ? matchedArticle.originalParagraphs : [],
+                fromSnapshot: true
+            };
+            this.fullTextTranslationCache.set(url, prebuiltRes);
+            return prebuiltRes;
+        }
+
         let extracted = null;
         let extractionMethod = 'cheerio_readability';
 
-        if (matchedArticle?.fullTextContent && matchedArticle.fullTextContent.length >= 260) {
+        const preloadedFullText = matchedArticle?.fullText || matchedArticle?.fullTextContent || '';
+        if (preloadedFullText && preloadedFullText.length >= 260) {
             extracted = {
                 success: true,
-                content: matchedArticle.fullTextContent,
-                title: matchedArticle.title || title,
+                content: preloadedFullText,
+                title: matchedArticle?.title || title,
                 method: 'cached_fulltext'
             };
             extractionMethod = extracted.method;
@@ -542,6 +626,7 @@ class NewsAgentService {
             if (extracted?.success && extracted.content) {
                 extractionMethod = extracted.method || 'cheerio_readability';
                 if (matchedArticle) {
+                    matchedArticle.fullText = extracted.content;
                     matchedArticle.fullTextContent = extracted.content;
                 }
             }
@@ -562,6 +647,7 @@ class NewsAgentService {
         }
 
         const fallbackContent = [
+            matchedArticle?.fullText || '',
             matchedArticle?.content || '',
             matchedArticle?.description || '',
             existingSummary || ''

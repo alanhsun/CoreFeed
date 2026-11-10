@@ -783,8 +783,58 @@ ${itemsLines}`;
         return trimmed;
     }
 
+    _splitIntoParagraphs(rawText = '') {
+        if (!rawText || typeof rawText !== 'string') return [];
+        const cleaned = rawText
+            .replace(/\[[^\]]*补充报道\]:?\s*/g, '\n\n')
+            .replace(/\r\n/g, '\n')
+            .trim();
+        if (!cleaned) return [];
+
+        const initialBlocks = cleaned
+            .split(/\n+/)
+            .map(p => p.trim())
+            .filter(p => p.length >= 12);
+
+        const paragraphs = [];
+        for (const block of initialBlocks) {
+            if (block.length <= 360) {
+                paragraphs.push(block);
+                continue;
+            }
+            // 将无换行的超长单段按句号切分为适读段落（每段约 160-280 字符）
+            const sentences = block.split(/(?<=[.!?。！？；])\s+/);
+            let acc = '';
+            for (const sent of sentences) {
+                const s = sent.trim();
+                if (!s) continue;
+                if (acc && (acc.length + s.length) > 260) {
+                    paragraphs.push(acc.trim());
+                    acc = s;
+                } else {
+                    acc = acc ? `${acc} ${s}` : s;
+                }
+            }
+            if (acc.trim()) {
+                paragraphs.push(acc.trim());
+            }
+        }
+        return paragraphs;
+    }
+
+    _cleanChineseParagraph(para = '') {
+        return String(para || '')
+            .replace(/\[[^\]]*补充报道\]:?\s*/g, '')
+            .replace(/([\u4e00-\u9fa5])\s+([\u4e00-\u9fa5])/g, '$1$2')
+            .replace(/(\d+)\s+([年月日%亿万])/g, '$1$2')
+            .replace(/([“‘（《])\s+/g, '$1')
+            .replace(/\s+([”’）》])/g, '$1')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
     /**
-     * 多段落长文并发中文精译（供卡片主体点击弹出原文全文中文翻译使用）
+     * 多段落长文并发中文精译（在新闻抓取与编译阶段直接生成原文全文中文翻译）
      */
     async translateParagraphsToChinese(text, maxChars = 6000) {
         if (!text || typeof text !== 'string') return '';
@@ -792,10 +842,7 @@ ${itemsLines}`;
         if (!sliced) return '';
         if (this._isMostlyChinese(sliced, 12)) return sliced;
 
-        const rawParas = sliced
-            .split(/\n{2,}|\r\n{2,}|\n/)
-            .map(p => p.trim())
-            .filter(p => p.length >= 16);
+        const rawParas = this._splitIntoParagraphs(sliced);
 
         if (rawParas.length === 0) {
             return await this.translateTextToChinese(sliced);
@@ -1021,7 +1068,7 @@ ${itemsLines}`;
     }
 
     /**
-     * 确保单条新闻的标题、摘要与核心要点均为高质量中文（若仍为英文则自动调用多端点高速中文翻译并规范化长度与结构）
+     * 确保单条新闻的标题、摘要、核心要点及原文全文译文均为高质量中文（在采编阶段直接生成完整中文译文并随快照上传 GitHub）
      */
     async ensureArticleInChinese(article) {
         if (!article) return article;
@@ -1029,7 +1076,7 @@ ${itemsLines}`;
         const existingSummary = (article.summary || article.translatedDescription || '').trim();
 
         const descText = String(article.description || '').replace(/\[[^\]]*补充报道\]:?\s*/g, ' ').trim();
-        const contentText = String(article.content || '').replace(/\[[^\]]*补充报道\]:?\s*/g, ' ').trim();
+        const contentText = String(article.fullText || article.content || '').replace(/\[[^\]]*补充报道\]:?\s*/g, '\n\n').trim();
         let combinedBodySource = '';
         if (descText && contentText) {
             if (contentText.startsWith(descText.slice(0, Math.min(40, descText.length)))) {
@@ -1037,15 +1084,25 @@ ${itemsLines}`;
             } else if (descText.startsWith(contentText.slice(0, Math.min(40, contentText.length)))) {
                 combinedBodySource = descText;
             } else {
-                combinedBodySource = `${descText} ${contentText}`;
+                combinedBodySource = `${descText}\n\n${contentText}`;
             }
         } else {
-            combinedBodySource = descText || contentText || existingSummary || currentTitle;
+            combinedBodySource = contentText || descText || existingSummary || currentTitle;
         }
         const sourceToTranslate = combinedBodySource.replace(/\s+/g, ' ').trim().slice(0, 650);
+        const rawFullSource = combinedBodySource.trim().slice(0, 5500);
+        const originalParagraphs = (Array.isArray(article.originalParagraphs) && article.originalParagraphs.length > 0)
+            ? article.originalParagraphs
+            : this._splitIntoParagraphs(rawFullSource);
 
         let zhTitle = currentTitle;
         let zhBody = this._isMostlyChinese(existingSummary, 15) ? existingSummary : sourceToTranslate;
+        let zhFullText = '';
+
+        const hasExistingTranslatedParas =
+            Array.isArray(article.translatedParagraphs) &&
+            article.translatedParagraphs.length > 0 &&
+            article.translatedParagraphs.every(p => this._isMostlyChinese(p, 4));
 
         const tasks = [];
         if (!this._isMostlyChinese(zhTitle, 4)) {
@@ -1056,7 +1113,20 @@ ${itemsLines}`;
             );
         }
 
-        if (!this._isMostlyChinese(zhBody, 15) || zhBody === article.title || (zhBody.length < 80 && sourceToTranslate.length > zhBody.length && !this._isMostlyChinese(sourceToTranslate, 15))) {
+        const needBodyTranslate = !this._isMostlyChinese(zhBody, 15) ||
+            zhBody === article.title ||
+            (zhBody.length < 80 && sourceToTranslate.length > zhBody.length && !this._isMostlyChinese(sourceToTranslate, 15));
+
+        if (!hasExistingTranslatedParas && (rawFullSource.length > 650 || originalParagraphs.length > 1)) {
+            tasks.push(
+                this.translateParagraphsToChinese(rawFullSource, 5500).then(res => {
+                    zhFullText = res || '';
+                    if (needBodyTranslate && zhFullText && this._isMostlyChinese(zhFullText, 15)) {
+                        zhBody = zhFullText.replace(/\s+/g, ' ').trim().slice(0, 500);
+                    }
+                })
+            );
+        } else if (needBodyTranslate) {
             tasks.push(
                 this.translateTextToChinese(sourceToTranslate).then(res => {
                     zhBody = res || zhBody;
@@ -1085,11 +1155,31 @@ ${itemsLines}`;
         const formattedSummary = this._formatChineseSummary(zhBody, formattedTitle, article, region, category);
         const keyPoints = this._buildChineseKeyPoints(formattedTitle, zhBody, formattedSummary, article, region, category);
 
+        let translatedParagraphs = [];
+        if (hasExistingTranslatedParas) {
+            translatedParagraphs = article.translatedParagraphs.map(p => this._cleanChineseParagraph(p)).filter(Boolean);
+        } else {
+            const rawZhCandidate = zhFullText || (this._isMostlyChinese(rawFullSource, 15) ? rawFullSource : zhBody);
+            translatedParagraphs = this._splitIntoParagraphs(rawZhCandidate)
+                .map(p => this._cleanChineseParagraph(p))
+                .filter(p => p.length >= 10 && this._isMostlyChinese(p, 4));
+        }
+
+        if (translatedParagraphs.length === 0) {
+            translatedParagraphs = [formattedSummary];
+        }
+
+        const translatedContent = translatedParagraphs.join('\n\n');
+
         return {
             ...article,
+            fullText: article.fullText || rawFullSource || article.content || article.description || '',
+            originalParagraphs,
             translatedTitle: formattedTitle,
             translatedDescription: formattedSummary,
             summary: formattedSummary,
+            translatedContent,
+            translatedParagraphs,
             keyPoints,
             region,
             category,

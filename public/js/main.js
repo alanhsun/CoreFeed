@@ -723,6 +723,35 @@ class CoreFeedApp {
             linkEl.href = url || '#';
         }
 
+        // 优先直接展示新闻抓取/编译阶段已预译并随 GitHub 快照 (ag-snapshot/latest.json) 同步下发的全文中文译文
+        const pretranslatedParas = Array.isArray(article?.translatedParagraphs) && article.translatedParagraphs.length > 0
+            ? article.translatedParagraphs
+            : (article?.translatedContent
+                ? String(article.translatedContent).split(/\n+/).map(p => p.trim()).filter(Boolean)
+                : null);
+
+        if (pretranslatedParas && pretranslatedParas.length > 0) {
+            const origParas = Array.isArray(article?.originalParagraphs) && article.originalParagraphs.length > 0
+                ? article.originalParagraphs
+                : (article?.fullText || article?.content
+                    ? String(article.fullText || article.content).split(/\n+/).map(p => p.trim()).filter(p => p.length >= 10)
+                    : []);
+            if (bodyEl) bodyEl.scrollTop = 0;
+            this.renderFullTextModalContent(
+                {
+                    summary,
+                    keyPoints,
+                    translatedParagraphs: pretranslatedParas,
+                    originalParagraphs: origParas
+                },
+                { summary, keyPoints }
+            );
+            if (statusEl) {
+                statusEl.textContent = `全文共 ${pretranslatedParas.length} 段 · 已于采编阶段完成全文精译并随 GitHub 快照同步`;
+            }
+            return;
+        }
+
         if (this.fullTextClientCache.has(url)) {
             const cachedData = this.fullTextClientCache.get(url);
             this.renderFullTextModalContent(cachedData, { summary, keyPoints });
