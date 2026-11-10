@@ -252,6 +252,37 @@ function initializeApiRoutes(services, io, stateManager) {
     });
 
     /**
+     * 点击新闻卡片主体时，实时抓取外媒原文全文并执行分段中文翻译
+     */
+    router.post('/news/translate-fulltext', async (req, res) => {
+        try {
+            const { url, title, translatedTitle, sourceName, existingSummary } = req.body || {};
+            if (!url) {
+                return res.status(400).json({
+                    success: false,
+                    message: '请提供新闻原文 URL'
+                });
+            }
+
+            const result = await newsAgentService.translateArticleFullText({
+                url,
+                title,
+                translatedTitle,
+                sourceName,
+                existingSummary
+            });
+
+            res.json(result);
+        } catch (error) {
+            logger.error('API', '原文全文中文翻译失败', error.message);
+            res.status(500).json({
+                success: false,
+                message: error.message
+            });
+        }
+    });
+
+    /**
      * 接收由外部 Agent (如 Antigravity 客户端) 采集、聚类并精编完成的全球新闻与综述数据包
      */
     router.post('/agent/publish', async (req, res) => {

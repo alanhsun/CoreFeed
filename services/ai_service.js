@@ -783,6 +783,43 @@ ${itemsLines}`;
         return trimmed;
     }
 
+    /**
+     * 多段落长文并发中文精译（供卡片主体点击弹出原文全文中文翻译使用）
+     */
+    async translateParagraphsToChinese(text, maxChars = 6000) {
+        if (!text || typeof text !== 'string') return '';
+        const sliced = text.trim().slice(0, maxChars);
+        if (!sliced) return '';
+        if (this._isMostlyChinese(sliced, 12)) return sliced;
+
+        const rawParas = sliced
+            .split(/\n{2,}|\r\n{2,}|\n/)
+            .map(p => p.trim())
+            .filter(p => p.length >= 16);
+
+        if (rawParas.length === 0) {
+            return await this.translateTextToChinese(sliced);
+        }
+
+        // 将段落打包为 <= 950 字符的块并发翻译，并保留段落换行结构
+        const chunks = [];
+        let currentChunk = '';
+        for (const p of rawParas) {
+            if ((currentChunk + '\n\n' + p).length > 950 && currentChunk) {
+                chunks.push(currentChunk);
+                currentChunk = p;
+            } else {
+                currentChunk = currentChunk ? `${currentChunk}\n\n${p}` : p;
+            }
+        }
+        if (currentChunk) chunks.push(currentChunk);
+
+        const translatedChunks = await Promise.all(
+            chunks.slice(0, 6).map(chunk => this.translateTextToChinese(chunk, 7500))
+        );
+        return translatedChunks.filter(Boolean).join('\n\n');
+    }
+
     _extractSourceChineseName(sourceName = '') {
         const raw = String(sourceName || '国际权威媒体').trim();
         const parenMatch = raw.match(/\(([^)]*[\u4e00-\u9fa5]+[^)]*)\)/);

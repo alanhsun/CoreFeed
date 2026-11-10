@@ -9,12 +9,13 @@
  */
 const config = require('../config');
 const logger = require('../utils/logger');
-const { writeJsonFile } = require('../utils/helpers');
+const { writeJsonFile, stripHtml, SimpleCache } = require('../utils/helpers');
 const { getGlobalSourceMatrix, getSourceAuthorityScore } = require('../config/global_sources');
 const {
     fetchFromGlobalSource,
     fetchArticleLeadImage,
     searchNewsImageByTitle,
+    extractFullArticleContent,
     createArticleId
 } = require('./agent_tools');
 
@@ -27,6 +28,7 @@ class NewsAgentService {
         this.isRunningPatrol = false;
         this.lastSourceStats = [];
         this.agentLogs = [];
+        this.fullTextTranslationCache = new SimpleCache(200, 6 * 60 * 60 * 1000);
     }
 
     setServices({ io, stateManager, aiService, newsService }) {
@@ -494,6 +496,118 @@ class NewsAgentService {
             }
             return true;
         });
+    }
+
+    /**
+     * 抓取外媒原文全文并执行分段中文翻译（供点击卡片主体弹出原文全文中文翻译使用）
+     */
+    async translateArticleFullText(articleInfo = {}) {
+        const {
+            url,
+            title = '',
+            translatedTitle = '',
+            sourceName = '',
+            existingSummary = ''
+        } = articleInfo;
+
+        if (!url) {
+            throw new Error('缺少新闻原文 URL');
+        }
+
+        const cached = this.fullTextTranslationCache.get(url);
+        if (cached) {
+            return { ...cached, fromCache: true };
+        }
+
+        const newsData = (this.stateManager && this.stateManager.get('newsData')) || [];
+        const allPool = (this.stateManager && this.stateManager.get('allEnhancedNews')) || [];
+        const matchedArticle =
+            newsData.find(a => a && a.url === url) ||
+            allPool.find(a => a && a.url === url) ||
+            null;
+
+        let extracted = null;
+        let extractionMethod = 'cheerio_readability';
+
+        if (matchedArticle?.fullTextContent && matchedArticle.fullTextContent.length >= 260) {
+            extracted = {
+                success: true,
+                content: matchedArticle.fullTextContent,
+                title: matchedArticle.title || title,
+                method: 'cached_fulltext'
+            };
+            extractionMethod = extracted.method;
+        } else {
+            extracted = await extractFullArticleContent(url, { timeout: 6500, maxLength: 5500 });
+            if (extracted?.success && extracted.content) {
+                extractionMethod = extracted.method || 'cheerio_readability';
+                if (matchedArticle) {
+                    matchedArticle.fullTextContent = extracted.content;
+                }
+            }
+        }
+
+        // 若主链接受防爬限制正文过短，自动尝试从同题交叉印证媒体 (relatedSources) 提取原文全文
+        if ((!extracted || !extracted.content || extracted.content.length < 200) && Array.isArray(matchedArticle?.relatedSources)) {
+            for (const rel of matchedArticle.relatedSources.slice(0, 2)) {
+                if (rel?.url && rel.url !== url) {
+                    const relExtracted = await extractFullArticleContent(rel.url, { timeout: 5500, maxLength: 5500 });
+                    if (relExtracted?.success && (relExtracted.content || '').length >= 200) {
+                        extracted = relExtracted;
+                        extractionMethod = `${relExtracted.method || 'readability'} (${rel.name || '交叉信源'})`;
+                        break;
+                    }
+                }
+            }
+        }
+
+        const fallbackContent = [
+            matchedArticle?.content || '',
+            matchedArticle?.description || '',
+            existingSummary || ''
+        ].filter(Boolean).sort((a, b) => b.length - a.length)[0] || title;
+
+        const rawBody = (extracted && extracted.success && extracted.content && extracted.content.length >= 80)
+            ? extracted.content
+            : fallbackContent;
+
+        const leadSummary = matchedArticle?.summary || existingSummary || '';
+        const keyPoints = Array.isArray(matchedArticle?.keyPoints) ? matchedArticle.keyPoints : [];
+        const zhBody = await this.aiService.translateParagraphsToChinese(rawBody, 5500);
+
+        const translatedParagraphs = stripHtml(zhBody)
+            .split(/\n+/)
+            .map(p => p.trim())
+            .filter(p => p.length >= 10);
+
+        const originalParagraphs = stripHtml(rawBody)
+            .split(/\n+/)
+            .map(p => p.trim())
+            .filter(p => p.length >= 10);
+
+        const finalParagraphs = translatedParagraphs.length > 0
+            ? translatedParagraphs
+            : (leadSummary ? [stripHtml(leadSummary)] : [stripHtml(rawBody)]);
+
+        const finalRes = {
+            success: true,
+            url,
+            title: matchedArticle?.translatedTitle || translatedTitle || title || extracted?.title || '原文全文中文翻译',
+            originalTitle: matchedArticle?.title || title || extracted?.title || '',
+            sourceName: matchedArticle?.source?.name || sourceName || 'Global Media',
+            region: matchedArticle?.region || '国际',
+            category: matchedArticle?.category || '国际',
+            summary: leadSummary,
+            keyPoints,
+            extractionMethod,
+            fullText: rawBody,
+            translatedText: finalParagraphs.join('\n\n'),
+            translatedParagraphs: finalParagraphs,
+            originalParagraphs
+        };
+
+        this.fullTextTranslationCache.set(url, finalRes);
+        return finalRes;
     }
 }
 

@@ -25,6 +25,8 @@ class CoreFeedApp {
         this.selectedCategory = '全部';
         this.activeTab = 'feed';
         this.socket = null;
+        this.fullTextClientCache = new Map();
+        this.activeFullTextRequestId = 0;
 
         this.initTheme();
         this.initKeyboardShortcuts();
@@ -64,6 +66,7 @@ class CoreFeedApp {
     initKeyboardShortcuts() {
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                this.closeFullTextModal();
                 this.closeSettingsModal();
             }
         });
@@ -464,9 +467,13 @@ class CoreFeedApp {
                         </div>
                     </div>
 
-                    <div class="lead-bento-inner has-media">
-                        <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
-                           class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
+                    <div class="lead-bento-inner has-media card-body-trigger"
+                         role="button"
+                         tabindex="0"
+                         title="点击查看原文全文中文翻译"
+                         onclick="app.handleCardBodyClick(event, '${encodeURIComponent(item.url || '')}')"
+                         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();app.handleCardBodyClick(event, '${encodeURIComponent(item.url || '')}');}">
+                        <div class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
                             ${imageUrl ? `
                                 <img src="${this.escapeHtml(displayImgSrc)}"
                                      data-raw-src="${this.escapeHtml(imageUrl)}"
@@ -487,7 +494,7 @@ class CoreFeedApp {
                                     <span class="fallback-plate-cat">要闻简报</span>
                                 </div>
                             </div>
-                        </a>
+                        </div>
 
                         <div class="card-body">
                             ${hasMultiSources ? `
@@ -505,14 +512,12 @@ class CoreFeedApp {
 
                             <div>
                                 <h3 class="card-title">
-                                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(title)}</a>
+                                    <span class="card-title-link">${this.escapeHtml(title)}</span>
                                 </h3>
-                                ${originalTitle ? `<p class="card-subtitle-en line-clamp-1" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
+                                ${originalTitle ? `<p class="card-subtitle-en line-clamp-2" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
                             </div>
 
-                            <p class="card-summary line-clamp-4">
-                                ${this.escapeHtml(summary)}
-                            </p>
+                            <p class="card-summary">${this.escapeHtml(summary)}</p>
 
                             ${keyPoints.length > 0 ? `
                                 <ul class="card-keypoints">
@@ -524,7 +529,11 @@ class CoreFeedApp {
                 </div>
 
                 <div class="card-footer">
-                    <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
+                    <div class="card-footer-meta">
+                        <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
+                        <span class="card-meta-sep">·</span>
+                        <span class="card-translate-hint">点击卡片看全文翻译</span>
+                    </div>
                     <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
                         class="btn-source-link">
                         <span>原文</span>
@@ -575,9 +584,13 @@ class CoreFeedApp {
                         <span class="card-taxonomy-pill">${this.escapeHtml(metaBadgeText)}</span>
                     </div>
 
-                    <div class="lead-bento-inner">
-                        <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
-                           class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
+                    <div class="lead-bento-inner card-body-trigger"
+                         role="button"
+                         tabindex="0"
+                         title="点击查看原文全文中文翻译"
+                         onclick="app.handleCardBodyClick(event, '${encodeURIComponent(item.url || '')}')"
+                         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();app.handleCardBodyClick(event, '${encodeURIComponent(item.url || '')}');}">
+                        <div class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
                             ${imageUrl ? `
                                 <img src="${this.escapeHtml(displayImgSrc)}"
                                      data-raw-src="${this.escapeHtml(imageUrl)}"
@@ -598,7 +611,7 @@ class CoreFeedApp {
                                     <span class="fallback-plate-cat">要闻简报</span>
                                 </div>
                             </div>
-                        </a>
+                        </div>
 
                         <div class="card-body">
                             ${hasMultiSources ? `
@@ -616,14 +629,12 @@ class CoreFeedApp {
 
                             <div>
                                 <h3 class="card-title">
-                                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(title)}</a>
+                                    <span class="card-title-link">${this.escapeHtml(title)}</span>
                                 </h3>
-                                ${originalTitle ? `<p class="card-subtitle-en line-clamp-1" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
+                                ${originalTitle ? `<p class="card-subtitle-en line-clamp-2" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
                             </div>
 
-                            <p class="card-summary line-clamp-3">
-                                ${this.escapeHtml(summary)}
-                            </p>
+                            <p class="card-summary">${this.escapeHtml(summary)}</p>
 
                             ${keyPoints.length > 0 ? `
                                 <ul class="card-keypoints">
@@ -635,7 +646,11 @@ class CoreFeedApp {
                 </div>
 
                 <div class="card-footer">
-                    <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
+                    <div class="card-footer-meta">
+                        <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
+                        <span class="card-meta-sep">·</span>
+                        <span class="card-translate-hint">全文翻译</span>
+                    </div>
                     <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
                         class="btn-source-link">
                         <span>原文</span>
@@ -644,6 +659,209 @@ class CoreFeedApp {
                 </div>
             </article>
         `;
+    }
+
+    handleCardBodyClick(event, encodedUrl) {
+        if (event && event.target && typeof event.target.closest === 'function') {
+            const interactiveEl = event.target.closest('a, button');
+            if (interactiveEl) {
+                return;
+            }
+        }
+        if (event) {
+            event.preventDefault();
+        }
+        let url = '';
+        try {
+            url = decodeURIComponent(encodedUrl || '');
+        } catch (_) {
+            url = encodedUrl || '';
+        }
+        if (!url) return;
+        this.openFullTextModal(url);
+    }
+
+    async openFullTextModal(url) {
+        const modal = document.getElementById('fullTextModal');
+        if (!modal) return;
+
+        this.pauseHeroCarousel();
+        modal.classList.remove('hidden');
+
+        const article = this.news.find(item => item.url === url) || null;
+        const title = article ? (article.translatedTitle || article.title || '无标题') : '正在读取文章标题...';
+        const originalTitle = article && article.translatedTitle && article.translatedTitle !== article.title
+            ? article.title
+            : '';
+        const sourceName = article?.source?.name || 'Global Media';
+        const region = article?.region || '国际';
+        const category = article?.category || '国际';
+        const summary = article ? (article.summary || article.translatedDescription || article.description || '') : '';
+        const keyPoints = Array.isArray(article?.keyPoints) ? article.keyPoints : [];
+
+        const titleEl = document.getElementById('fullTextTitle');
+        const origTitleEl = document.getElementById('fullTextOriginalTitle');
+        const badgeEl = document.getElementById('fullTextSourceBadge');
+        const statusEl = document.getElementById('fullTextStatusMeta');
+        const linkEl = document.getElementById('fullTextOriginalLink');
+        const bodyEl = document.getElementById('fullTextBody');
+
+        if (titleEl) titleEl.textContent = title;
+        if (origTitleEl) {
+            if (originalTitle) {
+                origTitleEl.textContent = originalTitle;
+                origTitleEl.classList.remove('hidden');
+            } else {
+                origTitleEl.textContent = '';
+                origTitleEl.classList.add('hidden');
+            }
+        }
+        if (badgeEl) {
+            badgeEl.textContent = `${sourceName} · ${region}${category && category !== region ? ' / ' + category : ''}`;
+        }
+        if (linkEl) {
+            linkEl.href = url || '#';
+        }
+
+        if (this.fullTextClientCache.has(url)) {
+            const cachedData = this.fullTextClientCache.get(url);
+            this.renderFullTextModalContent(cachedData, { summary, keyPoints });
+            if (statusEl) {
+                statusEl.textContent = `全文共 ${cachedData.paragraphCount || (cachedData.translatedParagraphs || []).length} 段 · 已完成外媒全文中文精译`;
+            }
+            return;
+        }
+
+        const reqId = ++this.activeFullTextRequestId;
+        if (statusEl) {
+            statusEl.textContent = '正在实时抓取外媒原文并逐段翻译为中文...';
+        }
+
+        if (bodyEl) {
+            bodyEl.scrollTop = 0;
+            bodyEl.innerHTML = `
+                ${(summary || keyPoints.length > 0) ? `
+                    <div class="fulltext-lead-box">
+                        <div class="fulltext-section-label">核心导读摘要</div>
+                        ${summary ? `<p class="fulltext-lead-summary">${this.escapeHtml(summary)}</p>` : ''}
+                        ${keyPoints.length > 0 ? `
+                            <ul class="card-keypoints" style="margin-top: 10px;">
+                                ${keyPoints.map(kp => `<li class="card-keypoint-item">${this.escapeHtml(kp)}</li>`).join('')}
+                            </ul>
+                        ` : ''}
+                    </div>
+                ` : ''}
+                <div class="fulltext-loading-state">
+                    <i class="fa-solid fa-spinner fa-spin" style="color: var(--accent);"></i>
+                    <span>正在连接外媒信源提取正文并翻译全文段落，请稍候...</span>
+                </div>
+            `;
+        }
+
+        try {
+            const res = await fetch('/api/news/translate-fulltext', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'CoreFeed-WebUI'
+                },
+                body: JSON.stringify({
+                    url,
+                    title: article?.title || '',
+                    translatedTitle: article?.translatedTitle || '',
+                    sourceName,
+                    existingSummary: summary
+                })
+            });
+            const data = await res.json();
+            if (reqId !== this.activeFullTextRequestId) return;
+
+            if (!res.ok || !data.success) {
+                throw new Error(data.message || '抓取或翻译外媒全文失败');
+            }
+
+            this.fullTextClientCache.set(url, data);
+            this.renderFullTextModalContent(data, { summary, keyPoints });
+            if (statusEl) {
+                const pCount = data.paragraphCount || (data.translatedParagraphs || []).length;
+                statusEl.textContent = data.fallbackUsed
+                    ? '外媒正文受阅读墙限制 · 已展示完整精编中文译文'
+                    : `全文共 ${pCount} 段 · 已完成外媒全文中文精译`;
+            }
+        } catch (err) {
+            if (reqId !== this.activeFullTextRequestId) return;
+            if (statusEl) {
+                statusEl.textContent = '外媒全文抓取受限 · 已展示本地完整中文精编导读';
+            }
+            if (bodyEl) {
+                bodyEl.innerHTML = `
+                    ${(summary || keyPoints.length > 0) ? `
+                        <div class="fulltext-lead-box">
+                            <div class="fulltext-section-label">中文精编导读</div>
+                            ${summary ? `<p class="fulltext-lead-summary">${this.escapeHtml(summary)}</p>` : ''}
+                            ${keyPoints.length > 0 ? `
+                                <ul class="card-keypoints" style="margin-top: 10px;">
+                                    ${keyPoints.map(kp => `<li class="card-keypoint-item">${this.escapeHtml(kp)}</li>`).join('')}
+                                </ul>
+                            ` : ''}
+                        </div>
+                    ` : ''}
+                    <div class="fulltext-notice-box">
+                        <span>未能直接提取该外媒页面的完整长文（${this.escapeHtml(err.message)}），可点击右下角「查看外媒原文 ↗」直接访问原网站。</span>
+                    </div>
+                `;
+            }
+        }
+    }
+
+    renderFullTextModalContent(data, fallback = {}) {
+        const bodyEl = document.getElementById('fullTextBody');
+        if (!bodyEl) return;
+
+        const summary = data.summary || fallback.summary || '';
+        const keyPoints = Array.isArray(data.keyPoints) && data.keyPoints.length > 0
+            ? data.keyPoints
+            : (Array.isArray(fallback.keyPoints) ? fallback.keyPoints : []);
+        const translatedParagraphs = Array.isArray(data.translatedParagraphs) ? data.translatedParagraphs : [];
+        const originalParagraphs = Array.isArray(data.originalParagraphs) ? data.originalParagraphs : [];
+
+        const leadHtml = (summary || keyPoints.length > 0) ? `
+            <div class="fulltext-lead-box">
+                <div class="fulltext-section-label">核心导读摘要</div>
+                ${summary ? `<p class="fulltext-lead-summary">${this.escapeHtml(summary)}</p>` : ''}
+                ${keyPoints.length > 0 ? `
+                    <ul class="card-keypoints" style="margin-top: 10px;">
+                        ${keyPoints.map(kp => `<li class="card-keypoint-item">${this.escapeHtml(kp)}</li>`).join('')}
+                    </ul>
+                ` : ''}
+            </div>
+        ` : '';
+
+        const zhParagraphsHtml = translatedParagraphs.length > 0 ? `
+            <div class="fulltext-zh-section summary-content">
+                <div class="fulltext-section-label">原文全文中文译文</div>
+                ${translatedParagraphs.map(p => `<p class="summary-paragraph">${this.escapeHtml(p)}</p>`).join('')}
+            </div>
+        ` : '';
+
+        const origParagraphsHtml = originalParagraphs.length > 0 ? `
+            <details class="fulltext-orig-details">
+                <summary class="fulltext-orig-summary">展开查看外媒英文原文段落 (${originalParagraphs.length} 段)</summary>
+                <div class="fulltext-orig-body">
+                    ${originalParagraphs.map(p => `<p>${this.escapeHtml(p)}</p>`).join('')}
+                </div>
+            </details>
+        ` : '';
+
+        bodyEl.innerHTML = leadHtml + zhParagraphsHtml + origParagraphsHtml;
+    }
+
+    closeFullTextModal() {
+        const modal = document.getElementById('fullTextModal');
+        if (!modal || modal.classList.contains('hidden')) return;
+        modal.classList.add('hidden');
+        this.activeFullTextRequestId++;
+        this.resumeHeroCarousel();
     }
 
     formatRelativeTime(dateInput) {

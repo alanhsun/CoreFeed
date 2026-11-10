@@ -1436,6 +1436,9 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(html.includes('btn-source-link'), 'SSR HTML .card-footer should retain .btn-source-link');
             assert.ok(html.includes('card-keypoints'), 'SSR HTML should render keypoints inside .card-keypoints');
             assert.ok(html.includes('card-keypoint-item'), 'SSR HTML should render keypoint items with .card-keypoint-item');
+            assert.ok(!html.includes('card-summary line-clamp-3') && !html.includes('card-summary line-clamp-4'), 'SSR HTML must NOT clamp .card-summary with line-clamp-3 or line-clamp-4');
+            assert.ok(html.includes('id="fullTextModal"'), 'SSR HTML should include #fullTextModal for full-text Chinese translation');
+            assert.ok(html.includes('card-body-trigger') && html.includes('handleCardBodyClick'), 'SSR HTML should wire .card-body-trigger to app.handleCardBodyClick');
 
             const mainJsSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
             assert.ok(!mainJsSource.includes('md:col-span-2'), 'public/js/main.js must NOT include md:col-span-2');
@@ -1443,6 +1446,8 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(!mainJsSource.includes('closeDeepReadModal'), 'public/js/main.js must NOT include closeDeepReadModal');
             assert.ok(!mainJsSource.includes('btn-read-more'), 'public/js/main.js must NOT include btn-read-more');
             assert.ok(!mainJsSource.includes('/api/agent/deep-read'), 'public/js/main.js must NOT reference /api/agent/deep-read');
+            assert.ok(!mainJsSource.includes('card-summary line-clamp-3') && !mainJsSource.includes('card-summary line-clamp-4'), 'public/js/main.js must NOT clamp .card-summary with line-clamp-3 or line-clamp-4');
+            assert.ok(mainJsSource.includes('handleCardBodyClick') && mainJsSource.includes('openFullTextModal') && mainJsSource.includes('/api/news/translate-fulltext'), 'public/js/main.js should implement handleCardBodyClick and openFullTextModal calling /api/news/translate-fulltext');
             assert.ok(mainJsSource.includes('card-timestamp'), 'public/js/main.js should render .card-timestamp');
             assert.ok(mainJsSource.includes('btn-source-link'), 'public/js/main.js should render .btn-source-link');
             assert.ok(mainJsSource.includes('card-keypoints'), 'public/js/main.js should render .card-keypoints');
@@ -1470,6 +1475,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(styleCssSource.includes('min-width: 0;'), 'public/css/style.css should include min-width: 0 defensive locks');
             assert.ok(styleCssSource.includes('.card-keypoints'), 'public/css/style.css should define .card-keypoints');
             assert.ok(styleCssSource.includes('.card-keypoint-item'), 'public/css/style.css should define .card-keypoint-item');
+            assert.ok(styleCssSource.includes('.fulltext-modal-surface') && styleCssSource.includes('.card-body-trigger'), 'public/css/style.css should define .fulltext-modal-surface and .card-body-trigger');
             assert.ok(!styleCssSource.includes('Instrument Serif') && !styleCssSource.includes('Plus Jakarta Sans'), 'public/css/style.css must NOT use banned fonts Instrument Serif or Plus Jakarta Sans');
             assert.ok(styleCssSource.includes('Newsreader') && styleCssSource.includes('Geist'), 'public/css/style.css should pair Newsreader display with Geist sans');
             assert.ok(!html.includes('DISPATCH // 01') && !mainJsSource.includes('DISPATCH // 01'), 'SSR and client markup must NOT render pseudo-technical DISPATCH // 01 eyebrow');
@@ -1568,6 +1574,23 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             const statusAfterUiPull = await resStatusAfterUiPull.json();
             assert.equal(statusAfterUiPull.lastPublishedBy, 'ui-sync-publisher');
             assert.equal(statusAfterUiPull.githubSync.lastPublishedBy, 'ui-sync-publisher');
+
+            // 13e. Verify POST /api/news/translate-fulltext returns full-text Chinese translation payload
+            const resTranslateFull = await fetch(`${baseUrl}/api/news/translate-fulltext`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'CoreFeed-WebUI'
+                },
+                body: JSON.stringify({
+                    url: 'https://www.bbc.com/news/ui-sync-test-2026'
+                })
+            });
+            assert.equal(resTranslateFull.status, 200);
+            const translateFullData = await resTranslateFull.json();
+            assert.equal(translateFullData.success, true);
+            assert.ok(Array.isArray(translateFullData.translatedParagraphs) && translateFullData.translatedParagraphs.length >= 1, 'translate-fulltext should return non-empty translatedParagraphs');
+            assert.ok(translateFullData.title.includes('前端一键同步最新快照测试'), 'translate-fulltext should return matched article title');
         } finally {
             services.scheduleManager.stop();
             delete process.env.AI_API_KEY;
