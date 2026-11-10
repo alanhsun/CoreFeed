@@ -127,7 +127,7 @@ class AIService {
                 messages,
                 temperature: 0.3
             };
-            if (this.modelConfig.baseUrl.includes('minimaxi.com') || /minimax/i.test(modelToUse)) {
+            if (/minimax/i.test(modelToUse)) {
                 requestBody.reasoning_split = true;
             }
 

@@ -118,9 +118,9 @@ describe('CoreFeed v2.0 — deploy-router.sh End-to-End Tests', () => {
         const containerEnvLines = options.containerEnvLines ?? [
             'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
             'NODE_ENV=production',
-            'AI_BASE_URL=https://api.minimaxi.com/v1',
+            'AI_BASE_URL=https://api.example-llm.com/v1',
             'AI_API_KEY=sk-live-router-key',
-            'AI_MODEL=MiniMax-M2.5',
+            'AI_MODEL=custom-llm-v1',
             'PUBLISH_SECRET=sec-888',
             'UPDATE_TIMES=06:00,16:30'
         ];
@@ -157,7 +157,7 @@ exit 0
         const scriptText = fs.readFileSync(DEPLOY_SCRIPT, 'utf8');
         const readmeText = fs.readFileSync(README_PATH, 'utf8');
 
-        const expectedSshCommand = 'ssh root@<YOUR_ROUTER_IP> "wget -qO /tmp/deploy-router.sh https://raw.githubusercontent.com/alanhsun/CoreFeed/main/deploy-router.sh && sh /tmp/deploy-router.sh --rebuild && rm -f /tmp/deploy-router.sh"';
+        const expectedSshCommand = 'ssh root@<YOUR_SERVER_IP> "wget -qO /tmp/deploy-router.sh https://raw.githubusercontent.com/alanhsun/CoreFeed/main/deploy-router.sh && sh /tmp/deploy-router.sh --rebuild && rm -f /tmp/deploy-router.sh"';
         assert.ok(
             scriptText.includes(expectedSshCommand),
             'deploy-router.sh header must document the PowerShell-safe one-click SSH command'
@@ -188,9 +188,9 @@ exit 0
             inspectExitCode: 0,
             imageExists: true,
             containerEnvLines: [
-                'AI_BASE_URL=https://api.minimaxi.com/v1',
+                'AI_BASE_URL=https://api.example-llm.com/v1',
                 'AI_API_KEY=sk-live-router-key',
-                'AI_MODEL=MiniMax-M2.5',
+                'AI_MODEL=custom-llm-v1',
                 'PUBLISH_SECRET=sec-888',
                 'UPDATE_TIMES=06:00,16:30'
             ]
@@ -224,9 +224,9 @@ exit 0
 
         // Verify .env values (container values must override .env.example stock placeholders)
         const envMap = parseDotEnvFile(path.join(remoteDir, '.env'));
-        assert.equal(envMap.AI_BASE_URL, 'https://api.minimaxi.com/v1');
+        assert.equal(envMap.AI_BASE_URL, 'https://api.example-llm.com/v1');
         assert.equal(envMap.AI_API_KEY, 'sk-live-router-key');
-        assert.equal(envMap.AI_MODEL, 'MiniMax-M2.5');
+        assert.equal(envMap.AI_MODEL, 'custom-llm-v1');
         assert.equal(envMap.PUBLISH_SECRET, 'sec-888');
         assert.equal(envMap.AUTO_UPDATE_ENABLED, 'true');
         assert.equal(envMap.UPDATE_TIMES, '08:00,12:30,19:30');
@@ -300,9 +300,9 @@ exit 0
             inspectExitCode: 0,
             imageExists: true,
             containerEnvLines: [
-                'AI_BASE_URL=https://api.minimaxi.com/v1?x=1&y=2',
+                'AI_BASE_URL=https://api.example-llm.com/v1?x=1&y=2',
                 'AI_API_KEY=sk-special/key&123|456=789?abc',
-                'AI_MODEL=MiniMax-M2.5',
+                'AI_MODEL=custom-llm-v1',
                 'PUBLISH_API_KEY=pub-sec&999|xyz=1'
             ]
         });

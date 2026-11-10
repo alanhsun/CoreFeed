@@ -649,8 +649,6 @@ class CoreFeedApp {
                 <div class="card-footer">
                     <div class="card-footer-meta">
                         <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
-                        <span class="card-meta-sep">·</span>
-                        <span class="card-translate-hint">全文翻译</span>
                     </div>
                     <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
                         class="btn-source-link">

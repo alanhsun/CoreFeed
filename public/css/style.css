@@ -45,7 +45,6 @@
     /* 6. Fluid Typography Scale (clamp()) */
     --t-masthead:        clamp(2rem, 3.1vw + 1rem, 3.15rem);
     --t-hero-title:      clamp(1.45rem, 1.75vw + 0.88rem, 2.12rem);
-    --t-secondary-title: clamp(1.2rem, 0.85vw + 0.94rem, 1.44rem);
     --t-section-h2:      clamp(1.35rem, 1.2vw + 0.85rem, 1.85rem);
     --t-card-title:      clamp(1.125rem, 0.35vw + 1rem, 1.25rem);
     --t-body:            1rem;
@@ -222,6 +221,23 @@ a:hover {
     display: flex;
     flex-direction: column;
     gap: 6px;
+}
+
+.kami-brand-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.kami-brand-logo {
+    width: 42px;
+    height: 42px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-hairline);
+    object-fit: cover;
+    flex-shrink: 0;
+    background: var(--bg-canvas);
 }
 
 .kami-display-title {
@@ -583,19 +599,11 @@ html.dark .tab-btn.active {
         gap: 24px;
     }
     .bento-news-grid > .bento-span-12 { grid-column: span 12 / span 12; }
-    .bento-news-grid > .bento-span-8  { grid-column: span 8 / span 8; }
-    .bento-news-grid > .bento-span-7  { grid-column: span 7 / span 7; }
-    .bento-news-grid > .bento-span-6  { grid-column: span 6 / span 6; }
-    .bento-news-grid > .bento-span-5  { grid-column: span 5 / span 5; }
     .bento-news-grid > .bento-span-4  { grid-column: span 4 / span 4; }
 }
 
 @media (max-width: 767px) {
     .bento-span-12,
-    .bento-span-8,
-    .bento-span-7,
-    .bento-span-6,
-    .bento-span-5,
     .bento-span-4 {
         grid-column: 1 / -1 !important;
     }
@@ -1215,10 +1223,7 @@ html.dark .tab-btn.active {
 }
 
 .line-clamp-1,
-.line-clamp-2,
-.line-clamp-3,
-.line-clamp-4,
-.line-clamp-5 {
+.line-clamp-2 {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     overflow: hidden;
@@ -1226,9 +1231,6 @@ html.dark .tab-btn.active {
 
 .line-clamp-1 { -webkit-line-clamp: 1; }
 .line-clamp-2 { -webkit-line-clamp: 2; }
-.line-clamp-3 { -webkit-line-clamp: 3; }
-.line-clamp-4 { -webkit-line-clamp: 4; }
-.line-clamp-5 { -webkit-line-clamp: 5; }
 
 .hidden {
     display: none !important;

@@ -1,15 +1,15 @@
-# 使用官方 Node.js 22 Alpine 镜像 (轻量级，支持 amd64 / arm64 软路由架构)
+# 使用官方 Node.js 22 Alpine 镜像 (轻量级，支持 amd64 / arm64 多架构)
 FROM node:22-alpine
 
 # 设置工作目录
 WORKDIR /app
 
 # 添加元数据
-LABEL maintainer="Alan Sun"
+LABEL maintainer="CoreFeed Contributors"
 LABEL version="2.0.0"
-LABEL description="CoreFeed v2.0 - Global News Intelligence & Progressive Compilation Platform"
+LABEL description="CoreFeed v2.0 - Global News Intelligence & Editorial Briefing Platform"
 
-# 安装系统依赖与时区数据（确保 08:00 / 12:30 / 19:30 定时采集按北京时间触发）
+# 安装系统依赖与时区数据（确保 08:00 / 12:30 / 19:30 定时同步按北京时间触发）
 RUN apk add --no-cache \
     wget \
     curl \
@@ -27,7 +27,7 @@ RUN npm ci --omit=dev && \
 # 复制应用代码
 COPY . .
 
-# 创建持久化目录（保持 root 运行以兼容软路由 OpenWrt/iStoreOS 宿主机目录挂载权限）
+# 创建持久化目录
 RUN mkdir -p /app/data /app/logs
 
 # 默认环境变量

@@ -641,46 +641,6 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    router.get('/ai/config', (req, res) => {
-        res.json({
-            success: true,
-            aiConfig: {
-                apiKey: config.minimax.apiKey ? '***' + config.minimax.apiKey.slice(-4) : '',
-                hasApiKey: Boolean(config.minimax.apiKey),
-                baseUrl: config.minimax.baseUrl || 'https://api.minimaxi.com/v1',
-                model: config.minimax.model || 'MiniMax-M2.5',
-                rateLimitRpm: config.minimax.rateLimitRpm || 30,
-                rateLimitBurst: config.minimax.rateLimitBurst || 5
-            }
-        });
-    });
-
-    router.post('/ai/config', (req, res) => {
-        try {
-            const { apiKey, baseUrl, model, rateLimitRpm, rateLimitBurst } = req.body || {};
-            const updates = {};
-            if (apiKey && !apiKey.startsWith('***')) updates.AI_API_KEY = apiKey.trim();
-            if (baseUrl) updates.AI_BASE_URL = baseUrl.trim();
-            if (model) updates.AI_MODEL = model.trim();
-            if (rateLimitRpm !== undefined) updates.AI_RATE_LIMIT_RPM = Number(rateLimitRpm);
-            if (rateLimitBurst !== undefined) updates.AI_RATE_LIMIT_BURST = Number(rateLimitBurst);
-
-            config.saveDynamicSettings(updates);
-            aiService.refreshConfig();
-
-            res.json({
-                success: true,
-                message: 'AI 模型配置已保存并热重载',
-                modelInfo: aiService.getCurrentModelInfo()
-            });
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                message: '保存 AI 配置失败: ' + error.message
-            });
-        }
-    });
-
     const handleScheduleStatus = (req, res) => {
         const status = scheduleManager ? scheduleManager.getStatus() : {
             isRunning: false,

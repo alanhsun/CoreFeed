@@ -10,7 +10,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="聚核 CoreFeed · 全球权威媒体要闻深度聚合与态势综述平台">
     <title><%= config.siteName || '聚核 CoreFeed · 全球要闻深度聚合' %></title>
-    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="apple-touch-icon" href="/images/logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;1,6..72,400&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet">
@@ -36,7 +38,7 @@
         };
     </script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="/css/style.css?v=2.6.0">
+    <link rel="stylesheet" href="/css/style.css?v=2.7.0">
 </head>
 <body class="antialiased">
     <div class="kami-page">
@@ -93,10 +95,13 @@
 
             <div class="kami-masthead-main">
                 <div class="kami-brand-group">
-                    <div class="flex items-baseline gap-3 flex-wrap">
-                        <h1 class="kami-display-title">CoreFeed</h1>
-                        <span class="kami-masthead-divider">/</span>
-                        <span class="kami-subtitle">全球要闻深度聚合</span>
+                    <div class="kami-brand-row">
+                        <img src="/images/logo.png?v=2.7.0" alt="CoreFeed" width="42" height="42" class="kami-brand-logo">
+                        <div class="flex items-baseline gap-3 flex-wrap">
+                            <h1 class="kami-display-title">CoreFeed</h1>
+                            <span class="kami-masthead-divider">/</span>
+                            <span class="kami-subtitle">全球要闻深度聚合</span>
+                        </div>
                     </div>
                 </div>
 
@@ -406,8 +411,6 @@
                                 <div class="card-footer">
                                     <div class="card-footer-meta">
                                         <span class="card-timestamp"><%= timeStr %></span>
-                                        <span class="card-meta-sep">·</span>
-                                        <span class="card-translate-hint">全文翻译</span>
                                     </div>
                                     <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
                                         class="btn-source-link">
@@ -565,6 +568,6 @@
         };
     </script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/js/main.js?v=2.6.0"></script>
+    <script src="/js/main.js?v=2.7.0"></script>
 </body>
 </html>

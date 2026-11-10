@@ -214,7 +214,7 @@ app.get('/', (req, res) => {
         appVersion: '2.0.0',
         config: {
             siteName: '聚核 CoreFeed · 全球要闻深度聚合',
-            aiModel: config.minimax.model || 'MiniMax-M2.5',
+            aiModel: config.minimax.model || 'gpt-4o-mini',
             aiConfigured: Boolean(config.minimax.apiKey),
             jinaReaderEnabled: config.agent.jinaReaderEnabled,
             githubSyncEnabled: Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true),

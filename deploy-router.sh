@@ -1,12 +1,12 @@
 #!/bin/sh
 # ============================================================================
-# 聚核 CoreFeed v2.0 — OpenWrt / iStoreOS / Linux 软路由秒级热更新与部署脚本
-# 支持在 Windows PowerShell / CMD / Linux 终端远程一键调用 (将 <YOUR_ROUTER_IP> 替换为软路由实际 IP):
-#   ssh root@<YOUR_ROUTER_IP> "wget -qO /tmp/deploy-router.sh https://raw.githubusercontent.com/alanhsun/CoreFeed/main/deploy-router.sh && sh /tmp/deploy-router.sh --rebuild && rm -f /tmp/deploy-router.sh"
+# 聚核 CoreFeed v2.0 — Linux / Docker 自托管服务端秒级热更新与部署脚本
+# 支持远程一键调用 (将 <YOUR_SERVER_IP> 替换为目标服务器实际 IP):
+#   ssh root@<YOUR_SERVER_IP> "wget -qO /tmp/deploy-router.sh https://raw.githubusercontent.com/alanhsun/CoreFeed/main/deploy-router.sh && sh /tmp/deploy-router.sh --rebuild && rm -f /tmp/deploy-router.sh"
 # 若首次安装后后续只需秒级热更新代码:
-#   ssh root@<YOUR_ROUTER_IP> "sh /opt/corefeed/deploy-router.sh"
+#   ssh root@<YOUR_SERVER_IP> "sh /opt/corefeed/deploy-router.sh"
 # 若修改了 package.json 需要强制重新构建镜像:
-#   ssh root@<YOUR_ROUTER_IP> "sh /opt/corefeed/deploy-router.sh --rebuild"
+#   ssh root@<YOUR_SERVER_IP> "sh /opt/corefeed/deploy-router.sh --rebuild"
 # ============================================================================
 
 set -e
@@ -200,7 +200,7 @@ pull_github_snapshot() {
 }
 
 echo "========================================================"
-echo "🚀 聚核 CoreFeed v2.0 -> 软路由快速更新与部署"
+echo "🚀 聚核 CoreFeed v2.0 -> 自托管服务端快速更新与部署"
 echo "   安装目录: ${REMOTE_DIR}"
 echo "   服务端口: ${APP_PORT}"
 echo "========================================================"
@@ -344,14 +344,14 @@ if [ "$SCHEDULE_SYNCED" != "1" ]; then
   sync_settings_json "${REMOTE_DIR}/data/settings.json"
 fi
 
-ROUTER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-if [ -z "${ROUTER_IP}" ]; then
-  ROUTER_IP=$(ip -4 route get 1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')
+SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+if [ -z "${SERVER_IP}" ]; then
+  SERVER_IP=$(ip -4 route get 1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')
 fi
 
 echo "========================================================"
 echo "✅ CoreFeed v2.0 已完成秒级热更新并启动！"
 docker ps --filter "name=${CONTAINER_NAME}"
-echo "🌐 请在浏览器打开: http://${ROUTER_IP:-<YOUR_ROUTER_IP>}:${APP_PORT}"
-echo "💡 后续更新只需执行: ssh root@${ROUTER_IP:-<YOUR_ROUTER_IP>} \"sh /opt/corefeed/deploy-router.sh\""
+echo "🌐 请在浏览器打开: http://${SERVER_IP:-<YOUR_SERVER_IP>}:${APP_PORT}"
+echo "💡 后续更新只需执行: ssh root@${SERVER_IP:-<YOUR_SERVER_IP>} \"sh /opt/corefeed/deploy-router.sh\""
 echo "========================================================"

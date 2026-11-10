@@ -1,14 +1,14 @@
 /**
  * CoreFeed v2.0 — GitHub 快照中转同步模块 (utils/github_sync.js)
  *
- * 解决拓扑 2B（云端沙箱 Antigravity 无法直接访问局域网软路由 10.10.20.10:3120，且软路由无公网 IP）：
+ * 架构设计（采编客户端无需直连自托管内网服务端，自托管节点无需公网 IP 或 API Key）：
  *   1. 发布端 (`publishSnapshotToGitHub`)：
  *      使用 Git 底层 Plumbing 命令 (`hash-object` -> `mktree` -> `commit-tree` -> `update-ref` -> `push --force`)
  *      将精编完成的脱敏数据包 (`news`, `allEnhancedNews`, `summary`, `publishedAt`) 作为单文件孤儿提交 (orphan commit)
  *      推送至 `ag-snapshot` 分支下的 `latest.json`，全程不触碰 `HEAD`、`.git/index` 或 `main` 分支工作区。
- *   2. 软路由拉取端 (`GitHubSyncManager` & `applySnapshotToRouter`)：
- *      软路由容器无需安装 `git` 或配置凭据，直接通过 HTTPS 拉取 `GITHUB_SNAPSHOT_URL`（内置防缓存参数与多源加速回退），
- *      比对 `publishedAt` 时间戳防重后，自动更新内存 `stateManager`、持久化写入 `/opt/corefeed/data/{news,summary,state}.json`，
+ *   2. 服务端拉取端 (`GitHubSyncManager` & `applySnapshotToRouter`)：
+ *      服务端容器无需安装 `git` 或配置凭据，直接通过 HTTPS 拉取 `GITHUB_SNAPSHOT_URL`（内置防缓存参数与多源加速回退），
+ *      比对 `publishedAt` 时间戳防重后，自动更新内存 `stateManager`、持久化写入 `data/{news,summary,state}.json`，
  *      并通过 Socket.IO 实时向全站前端广播。
  */
 const fs = require('fs');

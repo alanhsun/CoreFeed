@@ -666,7 +666,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
 
     it('8. LAN Push Ergonomics: --site/--url/--file CLI flags, safe = secret parsing, X-Publish-Secret header, and standalone ag_compiled.json without ag_candidates.json', async () => {
         const pArgs = parsePublishArgs([
-            '--site', 'http://10.10.20.10:3120',
+            '--site', 'http://192.0.2.10:3120',
             '--file', 'data/ag_compiled.json',
             '--secret=sec=with=equals==',
             '--github',
@@ -674,7 +674,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             '--github-remote=origin',
             '--snapshot-out=/tmp/snap-test.json'
         ]);
-        assert.equal(pArgs.target, 'http://10.10.20.10:3120');
+        assert.equal(pArgs.target, 'http://192.0.2.10:3120');
         assert.equal(pArgs.compiled, path.resolve('data/ag_compiled.json'));
         assert.equal(pArgs.secret, 'sec=with=equals==');
         assert.equal(pArgs.githubSync, true);
@@ -683,12 +683,12 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.equal(pArgs.snapshotOut, path.resolve('/tmp/snap-test.json'));
 
         const aArgs = parseAutoArgs([
-            '--site=http://10.10.20.10:3120',
+            '--site=http://192.0.2.10:3120',
             '--file=data/ag_compiled.json',
             '--secret=my=token==',
             '--github'
         ]);
-        assert.equal(aArgs.target, 'http://10.10.20.10:3120');
+        assert.equal(aArgs.target, 'http://192.0.2.10:3120');
         assert.equal(aArgs.compiled, path.resolve('data/ag_compiled.json'));
         assert.equal(aArgs.secret, 'my=token==');
         assert.equal(aArgs.githubSync, true);
@@ -708,8 +708,8 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
                     {
                         id: 'lan-push-1',
                         title: 'Router Direct Push Test Article',
-                        translatedTitle: '局域网软路由直推测试文章：全球算力网络升级',
-                        summary: '本机通过局域网向 10.10.20.10:3120 发起直接推送并触发实时落盘与广播。',
+                        translatedTitle: '自托管服务端直推测试文章：全球算力网络升级',
+                        summary: '客户端通过内网向 192.0.2.10:3120 发起直接推送并触发实时落盘与广播。',
                         url: 'https://www.reuters.com/technology/lan-push-test-2026',
                         region: '国际',
                         category: '科技',
@@ -1044,20 +1044,20 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.ok(defaultAutoArgs.clientId.length > 0);
 
         // 11c. Verify --no-github, --cooldown, --client-id, --force flags & GITHUB_PUSH_ENABLED=false opt-out
-        const optOutPubArgs = parsePublishArgs(['--no-github', '--client-id=win-pc-alan']);
+        const optOutPubArgs = parsePublishArgs(['--no-github', '--client-id=client-workstation-a']);
         assert.equal(optOutPubArgs.pushToGithub, false);
         assert.equal(optOutPubArgs.githubSync, false);
         assert.equal(optOutPubArgs.github, false);
-        assert.equal(optOutPubArgs.clientId, 'win-pc-alan');
-        assert.equal(optOutPubArgs.publishedBy, 'win-pc-alan');
+        assert.equal(optOutPubArgs.clientId, 'client-workstation-a');
+        assert.equal(optOutPubArgs.publishedBy, 'client-workstation-a');
 
-        const optOutAutoArgs = parseAutoArgs(['--no-github', '--cooldown=20', '--client-id=mac-alan', '--force']);
+        const optOutAutoArgs = parseAutoArgs(['--no-github', '--cooldown=20', '--client-id=client-workstation-b', '--force']);
         assert.equal(optOutAutoArgs.pushToGithub, false);
         assert.equal(optOutAutoArgs.githubSync, false);
         assert.equal(optOutAutoArgs.github, false);
         assert.equal(optOutAutoArgs.cooldownMinutes, 20);
-        assert.equal(optOutAutoArgs.clientId, 'mac-alan');
-        assert.equal(optOutAutoArgs.publishedBy, 'mac-alan');
+        assert.equal(optOutAutoArgs.clientId, 'client-workstation-b');
+        assert.equal(optOutAutoArgs.publishedBy, 'client-workstation-b');
         assert.equal(optOutAutoArgs.force, true);
 
         process.env.GITHUB_PUSH_ENABLED = 'false';
@@ -1423,9 +1423,11 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(!html.includes('id="cfgDeepReadCount"'), 'SSR HTML must NOT contain #cfgDeepReadCount');
             assert.ok(!html.includes('id="cfgFreshnessHours"'), 'SSR HTML must NOT contain #cfgFreshnessHours');
 
-            // (c) Verify v2.6.0 cache busting, Deep-Read removal, Bento Grid span class purity (no md:col-span-2 override), editorial keypoints, and CSS Grid min-width: 0 locks
-            assert.ok(html.includes('/css/style.css?v=2.6.0'), 'SSR HTML should include cache-busted /css/style.css?v=2.6.0');
-            assert.ok(html.includes('/js/main.js?v=2.6.0'), 'SSR HTML should include cache-busted /js/main.js?v=2.6.0');
+            // (c) Verify v2.7.0 cache busting, brand logo, compact card footer without 全文翻译, Bento Grid span class purity, editorial keypoints, and CSS Grid min-width: 0 locks
+            assert.ok(html.includes('/css/style.css?v=2.7.0'), 'SSR HTML should include cache-busted /css/style.css?v=2.7.0');
+            assert.ok(html.includes('/js/main.js?v=2.7.0'), 'SSR HTML should include cache-busted /js/main.js?v=2.7.0');
+            assert.ok(html.includes('/favicon.svg') && html.includes('kami-brand-logo'), 'SSR HTML should include vector favicon and masthead brand logo');
+            assert.ok(!html.includes('<span class="card-translate-hint">全文翻译</span>'), 'Compact cards must NOT display "全文翻译" hint in SSR HTML');
             assert.ok(!html.includes('md:col-span-2'), 'SSR HTML must NOT include Tailwind md:col-span-2 that overrides .bento-span-* on desktop');
             assert.ok(!html.includes('全文深读'), 'SSR HTML must NOT contain removed "全文深读" button');
             assert.ok(!html.includes('btn-read-more'), 'SSR HTML must NOT contain .btn-read-more');
@@ -1442,6 +1444,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(html.includes('card-body-trigger') && html.includes('handleCardBodyClick'), 'SSR HTML should wire .card-body-trigger to app.handleCardBodyClick');
 
             const mainJsSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
+            assert.ok(!mainJsSource.includes('<span class="card-translate-hint">全文翻译</span>'), 'public/js/main.js compact cards must NOT render "全文翻译" hint');
             assert.ok(!mainJsSource.includes('md:col-span-2'), 'public/js/main.js must NOT include md:col-span-2');
             assert.ok(!mainJsSource.includes('openDeepRead'), 'public/js/main.js must NOT include openDeepRead');
             assert.ok(!mainJsSource.includes('closeDeepReadModal'), 'public/js/main.js must NOT include closeDeepReadModal');
@@ -1525,7 +1528,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
                     GITHUB_SYNC_ENABLED: true,
                     GITHUB_PUSH_ENABLED: false,
                     GITHUB_SYNC_INTERVAL_MINUTES: 45,
-                    CLIENT_ID: 'router-10-10-20-10',
+                    CLIENT_ID: 'edge-node-01',
                     GITHUB_SNAPSHOT_URL: mockUiSnapshotUrl,
                     AUTO_UPDATE_ENABLED: true,
                     UPDATE_TIMES: '07:30,12:00,20:00',
@@ -1539,7 +1542,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.equal(postCfgData.config.GITHUB_SYNC_ENABLED, true);
             assert.equal(postCfgData.config.GITHUB_PUSH_ENABLED, false);
             assert.equal(postCfgData.config.GITHUB_SYNC_INTERVAL_MINUTES, 45);
-            assert.equal(postCfgData.config.CLIENT_ID, 'router-10-10-20-10');
+            assert.equal(postCfgData.config.CLIENT_ID, 'edge-node-01');
             assert.equal(postCfgData.config.UPDATE_TIMES, '07:30,12:00,20:00');
             assert.equal(postCfgData.config.AUTO_UPDATE_ENABLED, true);
             assert.equal(postCfgData.config.ai.apiKeyConfigured, true, 'Empty AI_API_KEY in POST /api/config must not erase existing configured key');
@@ -1561,12 +1564,12 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.equal(postModalCfgData.config.GITHUB_SYNC_INTERVAL_MINUTES, 60);
             assert.equal(postModalCfgData.config.UPDATE_TIMES, '08:00,12:30,19:30');
             assert.equal(postModalCfgData.config.GITHUB_PUSH_ENABLED, false, '4-key modal save must preserve existing GITHUB_PUSH_ENABLED');
-            assert.equal(postModalCfgData.config.CLIENT_ID, 'router-10-10-20-10', '4-key modal save must preserve existing CLIENT_ID');
+            assert.equal(postModalCfgData.config.CLIENT_ID, 'edge-node-01', '4-key modal save must preserve existing CLIENT_ID');
 
             const savedOnDisk = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'settings.json'), 'utf8'));
             assert.equal(savedOnDisk.GITHUB_SYNC_INTERVAL_MINUTES, 60);
             assert.equal(savedOnDisk.GITHUB_PUSH_ENABLED, false);
-            assert.equal(savedOnDisk.CLIENT_ID, 'router-10-10-20-10');
+            assert.equal(savedOnDisk.CLIENT_ID, 'edge-node-01');
             assert.equal(savedOnDisk.UPDATE_TIMES, '08:00,12:30,19:30');
 
             // 13d. Verify Web UI one-click POST /api/agent/pull-github works seamlessly even when PUBLISH_SECRET is set
