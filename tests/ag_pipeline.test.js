@@ -39,7 +39,8 @@ const stateManager = require('../services/state_manager');
 const { app, server, io, services } = require('../server');
 const { parseArgs: parseHarvestArgs, runHarvest } = require('../scripts/ag-harvest');
 const { parseArgs: parsePublishArgs, runPublish } = require('../scripts/ag-publish');
-const { parseArgs: parseAutoArgs, runAutoUpdate, getDaemonStatus, getNextExecutionTime } = require('../scripts/ag-auto-update');
+const { parseArgs: parseAutoArgs, runAutoUpdate, getDaemonStatus, getNextExecutionTime, getLastExecutionTime } = require('../scripts/ag-auto-update');
+const { buildSchedulePlan, installSchedule } = require('../scripts/setup-schedule');
 const { publishSnapshotToGitHub, checkRemoteSnapshotCooldown, isLocalNewsPolluted } = require('../utils/github_sync');
 
 const DATA_DIR = config.storage.dataDir || path.join(__dirname, '..', 'data');
@@ -1743,6 +1744,8 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.ok(pkgJson.scripts['ag:daemon'], 'package.json must define ag:daemon script');
         assert.ok(pkgJson.scripts['ag:status'], 'package.json must define ag:status script');
         assert.ok(pkgJson.scripts['ag:daemon:status'], 'package.json must define ag:daemon:status script');
+        assert.ok(pkgJson.scripts['ag:schedule'], 'package.json must define ag:schedule script');
+        assert.ok(pkgJson.scripts['ag:schedule:remove'], 'package.json must define ag:schedule:remove script');
         assert.ok(pkgJson.scripts['pm2:daemon'], 'package.json must define pm2:daemon script');
         assert.ok(pkgJson.scripts['ag:daemon'].includes('ag-auto-update.js') && pkgJson.scripts['ag:daemon'].includes('--daemon'));
         assert.ok(pkgJson.scripts['ag:status'].includes('ag-auto-update.js') && pkgJson.scripts['ag:status'].includes('--status'));
@@ -1754,7 +1757,7 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.ok(String(daemonApp.script).includes('ag-auto-update.js'));
         assert.equal(daemonApp.env.AG_UPDATE_TIMES, '07:40,12:10,19:10');
 
-        // 15b. Verify parseAutoArgs(--daemon / --status / --times), getNextExecutionTime, and getDaemonStatus (20m pre-fetch: 07:40, 12:10, 19:10)
+        // 15b. Verify parseAutoArgs(--daemon / --status / --times), getNextExecutionTime, getLastExecutionTime, and getDaemonStatus (20m pre-fetch: 07:40, 12:10, 19:10)
         const daemonArgs = parseAutoArgs(['--daemon', '--client-id=daemon-test-node', '--times=07:40,12:10,19:10']);
         assert.equal(daemonArgs.daemon, true);
         assert.equal(daemonArgs.clientId, 'daemon-test-node');
@@ -1770,6 +1773,13 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         const utcHm = `${String(nextDate.getUTCHours()).padStart(2, '0')}:${String(nextDate.getUTCMinutes()).padStart(2, '0')}`;
         assert.ok(['23:40', '04:10', '11:10'].includes(utcHm), `UTC time ${utcHm} must match 07:40, 12:10, or 19:10 Asia/Shanghai`);
 
+        assert.equal(typeof getLastExecutionTime, 'function');
+        const lastIso = getLastExecutionTime();
+        const lastDate = new Date(lastIso);
+        assert.ok(!isNaN(lastDate.getTime()) && lastDate.getTime() <= Date.now(), 'getLastExecutionTime must return a past/present ISO date');
+        const lastUtcHm = `${String(lastDate.getUTCHours()).padStart(2, '0')}:${String(lastDate.getUTCMinutes()).padStart(2, '0')}`;
+        assert.ok(['23:40', '04:10', '11:10'].includes(lastUtcHm), `Last UTC time ${lastUtcHm} must match 07:40, 12:10, or 19:10 Asia/Shanghai`);
+
         assert.equal(typeof getDaemonStatus, 'function');
         const dStatus = getDaemonStatus({ clientId: 'daemon-test-node' });
         assert.deepEqual(dStatus.scheduleTimes, ['07:40', '12:10', '19:10']);
@@ -1777,8 +1787,18 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         assert.ok(dStatus.nextExecution, 'getDaemonStatus must report nextExecution');
         assert.ok(dStatus.nextExecutionShanghai && dStatus.nextExecutionShanghai.includes('Asia/Shanghai'));
         assert.ok(['07:40', '12:10', '19:10'].includes(dStatus.nextTimeSlot), `nextTimeSlot (${dStatus.nextTimeSlot}) must be one of 07:40, 12:10, 19:10`);
+        assert.ok(['07:40', '12:10', '19:10'].includes(dStatus.lastScheduledSlot), `lastScheduledSlot (${dStatus.lastScheduledSlot}) must be one of 07:40, 12:10, 19:10`);
         assert.deepEqual(dStatus.cronExpressions.Asia_Shanghai, ['40 7 * * *', '10 12 * * *', '10 19 * * *']);
         assert.deepEqual(dStatus.cronExpressions.UTC, ['40 23 * * *', '10 4 * * *', '10 11 * * *']);
+
+        // Verify cross-platform setup-schedule.js plan & dry-run installer
+        const winPlan = buildSchedulePlan({ platform: 'win32', clientId: 'win-test', times: ['07:40', '12:10', '19:10'] });
+        assert.equal(winPlan.windowsTasks.length, 3);
+        assert.equal(winPlan.windowsTasks[0].taskName, 'CoreFeed_AutoUpdate_0740');
+        assert.ok(winPlan.windowsTasks[0].psEnhanceCmd.includes('-StartWhenAvailable'));
+        const dryRes = installSchedule({ dryRun: true, clientId: 'dry-test' });
+        assert.equal(dryRes.success, true);
+        assert.deepEqual(dryRes.scheduleTimes, ['07:40', '12:10', '19:10']);
 
         // 15c. Verify unattended runAutoUpdate compiles raw English candidates into 100% pure Chinese articles + briefing and pushes to ag-snapshot
         const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'corefeed-unattended-zh-'));

@@ -132,6 +132,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         scheduleTimes: defaultScheduleTimes,
         daemon: false,
         status: false,
+        catchup: true,
+        runNow: false,
         targetExplicit: Boolean(process.env.COREFEED_SITE_URL)
     };
 
@@ -241,6 +243,12 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.daemon = true;
         } else if (arg === '--status') {
             options.status = true;
+        } else if (arg === '--no-catchup') {
+            options.catchup = false;
+        } else if (arg === '--catchup') {
+            options.catchup = true;
+        } else if (arg === '--run-now' || arg === '--immediate') {
+            options.runNow = true;
         }
     }
 
@@ -688,6 +696,42 @@ function getNextExecutionTime(updateTimes = null) {
     return nextExecution ? nextExecution.toISOString() : null;
 }
 
+function getLastExecutionTime(updateTimes = null, nowDate = new Date()) {
+    const times = Array.isArray(updateTimes) && updateTimes.length > 0
+        ? parseScheduleTimesInput(updateTimes)
+        : getTimesToSchedule(updateTimes);
+
+    const now = nowDate instanceof Date ? nowDate : new Date(nowDate);
+    const shanghaiOffsetMs = 8 * 3600000;
+    const shNow = new Date(now.getTime() + shanghaiOffsetMs);
+    const shYear = shNow.getUTCFullYear();
+    const shMonth = shNow.getUTCMonth();
+    const shDate = shNow.getUTCDate();
+
+    let lastExecution = null;
+    for (const time of times) {
+        const [hour, minute] = String(time).split(':').map(Number);
+        if (isNaN(hour) || isNaN(minute)) continue;
+        const execTime = new Date(Date.UTC(shYear, shMonth, shDate, hour - 8, minute, 0, 0));
+        if (execTime <= now && (!lastExecution || execTime > lastExecution)) {
+            lastExecution = execTime;
+        }
+    }
+
+    if (!lastExecution) {
+        for (const time of times) {
+            const [hour, minute] = String(time).split(':').map(Number);
+            if (isNaN(hour) || isNaN(minute)) continue;
+            const execTime = new Date(Date.UTC(shYear, shMonth, shDate - 1, hour - 8, minute, 0, 0));
+            if (!lastExecution || execTime > lastExecution) {
+                lastExecution = execTime;
+            }
+        }
+    }
+
+    return lastExecution ? lastExecution.toISOString() : null;
+}
+
 function getDaemonPaths() {
     const dataDir = config.storage?.dataDir || path.join(__dirname, '..', 'data');
     const logsDir = path.join(__dirname, '..', 'logs');
@@ -721,6 +765,9 @@ function getDaemonStatus(cliOpts = {}) {
     const nextExecution = getNextExecutionTime(times);
     const nextExecutionShanghai = formatShanghaiTimestamp(nextExecution);
     const nextTimeSlot = nextExecutionShanghai ? nextExecutionShanghai.slice(11, 16) : null;
+    const lastScheduledExecution = getLastExecutionTime(times);
+    const lastScheduledShanghai = formatShanghaiTimestamp(lastScheduledExecution);
+    const lastScheduledSlot = lastScheduledShanghai ? lastScheduledShanghai.slice(11, 16) : null;
 
     let savedStatus = null;
     if (fs.existsSync(paths.statusFile)) {
@@ -779,6 +826,9 @@ function getDaemonStatus(cliOpts = {}) {
         nextExecution,
         nextExecutionShanghai,
         nextTimeSlot,
+        lastScheduledExecution,
+        lastScheduledShanghai,
+        lastScheduledSlot,
         lastRunAt: savedStatus?.lastRunAt || null,
         lastRunStatus: savedStatus?.lastRunStatus || 'idle',
         lastPublishedAt,
@@ -851,6 +901,93 @@ function startAutoUpdateDaemon(cliOpts = {}) {
     logger.info('AG-AUTO', startMsg);
     appendDaemonLog(startMsg);
 
+    let activeRunPromise = null;
+    let lastAttemptedSlotIso = null;
+    let lastAttemptAtMs = 0;
+
+    const executeScheduledSlot = async (timeSlot, triggerLabel = 'CRON') => {
+        if (activeRunPromise) {
+            appendDaemonLog(`[${triggerLabel} ${timeSlot} ${timezone}] 已有采编任务正在执行中，跳过重复触发`);
+            return activeRunPromise;
+        }
+        activeRunPromise = (async () => {
+            const runStartIso = new Date().toISOString();
+            appendDaemonLog(`[${triggerLabel} ${timeSlot} ${timezone}] 开始执行自动采编与 GitHub 快照发布...`);
+            persistDaemonStatus({
+                lastRunAt: runStartIso,
+                lastRunSlot: timeSlot,
+                lastRunStatus: 'running'
+            }, opts);
+            try {
+                const res = await runAutoUpdate(opts);
+                const doneMsg = `[${triggerLabel} ${timeSlot} ${timezone}] 执行成功: mode=${res.mode}, displayed=${res.displayedCount}, publishedAt=${res.publishedAt}, githubPushed=${Boolean(res.githubSync?.pushed || res.githubSync?.pulledFromRemote)}`;
+                logger.success('AG-AUTO', doneMsg);
+                appendDaemonLog(doneMsg);
+                persistDaemonStatus({
+                    lastRunAt: runStartIso,
+                    lastCompletedAt: new Date().toISOString(),
+                    lastRunStatus: 'success',
+                    lastPublishedAt: res.publishedAt,
+                    lastPublishedBy: res.publishedBy
+                }, opts);
+                return res;
+            } catch (err) {
+                const errMsg = `定时自动更新任务执行失败 (${timeSlot}): ${err.message}`;
+                logger.error('AG-AUTO', errMsg);
+                appendDaemonLog(`[ERROR] ${errMsg}`);
+                persistDaemonStatus({
+                    lastRunAt: runStartIso,
+                    lastRunStatus: `error: ${err.message}`
+                }, opts);
+                return null;
+            } finally {
+                activeRunPromise = null;
+            }
+        })();
+        return activeRunPromise;
+    };
+
+    const checkAndRunMissedSlot = async () => {
+        if (activeRunPromise) return;
+        const lastSlotIso = getLastExecutionTime(times);
+        if (!lastSlotIso) return;
+        const lastSlotMs = new Date(lastSlotIso).getTime();
+        if (isNaN(lastSlotMs)) return;
+
+        if (lastAttemptedSlotIso === lastSlotIso && Date.now() - lastAttemptAtMs < 15 * 60 * 1000) {
+            return;
+        }
+
+        const currentStatus = getDaemonStatus(opts);
+        const localPubMs = currentStatus.lastPublishedAt ? new Date(currentStatus.lastPublishedAt).getTime() : 0;
+        if (localPubMs >= lastSlotMs) {
+            return;
+        }
+
+        try {
+            const remoteCheck = await checkRemoteSnapshotCooldown({
+                snapshotUrl: opts.snapshotUrl,
+                cooldownMinutes: opts.cooldownMinutes
+            });
+            const remotePubMs = remoteCheck?.publishedAt ? new Date(remoteCheck.publishedAt).getTime() : 0;
+            if (remotePubMs >= lastSlotMs) {
+                persistDaemonStatus({
+                    lastPublishedAt: remoteCheck.publishedAt,
+                    lastPublishedBy: remoteCheck.publishedBy || currentStatus.lastPublishedBy
+                }, opts);
+                return;
+            }
+        } catch (_) {}
+
+        lastAttemptedSlotIso = lastSlotIso;
+        lastAttemptAtMs = Date.now();
+        const slotLabel = formatShanghaiTimestamp(lastSlotIso)?.slice(11, 16) || 'catchup';
+        const catchupMsg = `检测到最近计划档期 (${formatShanghaiTimestamp(lastSlotIso)}) 尚未完成发布，自动触发漏档补采编...`;
+        logger.info('AG-AUTO', catchupMsg);
+        appendDaemonLog(catchupMsg);
+        await executeScheduledSlot(slotLabel, 'CATCHUP');
+    };
+
     const tasks = [];
     for (const time of times) {
         const [hour, minute] = String(time).split(':').map(Number);
@@ -859,42 +996,33 @@ function startAutoUpdateDaemon(cliOpts = {}) {
         const task = cron.schedule(
             expr,
             async () => {
-                const runStartIso = new Date().toISOString();
-                appendDaemonLog(`[CRON ${time} ${timezone}] 开始执行自动采编与 GitHub 快照发布...`);
-                persistDaemonStatus({
-                    lastRunAt: runStartIso,
-                    lastRunSlot: time,
-                    lastRunStatus: 'running'
-                }, opts);
-                try {
-                    const res = await runAutoUpdate(opts);
-                    const doneMsg = `[CRON ${time} ${timezone}] 执行成功: mode=${res.mode}, displayed=${res.displayedCount}, publishedAt=${res.publishedAt}, githubPushed=${Boolean(res.githubSync?.pushed || res.githubSync?.pulledFromRemote)}`;
-                    logger.success('AG-AUTO', doneMsg);
-                    appendDaemonLog(doneMsg);
-                    persistDaemonStatus({
-                        lastRunAt: runStartIso,
-                        lastCompletedAt: new Date().toISOString(),
-                        lastRunStatus: 'success',
-                        lastPublishedAt: res.publishedAt,
-                        lastPublishedBy: res.publishedBy
-                    }, opts);
-                } catch (err) {
-                    const errMsg = `定时自动更新任务执行失败 (${time}): ${err.message}`;
-                    logger.error('AG-AUTO', errMsg);
-                    appendDaemonLog(`[ERROR] ${errMsg}`);
-                    persistDaemonStatus({
-                        lastRunAt: runStartIso,
-                        lastRunStatus: `error: ${err.message}`
-                    }, opts);
-                }
+                await executeScheduledSlot(time, 'CRON');
             },
             { scheduled: true, timezone }
         );
         tasks.push(task);
     }
 
+    let catchupTimer = null;
+    if (opts.runNow && process.env.NODE_ENV !== 'test') {
+        setImmediate(() => {
+            executeScheduledSlot('immediate', 'STARTUP').catch(() => {});
+        });
+    } else if (opts.catchup !== false && process.env.NODE_ENV !== 'test') {
+        setImmediate(() => {
+            checkAndRunMissedSlot().catch(() => {});
+        });
+        catchupTimer = setInterval(() => {
+            checkAndRunMissedSlot().catch(() => {});
+        }, 60 * 1000);
+        if (typeof catchupTimer.unref === 'function') {
+            catchupTimer.unref();
+        }
+    }
+
     return {
         tasks,
+        catchupTimer,
         status: getDaemonStatus(opts)
     };
 }
@@ -926,5 +1054,6 @@ module.exports = {
     startAutoUpdateDaemon,
     getDaemonStatus,
     getNextExecutionTime,
+    getLastExecutionTime,
     getTimesToSchedule
 };

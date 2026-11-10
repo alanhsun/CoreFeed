@@ -32,6 +32,8 @@
     "ag:daemon": "node scripts/ag-auto-update.js --daemon",
     "ag:status": "node scripts/ag-auto-update.js --status",
     "ag:daemon:status": "node scripts/ag-auto-update.js --status",
+    "ag:schedule": "node scripts/setup-schedule.js --install",
+    "ag:schedule:remove": "node scripts/setup-schedule.js --remove",
     "test": "node --test tests/ag_pipeline.test.js tests/deploy_router.test.js"
   },
   "dependencies": {

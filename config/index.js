@@ -438,7 +438,19 @@ config.saveDynamicSettings = function (updates = {}) {
  * 重新加载配置
  */
 config.reload = function () {
-    require('dotenv').config({ override: true });
+    const envPath = path.join(__dirname, '..', '.env');
+    if (fs.existsSync(envPath)) {
+        try {
+            const parsedEnv = require('dotenv').parse(fs.readFileSync(envPath, 'utf8'));
+            for (const [k, v] of Object.entries(parsedEnv)) {
+                if (v !== undefined && v !== null && String(v).trim() !== '') {
+                    process.env[k] = String(v);
+                } else if (process.env[k] === undefined) {
+                    process.env[k] = '';
+                }
+            }
+        } catch (_) {}
+    }
     const saved = loadSavedSettings();
     for (const [k, v] of Object.entries(saved)) {
         if (v !== undefined && v !== null && v !== '' && k !== 'updatedAt' && k !== 'scheduleTimes') {

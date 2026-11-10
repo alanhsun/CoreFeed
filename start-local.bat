@@ -31,6 +31,9 @@ if not exist "node_modules" (
     call npm install --omit=dev
 )
 
+echo ⏰ 正在配置本机每日定时采编翻译任务 (07:40, 12:10, 19:10 Asia/Shanghai)...
+node scripts/setup-schedule.js --install
+
 echo 🌐 正在打开浏览器 http://localhost:3120 ...
 start "" "http://localhost:3120"
 

@@ -132,15 +132,18 @@ node scripts/ag-publish.js --site http://10.10.20.10:3120 --file data/ag_compile
 
 无论在云端 Antigravity 容器还是本地 Windows / macOS / Linux 电脑上，均可按以下任一方式（或双重保障组合）配置每天早 `07:40`、中 `12:10`、晚 `19:10`（北京时间 `Asia/Shanghai`，提前软路由 `08:00, 12:30, 19:30` 拉取时间 20 分钟）自动新闻收集、中文精编与 GitHub `ag-snapshot` 推送：
 
-#### 1) 方式 A：本机常驻定时守护进程（跨平台通用，开箱即用）
+#### 1) 方式 A：本机一键配置与常驻定时守护进程（跨平台通用，内置漏档自动补采编）
 ```bash
-# 直接在前台或 nohup 后台启动内置 Asia/Shanghai 时区的定时采编守护进程 (07:40, 12:10, 19:10)
+# 一键注册本机系统计划任务 (Windows Task Scheduler / Crontab) 并启动后台常驻守护进程
+npm run ag:schedule
+
+# 或直接启动内置 Asia/Shanghai 时区与睡眠唤醒漏档补跑机制的定时采编守护进程 (07:40, 12:10, 19:10)
 npm run ag:daemon
 
 # 或在 Linux / 云端容器中使用 nohup 后台常驻运行（自动记录 PID 至 logs/ag-daemon.pid 及状态至 data/ag_daemon_status.json）
 nohup node scripts/ag-auto-update.js --daemon --client-id=antigravity-cloud-vm --target=http://127.0.0.1:3120 > logs/ag-daemon.log 2>&1 &
 
-# 随时查看守护进程在线状态、PID、下次触发时间 (北京时间 & UTC) 及最近一次快照发布信息
+# 随时查看守护进程在线状态、PID、上次计划档期、下次触发时间 (北京时间 & UTC) 及最近一次快照发布信息
 npm run ag:status
 
 # 若已安装 PM2，也可一键将定时采编守护进程纳入 PM2 生产环境托管
