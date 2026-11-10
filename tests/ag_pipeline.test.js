@@ -1423,9 +1423,9 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(!html.includes('id="cfgDeepReadCount"'), 'SSR HTML must NOT contain #cfgDeepReadCount');
             assert.ok(!html.includes('id="cfgFreshnessHours"'), 'SSR HTML must NOT contain #cfgFreshnessHours');
 
-            // (c) Verify v2.5.4 cache busting, Deep-Read removal, Bento Grid span class purity (no md:col-span-2 override), editorial keypoints, and CSS Grid min-width: 0 locks
-            assert.ok(html.includes('/css/style.css?v=2.5.4'), 'SSR HTML should include cache-busted /css/style.css?v=2.5.4');
-            assert.ok(html.includes('/js/main.js?v=2.5.4'), 'SSR HTML should include cache-busted /js/main.js?v=2.5.4');
+            // (c) Verify v2.6.0 cache busting, Deep-Read removal, Bento Grid span class purity (no md:col-span-2 override), editorial keypoints, and CSS Grid min-width: 0 locks
+            assert.ok(html.includes('/css/style.css?v=2.6.0'), 'SSR HTML should include cache-busted /css/style.css?v=2.6.0');
+            assert.ok(html.includes('/js/main.js?v=2.6.0'), 'SSR HTML should include cache-busted /js/main.js?v=2.6.0');
             assert.ok(!html.includes('md:col-span-2'), 'SSR HTML must NOT include Tailwind md:col-span-2 that overrides .bento-span-* on desktop');
             assert.ok(!html.includes('全文深读'), 'SSR HTML must NOT contain removed "全文深读" button');
             assert.ok(!html.includes('btn-read-more'), 'SSR HTML must NOT contain .btn-read-more');
@@ -1437,7 +1437,8 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(html.includes('card-keypoints'), 'SSR HTML should render keypoints inside .card-keypoints');
             assert.ok(html.includes('card-keypoint-item'), 'SSR HTML should render keypoint items with .card-keypoint-item');
             assert.ok(!html.includes('card-summary line-clamp-3') && !html.includes('card-summary line-clamp-4'), 'SSR HTML must NOT clamp .card-summary with line-clamp-3 or line-clamp-4');
-            assert.ok(html.includes('id="fullTextModal"'), 'SSR HTML should include #fullTextModal for full-text Chinese translation');
+            assert.ok(html.includes('id="fullTextModal"') && html.includes('fulltext-reader-sheet'), 'SSR HTML should include #fullTextModal and .fulltext-reader-sheet');
+            assert.ok(!html.includes('正在提取并翻译外媒原文') && !html.includes('外媒原文实时精译'), 'SSR HTML must NOT show real-time translation loading copy');
             assert.ok(html.includes('card-body-trigger') && html.includes('handleCardBodyClick'), 'SSR HTML should wire .card-body-trigger to app.handleCardBodyClick');
 
             const mainJsSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
@@ -1447,7 +1448,19 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(!mainJsSource.includes('btn-read-more'), 'public/js/main.js must NOT include btn-read-more');
             assert.ok(!mainJsSource.includes('/api/agent/deep-read'), 'public/js/main.js must NOT reference /api/agent/deep-read');
             assert.ok(!mainJsSource.includes('card-summary line-clamp-3') && !mainJsSource.includes('card-summary line-clamp-4'), 'public/js/main.js must NOT clamp .card-summary with line-clamp-3 or line-clamp-4');
-            assert.ok(mainJsSource.includes('handleCardBodyClick') && mainJsSource.includes('openFullTextModal') && mainJsSource.includes('/api/news/translate-fulltext'), 'public/js/main.js should implement handleCardBodyClick and openFullTextModal calling /api/news/translate-fulltext');
+            assert.ok(
+                mainJsSource.includes('handleCardBodyClick') &&
+                mainJsSource.includes('openFullTextModal') &&
+                mainJsSource.includes('setReaderFontSize') &&
+                mainJsSource.includes('formatTranslatedParagraphHtml'),
+                'public/js/main.js should implement snapshot-driven openFullTextModal, setReaderFontSize, and formatTranslatedParagraphHtml'
+            );
+            assert.ok(
+                !mainJsSource.includes('正在连接外媒信源') &&
+                !mainJsSource.includes('正在实时抓取外媒原文') &&
+                !mainJsSource.includes('/api/news/translate-fulltext'),
+                'public/js/main.js must NOT trigger runtime external fulltext fetch or display real-time loading copy'
+            );
             assert.ok(mainJsSource.includes('card-timestamp'), 'public/js/main.js should render .card-timestamp');
             assert.ok(mainJsSource.includes('btn-source-link'), 'public/js/main.js should render .btn-source-link');
             assert.ok(mainJsSource.includes('card-keypoints'), 'public/js/main.js should render .card-keypoints');
@@ -1475,7 +1488,13 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(styleCssSource.includes('min-width: 0;'), 'public/css/style.css should include min-width: 0 defensive locks');
             assert.ok(styleCssSource.includes('.card-keypoints'), 'public/css/style.css should define .card-keypoints');
             assert.ok(styleCssSource.includes('.card-keypoint-item'), 'public/css/style.css should define .card-keypoint-item');
-            assert.ok(styleCssSource.includes('.fulltext-modal-surface') && styleCssSource.includes('.card-body-trigger'), 'public/css/style.css should define .fulltext-modal-surface and .card-body-trigger');
+            assert.ok(
+                styleCssSource.includes('.fulltext-modal-surface') &&
+                styleCssSource.includes('.fulltext-reader-sheet') &&
+                styleCssSource.includes('.fulltext-prose') &&
+                styleCssSource.includes('.card-body-trigger'),
+                'public/css/style.css should define .fulltext-modal-surface, .fulltext-reader-sheet, .fulltext-prose, and .card-body-trigger'
+            );
             assert.ok(!styleCssSource.includes('Instrument Serif') && !styleCssSource.includes('Plus Jakarta Sans'), 'public/css/style.css must NOT use banned fonts Instrument Serif or Plus Jakarta Sans');
             assert.ok(styleCssSource.includes('Newsreader') && styleCssSource.includes('Geist'), 'public/css/style.css should pair Newsreader display with Geist sans');
             assert.ok(!html.includes('DISPATCH // 01') && !mainJsSource.includes('DISPATCH // 01'), 'SSR and client markup must NOT render pseudo-technical DISPATCH // 01 eyebrow');

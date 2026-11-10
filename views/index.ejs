@@ -36,7 +36,7 @@
         };
     </script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="/css/style.css?v=2.5.4">
+    <link rel="stylesheet" href="/css/style.css?v=2.6.0">
 </head>
 <body class="antialiased">
     <div class="kami-page">
@@ -459,27 +459,37 @@
         </main>
     </div>
 
-    <div id="fullTextModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex items-center justify-center p-4" onclick="if(event.target===this) app.closeFullTextModal()">
+    <div id="fullTextModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex items-center justify-center p-3 sm:p-5" onclick="if(event.target===this) app.closeFullTextModal()">
         <div id="fullTextDialog" class="kami-modal-surface fulltext-modal-surface w-full flex flex-col overflow-hidden" role="dialog" aria-modal="true" aria-labelledby="fullTextTitle">
-            <div class="px-6 py-5 flex items-start justify-between gap-4" style="border-bottom: 1px solid var(--border-hairline); background: var(--bg-surface);">
-                <div class="min-w-0 space-y-1.5">
-                    <div class="flex flex-wrap items-center gap-2">
-                        <span class="kami-tag">原文全文中文翻译</span>
-                        <span id="fullTextSourceBadge" class="text-xs tabular-nums" style="color: var(--text-muted); font-family: var(--font-mono);"></span>
-                    </div>
-                    <h3 id="fullTextTitle" class="fulltext-modal-title">正在提取并翻译外媒原文...</h3>
-                    <p id="fullTextOriginalTitle" class="text-xs hidden" style="color: var(--text-muted); margin: 0;"></p>
+            <div class="fulltext-modal-topbar">
+                <div class="fulltext-topbar-meta min-w-0">
+                    <span id="fullTextSourceBadge" class="fulltext-source-meta"></span>
                 </div>
-                <button type="button" id="btnCloseFullText" onclick="app.closeFullTextModal()" class="btn-ghost btn-icon-only flex-shrink-0" aria-label="关闭全文翻译">
-                    <i class="fa-solid fa-xmark text-sm"></i>
-                </button>
+                <div class="fulltext-topbar-actions">
+                    <div class="fulltext-size-switch" role="group" aria-label="正文字号调节">
+                        <button type="button" id="btnReaderSizeStd" onclick="app.setReaderFontSize('standard')" class="fulltext-size-btn is-active">标准</button>
+                        <button type="button" id="btnReaderSizeLg" onclick="app.setReaderFontSize('large')" class="fulltext-size-btn">大字</button>
+                    </div>
+                    <button type="button" id="btnCloseFullText" onclick="app.closeFullTextModal()" class="btn-ghost btn-icon-only flex-shrink-0" aria-label="关闭全文译文">
+                        <i class="fa-solid fa-xmark text-sm"></i>
+                    </button>
+                </div>
             </div>
 
-            <div id="fullTextBody" class="fulltext-modal-body p-6 sm:p-8 overflow-y-auto flex-1 space-y-5"></div>
+            <div id="fullTextBody" class="fulltext-modal-body overflow-y-auto flex-1">
+                <article class="fulltext-reader-sheet">
+                    <header class="fulltext-headline-block">
+                        <h3 id="fullTextTitle" class="fulltext-modal-title">全文中文译文</h3>
+                        <p id="fullTextOriginalTitle" class="fulltext-original-title hidden"></p>
+                        <div id="fullTextArticleStats" class="fulltext-article-stats hidden"></div>
+                    </header>
+                    <div id="fullTextContentMount"></div>
+                </article>
+            </div>
 
-            <div class="px-6 py-4 flex items-center justify-between gap-3" style="border-top: 1px solid var(--border-hairline); background: var(--bg-subtle);">
-                <span id="fullTextStatusMeta" class="text-xs tabular-nums" style="color: var(--text-muted); font-family: var(--font-mono);">外媒原文实时精译</span>
-                <div class="flex items-center gap-2.5">
+            <div class="fulltext-modal-footer">
+                <span id="fullTextStatusMeta" class="fulltext-footer-meta">采编阶段预译全文</span>
+                <div class="flex items-center gap-2.5 flex-shrink-0">
                     <a id="fullTextOriginalLink" href="#" target="_blank" rel="noopener noreferrer" class="btn-source-link">
                         <span>查看外媒原文</span>
                         <span aria-hidden="true">↗</span>
@@ -555,6 +565,6 @@
         };
     </script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/js/main.js?v=2.5.4"></script>
+    <script src="/js/main.js?v=2.6.0"></script>
 </body>
 </html>
