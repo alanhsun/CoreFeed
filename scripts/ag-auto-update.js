@@ -3,10 +3,10 @@
  * CoreFeed v2.0 — Antigravity 全自动四阶段采编发闭环编排脚本 (ag-auto-update.js)
  *
  * 功能说明：
- *   专为每天早 (08:00)、中 (12:30)、晚 (19:30) 三次定时自动更新及一键 CLI 触发设计的端到端编排器：
- *   - Stage 1 (Harvest) : 调用 `ag-harvest.js` 并发采集全球 30 大权威信源并提取正文与配图；
- *   - Stage 2 (Compile) : 自动执行 AI 跨源语义去重、中文精编、单篇深读生成与《全球要闻深度综述》撰写（无密钥时无缝降级至免密钥高速中文编译兜底）；
- *   - Stage 3 (Publish) : 调用 `ag-publish.js` 将编译产物推送至 `POST /api/agent/publish` 落盘并触发全站 WebSocket 广播；
+ *   专为每天早 (07:40)、中 (12:10)、晚 (19:10) 三次定时自动更新（提前软路由 08:00/12:30/19:30 拉取时间 20 分钟预采编）及一键 CLI 触发设计的端到端编排器：
+ *   - Stage 1 (Harvest) : 调用 `ag-harvest.js` 并发采集全球 37 大权威信源并提取正文与配图；
+ *   - Stage 2 (Compile) : 自动执行 AI 跨源语义去重、中文精编、核心要点生成与《全球要闻深度综述》撰写（无密钥时无缝降级至免密钥高速中文编译兜底）；
+ *   - Stage 3 (Publish) : 调用 `ag-publish.js` 将编译产物推送至 GitHub `origin/ag-snapshot` (`latest.json`) 及 `POST /api/agent/publish` 落盘并触发全站广播；
  *   - Stage 4 (Verify)  : 校验目标站点 `/api/health` 与 `/api/news` 在线健康状态，确保闭环更新成功。
  */
 const fs = require('fs');
@@ -27,6 +27,48 @@ const { runPublish } = require('./ag-publish');
 const { checkRemoteSnapshotCooldown } = require('../utils/github_sync');
 
 const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: false });
+
+const DEFAULT_AG_UPDATE_TIMES = ['07:40', '12:10', '19:10'];
+
+function parseScheduleTimesInput(raw) {
+    if (!raw) return [];
+    const list = Array.isArray(raw) ? raw : String(raw).split(',');
+    const timeRegex = /^([01]?[0-9]|2[0-3]):([0-5][0-9])$/;
+    const out = [];
+    const seen = new Set();
+    for (const item of list) {
+        const m = String(item || '').trim().match(timeRegex);
+        if (m) {
+            const norm = `${String(parseInt(m[1], 10)).padStart(2, '0')}:${m[2]}`;
+            if (!seen.has(norm)) {
+                seen.add(norm);
+                out.push(norm);
+            }
+        }
+    }
+    return out.sort();
+}
+
+function getTimesToSchedule(opts = {}) {
+    if (Array.isArray(opts)) {
+        const parsedArr = parseScheduleTimesInput(opts);
+        if (parsedArr.length > 0) return parsedArr;
+    } else if (opts && typeof opts === 'object') {
+        const fromOpts = parseScheduleTimesInput(opts.times || opts.scheduleTimes || opts.updateTimes);
+        if (fromOpts.length > 0) return fromOpts;
+    } else if (typeof opts === 'string') {
+        const parsedStr = parseScheduleTimesInput(opts);
+        if (parsedStr.length > 0) return parsedStr;
+    }
+
+    const fromEnv = parseScheduleTimesInput(process.env.AG_UPDATE_TIMES);
+    if (fromEnv.length > 0) return fromEnv;
+
+    const fromConfig = parseScheduleTimesInput(config.agent?.updateTimes || config.agent?.scheduleTimes);
+    if (fromConfig.length > 0) return fromConfig;
+
+    return [...DEFAULT_AG_UPDATE_TIMES];
+}
 
 function resolveDefaultPushToGithub() {
     if (process.env.GITHUB_PUSH_ENABLED !== undefined && process.env.GITHUB_PUSH_ENABLED !== '') {
@@ -61,6 +103,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         os.hostname() ||
         'antigravity-client'
     ).trim();
+    const defaultScheduleTimes = getTimesToSchedule();
     const options = {
         candidates: process.env.AG_CANDIDATES_FILE || path.join(config.storage.dataDir, 'ag_candidates.json'),
         compiled: process.env.AG_COMPILED_FILE || path.join(config.storage.dataDir, 'ag_compiled.json'),
@@ -85,6 +128,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         publishedBy: defaultClientId,
         snapshotUrl: process.env.GITHUB_SNAPSHOT_URL || config.githubSync?.snapshotUrl || null,
         snapshotOut: process.env.AG_SNAPSHOT_OUT || null,
+        times: defaultScheduleTimes,
+        scheduleTimes: defaultScheduleTimes,
         daemon: false,
         status: false,
         targetExplicit: Boolean(process.env.COREFEED_SITE_URL)
@@ -180,6 +225,18 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.snapshotOut = path.resolve(argv[++i]);
         } else if (arg.startsWith('--snapshot-out=')) {
             options.snapshotOut = path.resolve(eqVal(arg));
+        } else if ((arg === '--times' || arg === '--schedule-times') && argv[i + 1]) {
+            const parsedTimes = parseScheduleTimesInput(argv[++i]);
+            if (parsedTimes.length > 0) {
+                options.times = parsedTimes;
+                options.scheduleTimes = parsedTimes;
+            }
+        } else if (arg.startsWith('--times=') || arg.startsWith('--schedule-times=')) {
+            const parsedTimes = parseScheduleTimesInput(eqVal(arg));
+            if (parsedTimes.length > 0) {
+                options.times = parsedTimes;
+                options.scheduleTimes = parsedTimes;
+            }
         } else if (arg === '--daemon') {
             options.daemon = true;
         } else if (arg === '--status') {
@@ -597,10 +654,8 @@ function formatShanghaiTimestamp(isoStr) {
 
 function getNextExecutionTime(updateTimes = null) {
     const times = Array.isArray(updateTimes) && updateTimes.length > 0
-        ? updateTimes
-        : (Array.isArray(config.news?.updateTimes) && config.news.updateTimes.length > 0
-            ? config.news.updateTimes
-            : ['08:00', '12:30', '19:30']);
+        ? parseScheduleTimesInput(updateTimes)
+        : getTimesToSchedule(updateTimes);
 
     const now = new Date();
     const shanghaiOffsetMs = 8 * 3600000;
@@ -661,12 +716,11 @@ function isPidAlive(pid) {
 function getDaemonStatus(cliOpts = {}) {
     const opts = { ...parseArgs([]), ...cliOpts };
     const paths = getDaemonPaths();
-    const times = Array.isArray(config.news?.updateTimes) && config.news.updateTimes.length > 0
-        ? config.news.updateTimes
-        : ['08:00', '12:30', '19:30'];
+    const times = getTimesToSchedule(cliOpts);
     const timezone = config.news?.timezone || 'Asia/Shanghai';
     const nextExecution = getNextExecutionTime(times);
     const nextExecutionShanghai = formatShanghaiTimestamp(nextExecution);
+    const nextTimeSlot = nextExecutionShanghai ? nextExecutionShanghai.slice(11, 16) : null;
 
     let savedStatus = null;
     if (fs.existsSync(paths.statusFile)) {
@@ -724,6 +778,7 @@ function getDaemonStatus(cliOpts = {}) {
         cronExpressions,
         nextExecution,
         nextExecutionShanghai,
+        nextTimeSlot,
         lastRunAt: savedStatus?.lastRunAt || null,
         lastRunStatus: savedStatus?.lastRunStatus || 'idle',
         lastPublishedAt,
@@ -755,10 +810,10 @@ function persistDaemonStatus(patch = {}, cliOpts = {}) {
                 current = JSON.parse(fs.readFileSync(paths.statusFile, 'utf8'));
             } catch (_) {}
         }
-        const times = Array.isArray(config.news?.updateTimes) && config.news.updateTimes.length > 0
-            ? config.news.updateTimes
-            : ['08:00', '12:30', '19:30'];
+        const times = getTimesToSchedule(cliOpts);
         const nextExecution = getNextExecutionTime(times);
+        const nextExecutionShanghai = formatShanghaiTimestamp(nextExecution);
+        const nextTimeSlot = nextExecutionShanghai ? nextExecutionShanghai.slice(11, 16) : null;
         const updated = {
             ...current,
             pid: process.pid,
@@ -767,7 +822,8 @@ function persistDaemonStatus(patch = {}, cliOpts = {}) {
             scheduleTimes: times,
             timezone: config.news?.timezone || 'Asia/Shanghai',
             nextExecution,
-            nextExecutionShanghai: formatShanghaiTimestamp(nextExecution),
+            nextExecutionShanghai,
+            nextTimeSlot,
             updatedAt: new Date().toISOString(),
             ...patch
         };
@@ -781,9 +837,7 @@ function persistDaemonStatus(patch = {}, cliOpts = {}) {
 
 function startAutoUpdateDaemon(cliOpts = {}) {
     const opts = { ...parseArgs([]), ...cliOpts };
-    const times = Array.isArray(config.news?.updateTimes) && config.news.updateTimes.length > 0
-        ? config.news.updateTimes
-        : ['08:00', '12:30', '19:30'];
+    const times = getTimesToSchedule(cliOpts);
     const timezone = config.news?.timezone || 'Asia/Shanghai';
     const startedAt = new Date().toISOString();
 
@@ -871,5 +925,6 @@ module.exports = {
     parseArgs,
     startAutoUpdateDaemon,
     getDaemonStatus,
-    getNextExecutionTime
+    getNextExecutionTime,
+    getTimesToSchedule
 };

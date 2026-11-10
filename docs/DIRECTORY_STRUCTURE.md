@@ -21,14 +21,14 @@ CoreFeed/
 ├── scripts/
 │   ├── ag-harvest.js              # Stage 1：全球信源并发采集与候选池导出 CLI
 │   ├── ag-publish.js              # Stage 2：并查集二次聚类、引注渲染与 GitHub 快照发布 CLI
-│   └── ag-auto-update.js          # 全自动多客户端协同更新与常驻定时守护进程 (--daemon / --status)
+│   └── ag-auto-update.js          # 全自动多客户端协同更新与常驻定时守护进程 (默认 07:40, 12:10, 19:10 北京时间提前 20m 采编)
 ├── routes/
 │   └── api.js                     # 核心 RESTful API 路由定义
 ├── middleware/
 │   └── error_handler.js           # 全局错误处理、404 与速率限制中间件
 ├── utils/
 │   ├── github_sync.js             # GitHub ag-snapshot 分支发布 (Git Plumbing)、冷却检查与 ETag 同步器
-│   ├── schedule_manager.js        # 定时调度器 (默认 08:00, 12:30, 19:30 北京时间 + 60m 快照轮询)
+│   ├── schedule_manager.js        # 服务端/软路由定时拉取调度器 (默认 08:00, 12:30, 19:30 北京时间 + 60m 快照轮询)
 │   ├── rate_limiter.js            # LLM API 令牌桶限流器
 │   ├── network_config.js          # 全局 HTTP Keep-Alive 连接池配置
 │   ├── logger.js                  # 统一结构化日志与指标收集器

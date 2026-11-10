@@ -111,6 +111,8 @@ function buildConfig() {
     const env = getConfig('NODE_ENV', 'development');
     const defaultPushToGithub = getBooleanConfig('GITHUB_PUSH_ENABLED', getBooleanConfig('AG_GITHUB_SYNC', true));
     const defaultClientId = getConfig('CLIENT_ID', getConfig('AG_CLIENT_ID', os.hostname() || 'antigravity-client'));
+    const agUpdateTimes = parseUpdateTimes(getConfig('AG_UPDATE_TIMES', getConfig('agUpdateTimes', '07:40,12:10,19:10')));
+    const resolvedAgUpdateTimes = agUpdateTimes.length > 0 ? agUpdateTimes : ['07:40', '12:10', '19:10'];
 
     const baseConfig = {
         server: {
@@ -143,7 +145,9 @@ function buildConfig() {
             clientId: defaultClientId,
             githubBranch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),
             githubRemote: getConfig('AG_GITHUB_REMOTE', 'origin'),
-            syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)
+            syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true),
+            updateTimes: resolvedAgUpdateTimes,
+            scheduleTimes: resolvedAgUpdateTimes
         },
 
         // GitHub 快照中转同步配置 (多客户端方案 2B 统一中枢: Antigravity Clients <-> GitHub ag-snapshot -> 软路由)

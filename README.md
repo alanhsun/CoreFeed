@@ -25,7 +25,7 @@
 - **`npm run ag:harvest` (`scripts/ag-harvest.js`)**：并发采集全球 37 大信源、跨源去重、补全缺失 `og:image` 高清配图，输出候选池 `data/ag_candidates.json`。
 - **`npm run ag:publish` (`scripts/ag-publish.js`)**：读取编译结果 `data/ag_compiled.json`，执行并查集（Union-Find）二次语义合并、渲染 `[NEWS_k]` 引注锚点，默认通过 Git Plumbing 无感推送至 GitHub `ag-snapshot/latest.json` 独立孤儿分支，并支持向目标站点 `POST /api/agent/publish` 实时推送。
 - **`npm run ag:auto` (`scripts/ag-auto-update.js`)**：端到端四阶段闭环编排（**30 分钟多客户端冷却预检** → `Harvest` → `AI/Fallback Compile` → **推送 `ag-snapshot/latest.json` 及目标站点** → `/api/health` 在线健康核验）。
-- **`npm run ag:daemon` / `npm run ag:status` (`scripts/ag-auto-update.js --daemon` / `--status`)**：本机后台常驻定时采编守护进程（严格按 `Asia/Shanghai` 北京时间每日 `08:00, 12:30, 19:30` 自动执行全流程采编、100% 纯正中文编译并推送到 `origin/ag-snapshot/latest.json`）及运行状态/PID/下次执行时间查询工具。
+- **`npm run ag:daemon` / `npm run ag:status` (`scripts/ag-auto-update.js --daemon` / `--status`)**：本机后台常驻定时采编守护进程（严格按 `Asia/Shanghai` 北京时间每日 `07:40, 12:10, 19:10` 提前软路由拉取时间点 20 分钟自动执行全流程采编、100% 纯正中文编译并推送到 `origin/ag-snapshot/latest.json`，确保软路由在 `08:00, 12:30, 19:30` 准点拉取时最新中文快照已就绪）及运行状态/PID/下次执行时间查询工具。
 
 ### 3. 瑞士纸媒风 12 列不对称 Bento 网格阅读体验 (`views/index.ejs` & `public/css/style.css`)
 - 采用温暖宣纸白 (`#F6F5F1`) 与深曜石碳黑 (`#090A0C`) 双主题，搭配国际朱砂红 (`#C83214`) 单一高纯度视觉强调色与 1px 裸露分割线。
@@ -38,7 +38,7 @@
 ```text
 [37 Global Authoritative Sources (RSS / Google News Proxy)]
                        │
-                       ▼  1. npm run ag:harvest (Fast RSS + Lead Image + Clustering)
+                       ▼  1. npm run ag:harvest (Client Pre-Fetch Cron: 07:40, 12:10, 19:10 CST / 23:40, 04:10, 11:10 UTC)
           [data/ag_candidates.json]
                        │
                        ▼  2. Antigravity LLM Compilation (Title / Summary / KeyPoints / Briefing)
@@ -49,7 +49,7 @@
    ▼ (Git Orphan Commit)                   ▼ (Optional LAN HTTP Push)
 [GitHub origin/ag-snapshot/latest.json]  [POST /api/agent/publish]
    │
-   ▼  4. Startup / 08:00, 12:30, 19:30 Cron / 60m ETag Polling / Web UI "同步最新"
+   ▼  4. Startup / 08:00, 12:30, 19:30 Router Pull Cron / 60m ETag Polling / Web UI "同步最新"
 [OpenWrt / iStoreOS Router (:3120) — Swiss Editorial Bento UI (v2.5.4)]
 ```
 
@@ -76,14 +76,14 @@ CoreFeed/
 ├── scripts/
 │   ├── ag-harvest.js              # Stage 1：全球信源并发采集与候选池导出 CLI
 │   ├── ag-publish.js              # Stage 2：并查集二次聚类、引注渲染与 GitHub 快照发布 CLI
-│   └── ag-auto-update.js          # 全自动多客户端协同更新编排脚本 (冷却预检->采集->编译->发布->核验)
+│   └── ag-auto-update.js          # 全自动多客户端协同更新与常驻守护进程 (默认 07:40, 12:10, 19:10 提前 20m 采编)
 ├── routes/
 │   └── api.js                     # 核心 RESTful API 路由
 ├── middleware/
 │   └── error_handler.js           # 全局错误处理、404 与 API 速率限制中间件
 ├── utils/
 │   ├── github_sync.js             # GitHub ag-snapshot 分支发布 (Git Plumbing)、冷却预检与 ETag 同步器
-│   ├── schedule_manager.js        # 每日早中晚定时调度器 (08:00, 12:30, 19:30 + 60 分钟快照轮询)
+│   ├── schedule_manager.js        # 服务端/软路由每日定时拉取调度器 (08:00, 12:30, 19:30 + 60 分钟快照轮询)
 │   ├── rate_limiter.js            # 令牌桶 API 速率限制器
 │   ├── network_config.js          # 全局 HTTP Keep-Alive 连接池配置
 │   ├── logger.js                  # 彩色结构化日志与运行指标统计
@@ -110,7 +110,7 @@ CoreFeed/
 2. **多客户端 30 分钟冷却防冲突 (`GITHUB_COOLDOWN_MINUTES=30`)**：
    - 当客户端执行 `ag-auto-update.js` 时，会先检查远端 `ag-snapshot/latest.json` 的 `publishedAt`：若 30 分钟内已被其他客户端更新且未传 `--force`，自动拉取复用远端快照并跳过重复采集。
 3. **软路由 (`10.10.20.10:3120`) 自动同步与一键拉取**：
-   - 软路由在容器启动、每日 `08:00, 12:30, 19:30`（北京时间）定时点及后台每 60 分钟轻量轮询时自动拉取 `ag-snapshot/latest.json`。
+   - 软路由在容器启动、每日 `08:00, 12:30, 19:30`（北京时间）定时点及后台每 60 分钟轻量轮询时自动拉取 `ag-snapshot/latest.json`（由于客户端提前 20 分钟在 `07:40, 12:10, 19:10` 完成采编并推送到 GitHub，软路由在准点拉取时最新一期中文精编快照刚好已经就绪）。
    - 也可点击网页右上角「同步最新」按钮，或执行以下命令立即触发拉取：
      ```bash
      curl -X POST http://10.10.20.10:3120/api/agent/pull-github -H "X-Requested-With: CoreFeed-WebUI"
@@ -128,13 +128,13 @@ node scripts/ag-auto-update.js --force --client-id=alan-windows-pc --site http:/
 node scripts/ag-publish.js --site http://10.10.20.10:3120 --file data/ag_compiled.json
 ```
 
-### 本机与多平台定时任务配置（每日早 08:00、中 12:30、晚 19:30 自动采集与推送）
+### 本机与多平台定时任务配置（每日早 07:40、中 12:10、晚 19:10 提前 20 分钟自动采集与推送）
 
-无论在云端 Antigravity 容器还是本地 Windows / macOS / Linux 电脑上，均可按以下任一方式（或双重保障组合）配置每天早 `08:00`、中 `12:30`、晚 `19:30`（北京时间 `Asia/Shanghai`）自动新闻收集、中文精编与 GitHub `ag-snapshot` 推送：
+无论在云端 Antigravity 容器还是本地 Windows / macOS / Linux 电脑上，均可按以下任一方式（或双重保障组合）配置每天早 `07:40`、中 `12:10`、晚 `19:10`（北京时间 `Asia/Shanghai`，提前软路由 `08:00, 12:30, 19:30` 拉取时间 20 分钟）自动新闻收集、中文精编与 GitHub `ag-snapshot` 推送：
 
 #### 1) 方式 A：本机常驻定时守护进程（跨平台通用，开箱即用）
 ```bash
-# 直接在前台或 nohup 后台启动内置 Asia/Shanghai 时区的定时采编守护进程
+# 直接在前台或 nohup 后台启动内置 Asia/Shanghai 时区的定时采编守护进程 (07:40, 12:10, 19:10)
 npm run ag:daemon
 
 # 或在 Linux / 云端容器中使用 nohup 后台常驻运行（自动记录 PID 至 logs/ag-daemon.pid 及状态至 data/ag_daemon_status.json）
@@ -148,31 +148,31 @@ npm run pm2:daemon
 ```
 
 #### 2) 方式 B：Antigravity 客户端内置 `schedule` 定时唤醒任务
-在 Antigravity 对话中可通过内置 `schedule` 工具（设置 `IsDaemon=true`）注册每日早、中、晚常驻 Cron 任务：
+在 Antigravity 对话中可通过内置 `schedule` 工具（设置 `IsDaemon=true`）注册每日早、中、晚提前 20 分钟的常驻 Cron 任务：
 
-| 档期 | 北京时间 (`Asia/Shanghai`, `UTC+8`) | UTC 时间 (`Etc/UTC`, `UTC+0`) | 美西时间 (`America/Los_Angeles`, `UTC-8`) |
+| 档期（提前 20 分钟预采编） | 北京时间 (`Asia/Shanghai`, `UTC+8`) | UTC 时间 (`Etc/UTC`, `UTC+0`) | 美西时间 (`America/Los_Angeles`, `UTC-8`) |
 |---|---|---|---|
-| **早间档 (08:00 CST)** | `0 8 * * *` | `0 0 * * *` (`00:00 UTC`) | `0 16 * * *` (`16:00 PST`) |
-| **午间档 (12:30 CST)** | `30 12 * * *` | `30 4 * * *` (`04:30 UTC`) | `30 20 * * *` (`20:30 PST`) |
-| **晚间档 (19:30 CST)** | `30 19 * * *` | `30 11 * * *` (`11:30 UTC`) | `30 3 * * *` (`03:30 PST`) |
+| **早间档 (07:40 CST → 供 08:00 拉取)** | `40 7 * * *` | `40 23 * * *` (`23:40 UTC`) | `40 15 * * *` (`15:40 PST`) |
+| **午间档 (12:10 CST → 供 12:30 拉取)** | `10 12 * * *` | `10 4 * * *` (`04:10 UTC`) | `10 20 * * *` (`20:10 PST`) |
+| **晚间档 (19:10 CST → 供 19:30 拉取)** | `10 19 * * *` | `10 11 * * *` (`11:10 UTC`) | `10 3 * * *` (`03:10 PST`) |
 
 标准定时唤醒 Prompt 模板：
 > 在 `/home/antigravity/alanhsun/CoreFeed` 执行定时新闻收集与中文精编发布：运行 `npm run ag:harvest` 采集候选集，将 `data/ag_candidates.json` 全部候选新闻深度编译为 100% 纯正中文（`<=32` 字标题、`80-130` 字摘要、3 条核心要点、同事件 `duplicateGroups` 及带 `[NEWS_k]` 引注的《今日全球要闻深度综述》）写入 `data/ag_compiled.json`，随后运行 `node scripts/ag-publish.js --github --force` 推送至 `origin/ag-snapshot` (`latest.json`) 并同步更新本地 `:3120` 服务（或直接执行 `node scripts/ag-auto-update.js --force`）。
 
 #### 3) 方式 C：本地电脑操作系统定时任务（Windows 任务计划程序 / macOS & Linux Crontab）
-- **Windows PowerShell（一键注册早 08:00、中 12:30、晚 19:30 三个计划任务）**：
+- **Windows PowerShell（一键注册早 07:40、中 12:10、晚 19:10 三个提前 20 分钟预采编计划任务）**：
   ```powershell
   $RepoDir = "C:\path\to\CoreFeed"
-  schtasks /Create /F /SC DAILY /ST 08:00 /TN "CoreFeed_Morning_0800" /TR "cmd /c cd /d `"$RepoDir`" && npm run ag:auto"
-  schtasks /Create /F /SC DAILY /ST 12:30 /TN "CoreFeed_Midday_1230"  /TR "cmd /c cd /d `"$RepoDir`" && npm run ag:auto"
-  schtasks /Create /F /SC DAILY /ST 19:30 /TN "CoreFeed_Evening_1930" /TR "cmd /c cd /d `"$RepoDir`" && npm run ag:auto"
+  schtasks /Create /F /SC DAILY /ST 07:40 /TN "CoreFeed_Morning_0740" /TR "cmd /c cd /d `"$RepoDir`" && npm run ag:auto"
+  schtasks /Create /F /SC DAILY /ST 12:10 /TN "CoreFeed_Midday_1210"  /TR "cmd /c cd /d `"$RepoDir`" && npm run ag:auto"
+  schtasks /Create /F /SC DAILY /ST 19:10 /TN "CoreFeed_Evening_1910" /TR "cmd /c cd /d `"$RepoDir`" && npm run ag:auto"
   ```
 - **macOS / Linux (`crontab -e`)**：
   ```cron
   CRON_TZ=Asia/Shanghai
-  0 8 * * * cd /path/to/CoreFeed && /usr/bin/env node scripts/ag-auto-update.js >> logs/ag-cron.log 2>&1
-  30 12 * * * cd /path/to/CoreFeed && /usr/bin/env node scripts/ag-auto-update.js >> logs/ag-cron.log 2>&1
-  30 19 * * * cd /path/to/CoreFeed && /usr/bin/env node scripts/ag-auto-update.js >> logs/ag-cron.log 2>&1
+  40 7 * * * cd /path/to/CoreFeed && /usr/bin/env node scripts/ag-auto-update.js >> logs/ag-cron.log 2>&1
+  10 12 * * * cd /path/to/CoreFeed && /usr/bin/env node scripts/ag-auto-update.js >> logs/ag-cron.log 2>&1
+  10 19 * * * cd /path/to/CoreFeed && /usr/bin/env node scripts/ag-auto-update.js >> logs/ag-cron.log 2>&1
   ```
 
 ---
@@ -189,7 +189,8 @@ npm run pm2:daemon
 | `GITHUB_COOLDOWN_MINUTES` | `30` | 多客户端协同防冲突冷却窗口（分钟） |
 | `CLIENT_ID` | `os.hostname()` | 当前发布客户端标识（写入快照 `publishedBy` 字段） |
 | `AUTO_UPDATE_ENABLED` | `true` | 是否启用每日早中晚三次自动同步调度 |
-| `UPDATE_TIMES` | `08:00,12:30,19:30` | 每日自动同步时间点（北京时间 `Asia/Shanghai`） |
+| `UPDATE_TIMES` | `08:00,12:30,19:30` | 服务端/软路由每日定时拉取快照时间点（北京时间 `Asia/Shanghai`） |
+| `AG_UPDATE_TIMES` | `07:40,12:10,19:10` | Antigravity 客户端守护进程每日提前 20 分钟自动采编并推送 GitHub 的时间点（北京时间 `Asia/Shanghai`） |
 | `PUBLISH_SECRET` | 空 | `POST /api/agent/publish` 与外部同步接口可选鉴权密钥 |
 | `COREFEED_SITE_URL` | `http://localhost:3120` | CLI 发布推送的目标站点地址 |
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | OpenAI 兼容端点 | 单机巡检编译可选 LLM 配置（无密钥自动降级免密钥中文直译） |

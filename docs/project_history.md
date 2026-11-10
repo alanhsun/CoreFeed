@@ -4,6 +4,7 @@
 - **Plan 2B Multi-Client Coordination & Router Protection (`utils/github_sync.js`)**:
   - Uses Git plumbing (`hash-object`, `mktree`, `commit-tree`, `push --force`) to publish compiled Chinese snapshots to the single-commit orphan branch `ag-snapshot/latest.json` without touching the working tree.
   - Built-in 30-minute multi-client cooldown check (`checkRemoteSnapshotCooldown`), `ETag` (`304 Not Modified`) polling, and automatic self-healing against untranslated English RSS pollution on soft-router deployments.
+  - Decoupled 20-minute pre-fetch schedule: Antigravity clients harvest and publish to `origin/ag-snapshot/latest.json` at `07:40, 12:10, 19:10` `Asia/Shanghai` (`23:40, 04:10, 11:10` UTC; `AG_UPDATE_TIMES`), ensuring the compiled Chinese snapshot is ready right before soft-router instances pull at `08:00, 12:30, 19:30` `Asia/Shanghai` (`UPDATE_TIMES`).
 - **37 Global & Chinese Authoritative Sources (`config/global_sources.js` v2.5)**:
   - High-concurrency patrol across 37 international and Chinese outlets with 3-tier fallback (Official RSS → Google News domain proxy `site:domain` → Jina Reader list extraction) and cross-source `relatedSources` event clustering.
 - **Swiss Editorial & 12-Column Asymmetric Bento Grid (`views/index.ejs`, `public/css/style.css`, `public/js/main.js`)**:

@@ -543,9 +543,11 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
     });
 
     it('6. 3x/day schedule configuration (08:00, 12:30, 19:30 Asia/Shanghai), GET /api/schedule/status, POST /api/schedule/config & timezone-aware getNextExecutionTime()', async () => {
-        // Verify default config values
+        // Verify default config values (router/server pull at 08:00, 12:30, 19:30 vs client pre-fetch at 07:40, 12:10, 19:10)
         assert.deepEqual(config.news.updateTimes, ['08:00', '12:30', '19:30']);
         assert.deepEqual(config.news.scheduleTimes, ['08:00', '12:30', '19:30']);
+        assert.deepEqual(config.agent.updateTimes, ['07:40', '12:10', '19:10']);
+        assert.deepEqual(config.agent.scheduleTimes, ['07:40', '12:10', '19:10']);
         assert.equal(config.news.timezone, 'Asia/Shanghai');
 
         // Verify GET /api/schedule/status
@@ -1750,29 +1752,33 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
         const daemonApp = ecosystemConfig.apps.find(a => a.name === 'corefeed-ag-daemon');
         assert.ok(daemonApp, 'ecosystem.config.js should include corefeed-ag-daemon app');
         assert.ok(String(daemonApp.script).includes('ag-auto-update.js'));
+        assert.equal(daemonApp.env.AG_UPDATE_TIMES, '07:40,12:10,19:10');
 
-        // 15b. Verify parseAutoArgs(--daemon / --status), getNextExecutionTime, and getDaemonStatus
-        const daemonArgs = parseAutoArgs(['--daemon', '--client-id=daemon-test-node']);
+        // 15b. Verify parseAutoArgs(--daemon / --status / --times), getNextExecutionTime, and getDaemonStatus (20m pre-fetch: 07:40, 12:10, 19:10)
+        const daemonArgs = parseAutoArgs(['--daemon', '--client-id=daemon-test-node', '--times=07:40,12:10,19:10']);
         assert.equal(daemonArgs.daemon, true);
         assert.equal(daemonArgs.clientId, 'daemon-test-node');
+        assert.deepEqual(daemonArgs.scheduleTimes, ['07:40', '12:10', '19:10']);
 
         const statusArgs = parseAutoArgs(['--status']);
         assert.equal(statusArgs.status, true);
 
         assert.equal(typeof getNextExecutionTime, 'function');
-        const nextIso = getNextExecutionTime(['08:00', '12:30', '19:30']);
+        const nextIso = getNextExecutionTime();
         const nextDate = new Date(nextIso);
         assert.ok(!isNaN(nextDate.getTime()) && nextDate.getTime() > Date.now(), 'getNextExecutionTime must return a future ISO date');
         const utcHm = `${String(nextDate.getUTCHours()).padStart(2, '0')}:${String(nextDate.getUTCMinutes()).padStart(2, '0')}`;
-        assert.ok(['00:00', '04:30', '11:30'].includes(utcHm), `UTC time ${utcHm} must match 08:00, 12:30, or 19:30 Asia/Shanghai`);
+        assert.ok(['23:40', '04:10', '11:10'].includes(utcHm), `UTC time ${utcHm} must match 07:40, 12:10, or 19:10 Asia/Shanghai`);
 
         assert.equal(typeof getDaemonStatus, 'function');
         const dStatus = getDaemonStatus({ clientId: 'daemon-test-node' });
-        assert.deepEqual(dStatus.scheduleTimes, ['08:00', '12:30', '19:30']);
+        assert.deepEqual(dStatus.scheduleTimes, ['07:40', '12:10', '19:10']);
         assert.equal(dStatus.timezone, 'Asia/Shanghai');
         assert.ok(dStatus.nextExecution, 'getDaemonStatus must report nextExecution');
         assert.ok(dStatus.nextExecutionShanghai && dStatus.nextExecutionShanghai.includes('Asia/Shanghai'));
-        assert.deepEqual(dStatus.cronExpressions.UTC, ['0 0 * * *', '30 4 * * *', '30 11 * * *']);
+        assert.ok(['07:40', '12:10', '19:10'].includes(dStatus.nextTimeSlot), `nextTimeSlot (${dStatus.nextTimeSlot}) must be one of 07:40, 12:10, 19:10`);
+        assert.deepEqual(dStatus.cronExpressions.Asia_Shanghai, ['40 7 * * *', '10 12 * * *', '10 19 * * *']);
+        assert.deepEqual(dStatus.cronExpressions.UTC, ['40 23 * * *', '10 4 * * *', '10 11 * * *']);
 
         // 15c. Verify unattended runAutoUpdate compiles raw English candidates into 100% pure Chinese articles + briefing and pushes to ag-snapshot
         const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'corefeed-unattended-zh-'));

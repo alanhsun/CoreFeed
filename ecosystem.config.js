@@ -59,12 +59,12 @@ module.exports = {
     env: {
       NODE_ENV: 'production',
       SCHEDULE_TIMEZONE: 'Asia/Shanghai',
-      UPDATE_TIMES: '08:00,12:30,19:30'
+      AG_UPDATE_TIMES: '07:40,12:10,19:10'
     },
     env_production: {
       NODE_ENV: 'production',
       SCHEDULE_TIMEZONE: 'Asia/Shanghai',
-      UPDATE_TIMES: '08:00,12:30,19:30'
+      AG_UPDATE_TIMES: '07:40,12:10,19:10'
     },
 
     // 进程管理
