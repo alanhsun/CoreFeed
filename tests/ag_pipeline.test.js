@@ -1385,12 +1385,14 @@ describe('CoreFeed Path A — Antigravity Publish API & CLI Pipeline Tests', () 
             assert.ok(html.includes('id="btnSettings"'), 'SSR HTML should contain #btnSettings button');
             assert.ok(html.includes('设置'), 'SSR HTML should contain "设置" button label');
             assert.ok(html.includes('id="settingsModal"'), 'SSR HTML should contain #settingsModal');
-            assert.ok(html.includes('id="cfgGithubSyncEnabled"'), 'SSR HTML should contain #cfgGithubSyncEnabled');
-            assert.ok(html.includes('id="cfgGithubSyncInterval"'), 'SSR HTML should contain #cfgGithubSyncInterval');
+            assert.ok(!html.includes('id="cfgGithubSyncEnabled"'), 'SSR HTML must NOT contain removed #cfgGithubSyncEnabled option');
+            assert.ok(!html.includes('id="cfgGithubSyncInterval"'), 'SSR HTML must NOT contain removed #cfgGithubSyncInterval option');
             assert.ok(html.includes('id="cfgAutoUpdateEnabled"'), 'SSR HTML should contain #cfgAutoUpdateEnabled');
             assert.ok(html.includes('id="cfgUpdateTimes"'), 'SSR HTML should contain #cfgUpdateTimes');
             assert.ok(html.includes('id="modalSyncStatusText"'), 'SSR HTML should contain concise sync status display #modalSyncStatusText');
             assert.ok(html.includes('id="btnSaveSettings"'), 'SSR HTML should contain #btnSaveSettings');
+            assert.ok(html.includes('id="heroCarousel"'), 'SSR HTML should render #heroCarousel for Top-3 news items');
+            assert.ok(html.includes('hero-carousel-slide'), 'SSR HTML should render .hero-carousel-slide inside #heroCarousel');
 
             // (b) Absence of removed cluttered buttons, engineering badges, status bars, and low-level modal inputs
             assert.ok(!html.includes('立即采集全球新闻'), 'SSR HTML must NOT contain removed manual harvest button "立即采集全球新闻"');

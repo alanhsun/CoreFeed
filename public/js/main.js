@@ -246,25 +246,68 @@ class CoreFeedApp {
         this.applyFilters();
     }
 
-    // ==================== 4. 渲染 12 列不对称 Bento 全球新闻网格 ====================
-    computeBentoLayout(idx, total) {
-        if (total === 2) {
-            return { tier: 'secondary', spanClass: 'bento-span-6' };
+    // ==================== 4. 渲染 Top-3 轮播大卡 + 小卡片全球新闻网格 ====================
+    startHeroCarousel() {
+        this.stopHeroCarousel();
+        if (this.heroSlideCount <= 1) return;
+        if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            return;
         }
-        // Row 1 (idx 0): Full-width Lead Hero (12 columns, horizontal split with 16:9 image)
-        if (idx === 0) {
-            return { tier: 'lead', spanClass: 'bento-span-12' };
+        this.heroCarouselTimer = setInterval(() => {
+            if (!this.heroCarouselPaused && this.activeTab === 'feed') {
+                this.nextHeroSlide(false);
+            }
+        }, 6500);
+    }
+
+    stopHeroCarousel() {
+        if (this.heroCarouselTimer) {
+            clearInterval(this.heroCarouselTimer);
+            this.heroCarouselTimer = null;
         }
-        // If total === 4, Row 2 has 3 compact cards (4 + 4 + 4 = 12)
-        if (total === 4) {
-            return { tier: 'compact', spanClass: 'bento-span-4' };
+    }
+
+    pauseHeroCarousel() {
+        this.heroCarouselPaused = true;
+    }
+
+    resumeHeroCarousel() {
+        this.heroCarouselPaused = false;
+    }
+
+    goToHeroSlide(targetIdx, manual = true) {
+        if (this.heroSlideCount <= 1) return;
+        const normalized = ((targetIdx % this.heroSlideCount) + this.heroSlideCount) % this.heroSlideCount;
+        this.heroSlideIndex = normalized;
+
+        const carousel = document.getElementById('heroCarousel');
+        if (!carousel) return;
+
+        const slides = carousel.querySelectorAll('.hero-carousel-slide');
+        slides.forEach((slide, idx) => {
+            const active = idx === normalized;
+            slide.classList.toggle('is-active', active);
+            slide.setAttribute('aria-hidden', active ? 'false' : 'true');
+        });
+
+        const dockItems = carousel.querySelectorAll('.hero-dock-item');
+        dockItems.forEach((btn, idx) => {
+            const active = idx === normalized;
+            btn.classList.toggle('is-active', active);
+            btn.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+
+        if (manual) {
+            this.startHeroCarousel();
         }
-        // Row 2 (idx 1 & 2): Dual Secondary Highlight (6 + 6 = 12)
-        if (idx === 1 || idx === 2) {
-            return { tier: 'secondary', spanClass: 'bento-span-6' };
-        }
-        // Rows 3+ (idx >= 3): 3 equal compact cards per row (4 + 4 + 4 = 12)
-        return { tier: 'compact', spanClass: 'bento-span-4' };
+    }
+
+    nextHeroSlide(manual = true) {
+        this.goToHeroSlide(this.heroSlideIndex + 1, manual);
+    }
+
+    prevHeroSlide(manual = true) {
+        this.goToHeroSlide(this.heroSlideIndex - 1, manual);
     }
 
     renderNewsGrid() {
@@ -297,6 +340,8 @@ class CoreFeedApp {
         }
 
         if (filtered.length === 0) {
+            this.stopHeroCarousel();
+            this.heroSlideCount = 0;
             grid.innerHTML = `
                 <div class="col-span-full kami-card py-14 text-center space-y-3">
                     <div class="kami-tag mx-auto">暂无匹配新闻</div>
@@ -307,16 +352,65 @@ class CoreFeedApp {
             return;
         }
 
-        const total = filtered.length;
-        grid.innerHTML = filtered.map((item, idx) => this.renderSingleCardHtml(item, idx, total)).join('');
+        const heroItems = filtered.slice(0, 3);
+        const compactItems = filtered.slice(3);
+
+        this.heroSlideIndex = 0;
+        this.heroSlideCount = heroItems.length;
+
+        const heroHtml = this.renderHeroCarouselHtml(heroItems);
+        const compactHtml = compactItems.map((item, cIdx) => this.renderSingleCardHtml(item, cIdx + 3)).join('');
+        grid.innerHTML = heroHtml + compactHtml;
+
+        this.startHeroCarousel();
     }
 
-    renderSingleCardHtml(item, idx, total = this.news.length) {
-        const layout = this.computeBentoLayout(idx, total || 1);
-        const tier = layout.tier;
-        const spanClass = layout.spanClass;
-        const indexNum = String(idx + 1).padStart(2, '0');
+    renderHeroCarouselHtml(heroItems) {
+        const totalHero = heroItems.length;
+        const slidesHtml = heroItems.map((item, slideIdx) => this.renderHeroSlideHtml(item, slideIdx, totalHero)).join('');
+        const dockHtml = totalHero > 1 ? `
+            <div class="hero-carousel-dock" role="tablist" aria-label="切换前三位重点要闻">
+                ${heroItems.map((hItem, hIdx) => {
+                    const hNum = String(hIdx + 1).padStart(2, '0');
+                    const hTitle = hItem.translatedTitle || hItem.title || '无标题';
+                    const hSource = hItem.source?.name || 'Global Media';
+                    const active = hIdx === 0;
+                    return `
+                        <button type="button"
+                                role="tab"
+                                aria-selected="${active ? 'true' : 'false'}"
+                                data-dock-index="${hIdx}"
+                                onclick="app.goToHeroSlide(${hIdx})"
+                                class="hero-dock-item ${active ? 'is-active' : ''}">
+                            <div class="hero-dock-meta">
+                                <span class="hero-dock-num">${hNum}</span>
+                                <span class="card-meta-sep">/</span>
+                                <span class="hero-dock-source">${this.escapeHtml(hSource)}</span>
+                            </div>
+                            <div class="hero-dock-title line-clamp-1">${this.escapeHtml(hTitle)}</div>
+                        </button>
+                    `;
+                }).join('')}
+            </div>
+        ` : '';
 
+        return `
+            <section id="heroCarousel"
+                     class="news-card news-card--lead hero-carousel bento-span-12"
+                     aria-roledescription="carousel"
+                     aria-label="重点要闻轮播"
+                     onmouseenter="app.pauseHeroCarousel()"
+                     onmouseleave="app.resumeHeroCarousel()">
+                <div class="hero-carousel-track">
+                    ${slidesHtml}
+                </div>
+                ${dockHtml}
+            </section>
+        `;
+    }
+
+    renderHeroSlideHtml(item, slideIdx, totalHero) {
+        const indexNum = String(slideIdx + 1).padStart(2, '0');
         const title = item.translatedTitle || item.title || '无标题';
         const originalTitle = item.translatedTitle && item.translatedTitle !== item.title ? item.title : '';
         const summary = item.summary || item.translatedDescription || item.description || '';
@@ -341,21 +435,36 @@ class CoreFeedApp {
         const metaBadgeText = category && category !== region ? `${region} · ${category}` : region;
         const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
         const displayImgSrc = isRemoteHttp ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}` : imageUrl;
-        const summaryClampClass = tier === 'lead' ? 'line-clamp-5' : (tier === 'secondary' ? 'line-clamp-4' : 'line-clamp-3');
+        const active = slideIdx === 0;
 
         return `
-            <article class="news-card news-card--${tier} ${spanClass}">
-                <div>
+            <article class="hero-carousel-slide ${active ? 'is-active' : ''}"
+                     data-slide-index="${slideIdx}"
+                     aria-hidden="${active ? 'false' : 'true'}">
+                <div class="hero-slide-top">
                     <div class="card-meta-header">
                         <div class="card-meta-left">
                             <span class="card-index-num">${indexNum}</span>
                             <span class="card-meta-sep">/</span>
                             <span class="card-source-name" title="${this.escapeHtml(sourceName)}">${this.escapeHtml(sourceName)}</span>
                         </div>
-                        <span class="card-taxonomy-pill">${this.escapeHtml(metaBadgeText)}</span>
+                        <div class="hero-meta-right">
+                            <span class="card-taxonomy-pill">${this.escapeHtml(metaBadgeText)}</span>
+                            ${totalHero > 1 ? `
+                                <div class="hero-step-controls" role="group" aria-label="切换重点要闻">
+                                    <button type="button" class="hero-step-btn" onclick="app.prevHeroSlide()" aria-label="上一条要闻" title="上一条要闻">
+                                        <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+                                    </button>
+                                    <span class="hero-step-counter tabular-nums">${slideIdx + 1} / ${totalHero}</span>
+                                    <button type="button" class="hero-step-btn" onclick="app.nextHeroSlide()" aria-label="下一条要闻" title="下一条要闻">
+                                        <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                            ` : ''}
+                        </div>
                     </div>
 
-                    <div class="lead-bento-inner ${tier === 'lead' ? 'has-media' : ''}">
+                    <div class="lead-bento-inner has-media">
                         <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
                            class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
                             ${imageUrl ? `
@@ -401,7 +510,118 @@ class CoreFeedApp {
                                 ${originalTitle ? `<p class="card-subtitle-en line-clamp-1" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
                             </div>
 
-                            <p class="card-summary ${summaryClampClass}">
+                            <p class="card-summary line-clamp-4">
+                                ${this.escapeHtml(summary)}
+                            </p>
+
+                            ${keyPoints.length > 0 ? `
+                                <ul class="card-keypoints">
+                                    ${keyPoints.map(kp => `<li class="card-keypoint-item">${this.escapeHtml(kp)}</li>`).join('')}
+                                </ul>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card-footer">
+                    <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
+                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
+                        class="btn-source-link">
+                        <span>原文</span>
+                        <span aria-hidden="true">↗</span>
+                    </a>
+                </div>
+            </article>
+        `;
+    }
+
+    renderSingleCardHtml(item, idx) {
+        const indexNum = String(idx + 1).padStart(2, '0');
+
+        const title = item.translatedTitle || item.title || '无标题';
+        const originalTitle = item.translatedTitle && item.translatedTitle !== item.title ? item.title : '';
+        const summary = item.summary || item.translatedDescription || item.description || '';
+        const sourceName = item.source?.name || 'Global Media';
+        const region = item.region || '国际';
+        const category = item.category || '国际';
+        const timeStr = item.publishedAt ? this.formatRelativeTime(item.publishedAt) : '';
+        const imageUrl = item.urlToImage || '';
+
+        const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
+        const hasMultiSources = relatedSources.length > 0;
+        const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
+        const isCompiling = (this.collectionPhase === 'collected' || this.collectionPhase === 'compiling') && !item.aiCompiled;
+
+        const relatedLinksHtml = relatedSources.map(r => {
+            if (r.url) {
+                return `<a href="${this.escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="${this.escapeHtml(r.title || r.name)}">${this.escapeHtml(r.name)}</a>`;
+            }
+            return `<span>${this.escapeHtml(r.name)}</span>`;
+        }).join('、');
+
+        const metaBadgeText = category && category !== region ? `${region} · ${category}` : region;
+        const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
+        const displayImgSrc = isRemoteHttp ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}` : imageUrl;
+
+        return `
+            <article class="news-card news-card--compact bento-span-4">
+                <div>
+                    <div class="card-meta-header">
+                        <div class="card-meta-left">
+                            <span class="card-index-num">${indexNum}</span>
+                            <span class="card-meta-sep">/</span>
+                            <span class="card-source-name" title="${this.escapeHtml(sourceName)}">${this.escapeHtml(sourceName)}</span>
+                        </div>
+                        <span class="card-taxonomy-pill">${this.escapeHtml(metaBadgeText)}</span>
+                    </div>
+
+                    <div class="lead-bento-inner">
+                        <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
+                           class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
+                            ${imageUrl ? `
+                                <img src="${this.escapeHtml(displayImgSrc)}"
+                                     data-raw-src="${this.escapeHtml(imageUrl)}"
+                                     alt="${this.escapeHtml(title)}"
+                                     loading="lazy"
+                                     referrerpolicy="no-referrer"
+                                     class="card-cover-img"
+                                     onerror="if(!this.dataset.retried && this.dataset.rawSrc && this.src !== this.dataset.rawSrc){this.dataset.retried='1';this.src=this.dataset.rawSrc;}else{this.parentElement.classList.add('is-fallback');this.remove();}" />
+                            ` : ''}
+                            <div class="card-cover-fallback">
+                                <div class="fallback-plate-top">
+                                    <span>${this.escapeHtml(region)}</span>
+                                    <span>${this.escapeHtml(category)}</span>
+                                </div>
+                                <div class="fallback-plate-watermark">CoreFeed</div>
+                                <div class="fallback-plate-bottom">
+                                    <span class="fallback-plate-source">${this.escapeHtml(sourceName)}</span>
+                                    <span class="fallback-plate-cat">要闻简报</span>
+                                </div>
+                            </div>
+                        </a>
+
+                        <div class="card-body">
+                            ${hasMultiSources ? `
+                                <div class="kami-callout flex flex-col gap-0.5">
+                                    <div class="kami-callout-title">${relatedSources.length + 1} 家权威外媒交叉印证</div>
+                                    <div class="truncate text-xs" style="color: var(--text-body);">同题报道：${relatedLinksHtml}</div>
+                                </div>
+                            ` : ''}
+
+                            ${isCompiling ? `
+                                <div>
+                                    <span class="kami-tag">后台深度精编中</span>
+                                </div>
+                            ` : ''}
+
+                            <div>
+                                <h3 class="card-title">
+                                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(title)}</a>
+                                </h3>
+                                ${originalTitle ? `<p class="card-subtitle-en line-clamp-1" title="${this.escapeHtml(originalTitle)}">${this.escapeHtml(originalTitle)}</p>` : ''}
+                            </div>
+
+                            <p class="card-summary line-clamp-3">
                                 ${this.escapeHtml(summary)}
                             </p>
 
@@ -696,16 +916,7 @@ class CoreFeedApp {
 
             if (data && data.success) {
                 const cfg = data.config || data;
-                const { agent = {}, schedule = {}, githubSync = {} } = cfg;
-
-                const syncEnabled = cfg.GITHUB_SYNC_ENABLED ?? githubSync.enabled ?? agent.githubSyncEnabled ?? true;
-                const syncInterval = cfg.GITHUB_SYNC_INTERVAL_MINUTES ?? githubSync.intervalMinutes ?? agent.githubSyncIntervalMinutes ?? 60;
-
-                const syncEnabledEl = document.getElementById('cfgGithubSyncEnabled');
-                if (syncEnabledEl) syncEnabledEl.checked = Boolean(syncEnabled);
-
-                const syncIntervalEl = document.getElementById('cfgGithubSyncInterval');
-                if (syncIntervalEl) syncIntervalEl.value = syncInterval;
+                const { schedule = {}, githubSync = {} } = cfg;
 
                 if (githubSync && Object.keys(githubSync).length > 0) {
                     this.githubSync = { ...(this.githubSync || {}), ...githubSync };
@@ -732,14 +943,6 @@ class CoreFeedApp {
     }
 
     async saveSettings() {
-        const syncEnabledEl = document.getElementById('cfgGithubSyncEnabled');
-        const githubSyncEnabled = syncEnabledEl ? Boolean(syncEnabledEl.checked) : true;
-
-        const githubSyncInterval = Math.max(
-            1,
-            parseInt(document.getElementById('cfgGithubSyncInterval')?.value, 10) || 60
-        );
-
         const autoUpdateEl = document.getElementById('cfgAutoUpdateEnabled');
         const autoUpdateEnabled = autoUpdateEl ? Boolean(autoUpdateEl.checked) : true;
 
@@ -751,8 +954,6 @@ class CoreFeedApp {
             .join(',') || '08:00,12:30,19:30';
 
         const payload = {
-            GITHUB_SYNC_ENABLED: githubSyncEnabled,
-            GITHUB_SYNC_INTERVAL_MINUTES: githubSyncInterval,
             AUTO_UPDATE_ENABLED: autoUpdateEnabled,
             UPDATE_TIMES: updateTimes
         };

@@ -61,22 +61,6 @@
                 }
             }
 
-            function computeBentoLayoutSSR(idx, total) {
-                if (total === 2) {
-                    return { tier: 'secondary', spanClass: 'bento-span-6' };
-                }
-                if (idx === 0) {
-                    return { tier: 'lead', spanClass: 'bento-span-12' };
-                }
-                if (total === 4) {
-                    return { tier: 'compact', spanClass: 'bento-span-4' };
-                }
-                if (idx === 1 || idx === 2) {
-                    return { tier: 'secondary', spanClass: 'bento-span-6' };
-                }
-                return { tier: 'compact', spanClass: 'bento-span-4' };
-            }
-
             function formatRelativeTimeSSR(dateInput) {
                 try {
                     const d = new Date(dateInput);
@@ -93,6 +77,8 @@
             }
 
             const ssrNewsList = Array.isArray(news) ? news : [];
+            const ssrHeroItems = ssrNewsList.slice(0, 3);
+            const ssrCompactItems = ssrNewsList.slice(3);
         %>
 
         <header class="kami-masthead">
@@ -175,10 +161,152 @@
                                 <p class="text-sm max-w-md mx-auto" style="color: var(--text-muted);">请点击右上角「同步最新」拉取最新一期全球权威媒体精编要闻。</p>
                             </div>
                         <% } else { %>
-                            <% ssrNewsList.forEach(function(item, idx) {
-                                const layout = computeBentoLayoutSSR(idx, ssrNewsList.length);
-                                const tier = layout.tier;
-                                const spanClass = layout.spanClass;
+                            <section id="heroCarousel"
+                                     class="news-card news-card--lead hero-carousel bento-span-12"
+                                     aria-roledescription="carousel"
+                                     aria-label="重点要闻轮播"
+                                     onmouseenter="app.pauseHeroCarousel()"
+                                     onmouseleave="app.resumeHeroCarousel()">
+                                <div class="hero-carousel-track">
+                                    <% ssrHeroItems.forEach(function(item, slideIdx) {
+                                        const indexNum = String(slideIdx + 1).padStart(2, '0');
+                                        const title = item.translatedTitle || item.title || '无标题';
+                                        const originalTitle = item.translatedTitle && item.translatedTitle !== item.title ? item.title : '';
+                                        const summary = item.summary || item.translatedDescription || item.description || '';
+                                        const sourceName = (item.source && item.source.name) ? item.source.name : 'Global Media';
+                                        const region = item.region || '国际';
+                                        const category = item.category || '国际';
+                                        const metaBadgeText = category && category !== region ? (region + ' · ' + category) : region;
+                                        const timeStr = item.publishedAt ? formatRelativeTimeSSR(item.publishedAt) : '';
+                                        const imageUrl = item.urlToImage || '';
+                                        const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
+                                        const displayImgSrc = isRemoteHttp ? ('/api/image-proxy?url=' + encodeURIComponent(imageUrl)) : imageUrl;
+                                        const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
+                                        const hasMultiSources = relatedSources.length > 0;
+                                        const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
+                                    %>
+                                    <article class="hero-carousel-slide <%= slideIdx === 0 ? 'is-active' : '' %>"
+                                             data-slide-index="<%= slideIdx %>"
+                                             aria-hidden="<%= slideIdx === 0 ? 'false' : 'true' %>">
+                                        <div class="hero-slide-top">
+                                            <div class="card-meta-header">
+                                                <div class="card-meta-left">
+                                                    <span class="card-index-num"><%= indexNum %></span>
+                                                    <span class="card-meta-sep">/</span>
+                                                    <span class="card-source-name" title="<%= sourceName %>"><%= sourceName %></span>
+                                                </div>
+                                                <div class="hero-meta-right">
+                                                    <span class="card-taxonomy-pill"><%= metaBadgeText %></span>
+                                                    <% if (ssrHeroItems.length > 1) { %>
+                                                        <div class="hero-step-controls" role="group" aria-label="切换重点要闻">
+                                                            <button type="button" class="hero-step-btn" onclick="app.prevHeroSlide()" aria-label="上一条要闻" title="上一条要闻">
+                                                                <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+                                                            </button>
+                                                            <span class="hero-step-counter tabular-nums"><%= slideIdx + 1 %> / <%= ssrHeroItems.length %></span>
+                                                            <button type="button" class="hero-step-btn" onclick="app.nextHeroSlide()" aria-label="下一条要闻" title="下一条要闻">
+                                                                <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+                                                            </button>
+                                                        </div>
+                                                    <% } %>
+                                                </div>
+                                            </div>
+
+                                            <div class="lead-bento-inner has-media">
+                                                <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
+                                                   class="card-cover block <%= imageUrl ? '' : 'is-fallback' %>" data-cat="<%= category %>">
+                                                    <% if (imageUrl) { %>
+                                                        <img src="<%= displayImgSrc %>"
+                                                             data-raw-src="<%= imageUrl %>"
+                                                             alt="<%= title %>"
+                                                             loading="lazy"
+                                                             referrerpolicy="no-referrer"
+                                                             class="card-cover-img"
+                                                             onerror="if(!this.dataset.retried && this.dataset.rawSrc && this.src !== this.dataset.rawSrc){this.dataset.retried='1';this.src=this.dataset.rawSrc;}else{this.parentElement.classList.add('is-fallback');this.remove();}" />
+                                                    <% } %>
+                                                    <div class="card-cover-fallback">
+                                                        <div class="fallback-plate-top">
+                                                            <span><%= region %></span>
+                                                            <span><%= category %></span>
+                                                        </div>
+                                                        <div class="fallback-plate-watermark">CoreFeed</div>
+                                                        <div class="fallback-plate-bottom">
+                                                            <span class="fallback-plate-source"><%= sourceName %></span>
+                                                            <span class="fallback-plate-cat">要闻简报</span>
+                                                        </div>
+                                                    </div>
+                                                </a>
+
+                                                <div class="card-body">
+                                                    <% if (hasMultiSources) { %>
+                                                        <div class="kami-callout flex flex-col gap-0.5">
+                                                            <div class="kami-callout-title"><%= relatedSources.length + 1 %> 家权威外媒交叉印证</div>
+                                                            <div class="truncate text-xs" style="color: var(--text-body);">
+                                                                同题报道：<% relatedSources.forEach(function(r, rIdx) { %><% if (rIdx > 0) { %>、<% } %><% if (r.url) { %><a href="<%= r.url %>" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="<%= r.title || r.name %>"><%= r.name %></a><% } else { %><span><%= r.name %></span><% } %><% }); %>
+                                                            </div>
+                                                        </div>
+                                                    <% } %>
+
+                                                    <div>
+                                                        <h3 class="card-title">
+                                                            <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"><%= title %></a>
+                                                        </h3>
+                                                        <% if (originalTitle) { %>
+                                                            <p class="card-subtitle-en line-clamp-1" title="<%= originalTitle %>"><%= originalTitle %></p>
+                                                        <% } %>
+                                                    </div>
+
+                                                    <p class="card-summary line-clamp-4"><%= summary %></p>
+
+                                                    <% if (keyPoints.length > 0) { %>
+                                                        <ul class="card-keypoints">
+                                                            <% keyPoints.forEach(function(kp) { %>
+                                                                <li class="card-keypoint-item"><%= kp %></li>
+                                                            <% }); %>
+                                                        </ul>
+                                                    <% } %>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="card-footer">
+                                            <span class="card-timestamp"><%= timeStr %></span>
+                                            <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
+                                                class="btn-source-link">
+                                                <span>原文</span>
+                                                <span aria-hidden="true">↗</span>
+                                            </a>
+                                        </div>
+                                    </article>
+                                    <% }); %>
+                                </div>
+
+                                <% if (ssrHeroItems.length > 1) { %>
+                                    <div class="hero-carousel-dock" role="tablist" aria-label="切换前三位重点要闻">
+                                        <% ssrHeroItems.forEach(function(hItem, hIdx) {
+                                            const hNum = String(hIdx + 1).padStart(2, '0');
+                                            const hTitle = hItem.translatedTitle || hItem.title || '无标题';
+                                            const hSource = (hItem.source && hItem.source.name) ? hItem.source.name : 'Global Media';
+                                        %>
+                                        <button type="button"
+                                                role="tab"
+                                                aria-selected="<%= hIdx === 0 ? 'true' : 'false' %>"
+                                                data-dock-index="<%= hIdx %>"
+                                                onclick="app.goToHeroSlide(<%= hIdx %>)"
+                                                class="hero-dock-item <%= hIdx === 0 ? 'is-active' : '' %>">
+                                            <div class="hero-dock-meta">
+                                                <span class="hero-dock-num"><%= hNum %></span>
+                                                <span class="card-meta-sep">/</span>
+                                                <span class="hero-dock-source"><%= hSource %></span>
+                                            </div>
+                                            <div class="hero-dock-title line-clamp-1"><%= hTitle %></div>
+                                        </button>
+                                        <% }); %>
+                                    </div>
+                                <% } %>
+                            </section>
+
+                            <% ssrCompactItems.forEach(function(item, cIdx) {
+                                const idx = cIdx + 3;
                                 const indexNum = String(idx + 1).padStart(2, '0');
                                 const title = item.translatedTitle || item.title || '无标题';
                                 const originalTitle = item.translatedTitle && item.translatedTitle !== item.title ? item.title : '';
@@ -194,9 +322,8 @@
                                 const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
                                 const hasMultiSources = relatedSources.length > 0;
                                 const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
-                                const summaryClampClass = tier === 'lead' ? 'line-clamp-5' : (tier === 'secondary' ? 'line-clamp-4' : 'line-clamp-3');
                             %>
-                            <article class="news-card news-card--<%= tier %> <%= spanClass %>">
+                            <article class="news-card news-card--compact bento-span-4">
                                 <div>
                                     <div class="card-meta-header">
                                         <div class="card-meta-left">
@@ -207,7 +334,7 @@
                                         <span class="card-taxonomy-pill"><%= metaBadgeText %></span>
                                     </div>
 
-                                    <div class="lead-bento-inner <%= tier === 'lead' ? 'has-media' : '' %>">
+                                    <div class="lead-bento-inner">
                                         <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
                                            class="card-cover block <%= imageUrl ? '' : 'is-fallback' %>" data-cat="<%= category %>">
                                             <% if (imageUrl) { %>
@@ -251,7 +378,7 @@
                                                 <% } %>
                                             </div>
 
-                                            <p class="card-summary <%= summaryClampClass %>"><%= summary %></p>
+                                            <p class="card-summary line-clamp-3"><%= summary %></p>
 
                                             <% if (keyPoints.length > 0) { %>
                                                 <ul class="card-keypoints">
@@ -327,21 +454,6 @@
 
             <div class="p-6 space-y-5 text-sm">
                 <div class="space-y-3">
-                    <div class="flex items-center justify-between gap-4">
-                        <div>
-                            <div class="font-semibold" style="color: var(--text-primary);">GitHub 自动同步</div>
-                            <div class="text-xs mt-0.5" style="color: var(--text-muted);">自动从 GitHub 同步最新精编要闻快照</div>
-                        </div>
-                        <input id="cfgGithubSyncEnabled" type="checkbox" class="w-4 h-4 cursor-pointer" <%= (config.githubSyncEnabled !== false) ? 'checked' : '' %>>
-                    </div>
-
-                    <div class="flex items-center justify-between gap-4 pt-1">
-                        <label for="cfgGithubSyncInterval" class="text-xs" style="color: var(--text-body);">后台检测间隔（分钟）</label>
-                        <input id="cfgGithubSyncInterval" type="number" min="5" max="1440" value="<%= config.githubSyncIntervalMinutes || 60 %>" class="kami-input w-28 text-xs text-right tabular-nums" style="font-family: var(--font-mono);">
-                    </div>
-                </div>
-
-                <div class="space-y-3 pt-4" style="border-top: 1px solid var(--border-hairline);">
                     <div class="flex items-center justify-between gap-4">
                         <div>
                             <div class="font-semibold" style="color: var(--text-primary);">每日定时同步</div>

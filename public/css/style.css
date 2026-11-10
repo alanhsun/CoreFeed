@@ -572,6 +572,9 @@ html.dark .tab-btn.active {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 20px;
     }
+    .bento-news-grid > .news-card--lead {
+        grid-column: 1 / -1;
+    }
 }
 
 @media (min-width: 1024px) {
@@ -613,7 +616,7 @@ html.dark .tab-btn.active {
     transition: transform 0.24s var(--ease-spring), box-shadow 0.24s var(--ease-spring), border-color 0.24s var(--ease-spring);
 }
 
-.news-card > div:first-child {
+.news-card:not(.hero-carousel) > div:first-child {
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -621,7 +624,7 @@ html.dark .tab-btn.active {
 }
 
 @media (hover: hover) and (pointer: fine) {
-    .news-card:hover {
+    .news-card--compact:hover {
         transform: translateY(-2px);
         box-shadow: var(--shadow-elevated);
         border-color: var(--border-strong);
@@ -685,9 +688,197 @@ html.dark .tab-btn.active {
     flex-shrink: 0;
 }
 
-/* Tier 1: Lead Feature Hero Card (.news-card--lead) */
+/* Tier 1: Top-3 Lead Feature Hero Carousel (.news-card--lead / .hero-carousel) */
 .news-card--lead {
     border-top: 2px solid var(--accent);
+}
+
+.hero-carousel {
+    position: relative;
+}
+
+.hero-carousel > .hero-carousel-track,
+.hero-carousel-track {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    flex: 1;
+    min-width: 0;
+}
+
+.hero-carousel-slide {
+    grid-area: 1 / 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-width: 0;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.26s var(--ease-out-ui), visibility 0.26s var(--ease-out-ui);
+}
+
+.hero-carousel-slide.is-active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    z-index: 1;
+}
+
+.hero-slide-top {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.hero-meta-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.hero-step-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-hairline);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+}
+
+.hero-step-btn {
+    width: 24px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.16s var(--ease-spring), color 0.16s var(--ease-spring);
+}
+
+.hero-step-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+}
+
+.hero-step-counter {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    padding: 0 6px;
+    user-select: none;
+}
+
+.hero-carousel-dock {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    border-top: 1px solid var(--border-hairline);
+    background: var(--bg-subtle);
+}
+
+@media (min-width: 768px) {
+    .hero-carousel-dock {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+.hero-dock-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 18px;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    min-width: 0;
+    cursor: pointer;
+    transition: background 0.18s var(--ease-spring);
+}
+
+.hero-dock-item:last-child {
+    border-bottom: 0;
+}
+
+@media (min-width: 768px) {
+    .hero-dock-item {
+        border-bottom: 0;
+        border-right: 1px solid var(--border-hairline);
+        padding: 14px 20px;
+    }
+    .hero-dock-item:last-child {
+        border-right: 0;
+    }
+}
+
+.hero-dock-item::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: transparent;
+    transition: background 0.18s var(--ease-spring);
+}
+
+.hero-dock-item:hover {
+    background: var(--bg-elevated);
+}
+
+.hero-dock-item.is-active {
+    background: var(--bg-surface);
+}
+
+.hero-dock-item.is-active::before {
+    background: var(--accent);
+}
+
+.hero-dock-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    min-width: 0;
+}
+
+.hero-dock-num {
+    font-weight: 600;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+
+.hero-dock-item.is-active .hero-dock-num {
+    color: var(--accent);
+}
+
+.hero-dock-source {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hero-dock-title {
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    font-weight: 500;
+    line-height: 1.4;
+    color: var(--text-muted);
+}
+
+.hero-dock-item.is-active .hero-dock-title {
+    color: var(--text-primary);
+    font-weight: 600;
 }
 
 .lead-bento-inner {
@@ -730,14 +921,6 @@ html.dark .tab-btn.active {
 .news-card--lead .card-summary {
     font-size: 16px;
     line-height: 1.72;
-}
-
-/* Tier 2: Secondary Highlight Card (.news-card--secondary) */
-.news-card--secondary .card-title {
-    font-family: var(--font-display);
-    font-size: var(--t-secondary-title);
-    font-weight: 600;
-    line-height: 1.34;
 }
 
 /* Tier 3: Compact Intelligence Cell (.news-card--compact) */
