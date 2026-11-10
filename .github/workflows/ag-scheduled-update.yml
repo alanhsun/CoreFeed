@@ -2,10 +2,12 @@ name: Scheduled Global News Harvest & Chinese Snapshot Publish
 
 on:
   schedule:
-    # 每日早 07:40、中 12:10、晚 19:10 (北京时间 Asia/Shanghai，提前软路由 08:00/12:30/19:30 拉取时间 20 分钟)
-    - cron: '40 23 * * *' # 07:40 Asia/Shanghai
-    - cron: '10 4 * * *'  # 12:10 Asia/Shanghai
-    - cron: '10 11 * * *' # 19:10 Asia/Shanghai
+    # 每日早 07:50、中 12:20、晚 19:20 (北京时间 Asia/Shanghai) 作为兜底保障：
+    # 若 07:40/12:10/19:10 的 Antigravity 客户端已完成精编推送，30 分钟冷却机制会自动跳过不覆盖；
+    # 若客户端未触发，则在软路由 08:00/12:30/19:30 拉取前 10 分钟自动兜底发布。
+    - cron: '50 23 * * *' # 07:50 Asia/Shanghai
+    - cron: '20 4 * * *'  # 12:20 Asia/Shanghai
+    - cron: '20 11 * * *' # 19:20 Asia/Shanghai
   workflow_dispatch:
     inputs:
       force:
