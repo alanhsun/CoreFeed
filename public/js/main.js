@@ -1053,7 +1053,7 @@ class CoreFeedApp {
         if (isoStr) {
             this.lastUpdated = isoStr;
         }
-        const updatedEl = document.getElementById('lastUpdatedText') || document.getElementById('lastUpdatedLabel') || document.getElementById('lastUpdateTime');
+        const updatedEl = document.getElementById('lastUpdateTime');
         if (!updatedEl) return;
         if (!this.lastUpdated) {
             updatedEl.textContent = '更新于 --:--';

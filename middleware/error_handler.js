@@ -171,9 +171,6 @@ function setupGlobalErrorHandlers() {
 }
 
 module.exports = {
-    AppError,
-    NotFoundError,
-    RateLimitError,
     errorHandler,
     notFoundHandler,
     createRateLimiter,

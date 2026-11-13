@@ -13,15 +13,12 @@ yarn-error.log*
 
 # 运行时数据
 data/
-data/ag_candidates.json
-data/ag_compiled.json
 *.json
 !package.json
 !package-lock.json
 !nodemon.json
-!ecosystem.config.js
 
-# 日志文件
+# 日志与进程文件
 logs/
 *.log
 pids
@@ -36,39 +33,21 @@ temp/
 *.temp
 .nyc_output
 
-# 音频与电子书产物
-*.mp3
-*.wav
-*.m4a
-*.aac
-*.ogg
-*.flac
-*.epub
-
-# 备份文件
-*.bak
-*.backup
-*.old
-backups/
-
-# 操作系统与IDE文件
+# 操作系统与 IDE 文件
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-.claude/
-.agents/
+.agents/*
+!.agents/skills/
+!.agents/skills/**
 *.swp
 *.swo
 
-# 缓存与其它
+# 缓存与测试产物
 .cache/
 .npm/
 .pm2/
 coverage/
 build/
 dist/
-ssl/
-*.pem
-*.key
-*.crt

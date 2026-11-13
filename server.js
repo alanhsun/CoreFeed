@@ -1,11 +1,11 @@
 /**
- * 聚核 CoreFeed v2.0 — 全球权威媒体要闻聚合与精编服务端主入口 (server.js)
+ * 聚核 CoreFeed v2.0 — 全球权威媒体要闻阅读与快照同步服务端主入口 (server.js)
  *
- * 架构概览 (方案 2B)：
- *   - 采编与同步中枢：Antigravity 客户端完成 37 大国际权威信源并发采集、跨源聚类与中文深度精编后，
- *     通过 Git Plumbing 推送至 GitHub `ag-snapshot/latest.json` 独立分支；
- *   - 软路由只读拉取：服务端启动、每日定时任务 (08:00 / 12:30 / 19:30) 与每 60 分钟 ETag 轮询从 GitHub 同步最新快照；
- *   - 界面渲染：基于 Taste Skill (design-taste-frontend v2.5.1) 的 Swiss Editorial Bento 网格 SSR + Socket.IO 实时推送。
+ * 架构概览：
+ *   - 采编与精译（本机 Antigravity 客户端）：`ag:harvest` 纯网络搬运 37 家权威外媒原始素材，由 Antigravity 客户端内置大模型
+ *     全流程完成选稿裁剪、跨源合并、正文提取、全文精译、标题/导语/要点精编与《全球要闻深度综述》，通过 `ag:publish` 推送至 GitHub `ag-snapshot/latest.json`；
+ *   - 软路由只读拉取（本服务）：启动自检、每日定时任务 (08:00 / 12:30 / 19:30)、每 60 分钟 ETag 轮询及网页一键同步从 GitHub 拉取最新快照；
+ *   - 界面渲染：Swiss Editorial 焦点轮播 + Bento 网格 SSR 首屏直出 + Socket.IO 实时刷新 + 离线秒开全文双语阅读器。
  */
 const express = require('express');
 const http = require('http');
@@ -26,14 +26,12 @@ const {
 } = require('./middleware/error_handler');
 
 const NewsService = require('./services/news_service');
-const AIService = require('./services/ai_service');
 const NewsAgentService = require('./services/news_agent_service');
 const ScheduleManager = require('./utils/schedule_manager');
 const { GitHubSyncManager } = require('./utils/github_sync');
 const initializeApiRoutes = require('./routes/api');
 const { getGlobalSourceMatrix } = require('./config/global_sources');
 
-// 初始化网络配置与全局异常处理
 NetworkConfig.initialize();
 setupGlobalErrorHandlers();
 
@@ -62,14 +60,12 @@ const io = socketIo(server, {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// 请求追踪 ID
 app.use((req, res, next) => {
     req.id = require('crypto').randomBytes(6).toString('hex');
     res.setHeader('X-Request-ID', req.id);
     next();
 });
 
-// 生产环境速率限制（放宽额度以支持新闻图片代理并发加载）
 if (config.server.env === 'production') {
     app.use('/api', createRateLimiter({
         windowMs: 15 * 60 * 1000,
@@ -78,7 +74,6 @@ if (config.server.env === 'production') {
     }));
 }
 
-// 视图与静态文件
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -92,7 +87,6 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
 }));
 
-// API 响应禁用缓存（图片代理 /api/image-proxy 除外）
 app.use('/api', (req, res, next) => {
     if (req.path === '/image-proxy') {
         return next();
@@ -105,16 +99,14 @@ app.use('/api', (req, res, next) => {
     next();
 });
 
-// 初始化核心服务与多 Agent 引擎
+// 初始化核心服务
 const newsService = new NewsService(io, stateManager);
-const aiService = new AIService(io, stateManager);
-const newsAgentService = new NewsAgentService(io, stateManager, aiService, newsService);
-const githubSyncManager = new GitHubSyncManager({ newsService, aiService, newsAgentService }, io, stateManager);
-const scheduleManager = new ScheduleManager(newsService, io, stateManager, newsAgentService, aiService, githubSyncManager);
+const newsAgentService = new NewsAgentService(io, stateManager, newsService);
+const githubSyncManager = new GitHubSyncManager({ newsService, newsAgentService }, io, stateManager);
+const scheduleManager = new ScheduleManager(newsService, io, stateManager, newsAgentService, githubSyncManager);
 
 app.locals.stateManager = stateManager;
 
-// 监听状态变更并广播给前端
 stateManager.on('newsData-changed', ({ value }) => {
     io.emit('news-updated', {
         success: true,
@@ -143,19 +135,17 @@ stateManager.on('updateProgress-changed', ({ value }) => {
 
 const services = {
     newsService,
-    aiService,
     newsAgentService,
     scheduleManager,
     githubSyncManager
 };
 
-// 健康与版本端点
 app.get('/api/health', (req, res) => {
     const memUsage = process.memoryUsage();
     res.status(200).json({
         status: 'healthy',
         version: '2.0.0',
-        engine: 'CoreFeed Global News Collector v2.0',
+        engine: 'CoreFeed Global News Reader v2.0',
         timestamp: new Date().toISOString(),
         uptime: Math.floor(process.uptime()),
         memory: {
@@ -166,24 +156,14 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-app.get('/api/version', (req, res) => {
-    res.json({
-        version: '2.0.0',
-        timestamp: new Date().toISOString()
-    });
-});
-
-// 挂载 API 路由
 const apiRoutes = initializeApiRoutes(services, io, stateManager);
 app.use('/api', apiRoutes);
 
-// 首页渲染路由
 app.get('/', (req, res) => {
     const newsData = stateManager.get('newsData') || [];
     const allEnhanced = stateManager.get('allEnhancedNews') || newsData;
     const summaryArticle = stateManager.get('summaryArticle') || null;
     const lastUpdated = stateManager.get('lastUpdated');
-    const sourceMatrix = getGlobalSourceMatrix();
     const githubSyncStatus = githubSyncManager ? githubSyncManager.getStatus() : null;
     const scheduleStatus = scheduleManager ? scheduleManager.getStatus() : null;
     const clientId = String(
@@ -210,17 +190,8 @@ app.get('/', (req, res) => {
         clientId,
         githubSync: githubSyncStatus,
         schedule: scheduleStatus,
-        sourceMatrix,
-        appVersion: '2.0.0',
         config: {
             siteName: '聚核 CoreFeed · 全球要闻深度聚合',
-            aiModel: config.minimax.model || 'gpt-4o-mini',
-            aiConfigured: Boolean(config.minimax.apiKey),
-            jinaReaderEnabled: config.agent.jinaReaderEnabled,
-            githubSyncEnabled: Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true),
-            githubPushEnabled: Boolean(config.githubSync?.pushEnabled ?? config.agent?.githubPushEnabled ?? true),
-            githubSyncIntervalMinutes: Number(config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 60),
-            clientId,
             updateTimes: (config.news.updateTimes && config.news.updateTimes.length > 0)
                 ? config.news.updateTimes
                 : ['08:00', '12:30', '19:30'],
@@ -229,22 +200,9 @@ app.get('/', (req, res) => {
     });
 });
 
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        state: stateManager.getStats(),
-        logs: logger.getMetrics(),
-        version: '2.0.0'
-    });
-});
-
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// WebSocket 连接管理
 io.on('connection', (socket) => {
     socket.emit('connected', {
         id: socket.id,
@@ -283,45 +241,8 @@ async function startServer() {
             stateManager.set('allEnhancedNews', currentNewsData, false);
         }
 
-        const preservedLastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
-        const preservedSnapshotAt = stateManager.get('lastSnapshotPublishedAt');
-        const preservedPublishedBy = stateManager.get('lastPublishedBy');
-        const preservedAllEnhanced = stateManager.get('allEnhancedNews');
-        let finalNewsData = stateManager.get('newsData');
-        const isAlreadyCompiled = Array.isArray(finalNewsData) && finalNewsData.length > 0 && finalNewsData.every(item => item && item.aiCompiled);
-        if (Array.isArray(finalNewsData) && finalNewsData.length > 1 && aiService && !isAlreadyCompiled) {
-            const fixedMeta = finalNewsData.map(item => ({
-                ...item,
-                region: aiService.determineNewsRegionSync(
-                    `${item.title || ''} ${item.translatedTitle || ''}`,
-                    `${item.description || ''} ${item.summary || ''}`,
-                    item.source?.name || '',
-                    item.region
-                ),
-                category: aiService.determineNewsCategorySync(
-                    `${item.title || ''} ${item.translatedTitle || ''}`,
-                    `${item.description || ''} ${item.summary || ''}`,
-                    item.source?.category || '',
-                    item.category
-                )
-            }));
-            const deduped = aiService.mergeDuplicateArticlesSync(fixedMeta);
-            finalNewsData = deduped;
-            const poolToKeep = Array.isArray(preservedAllEnhanced) && preservedAllEnhanced.length >= deduped.length
-                ? preservedAllEnhanced
-                : deduped;
-            stateManager.updateNewsData(deduped, poolToKeep, preservedLastUpdated);
-            if (preservedLastUpdated) {
-                stateManager.set('lastUpdated', preservedLastUpdated, false);
-            }
-            if (preservedSnapshotAt) {
-                stateManager.set('lastSnapshotPublishedAt', preservedSnapshotAt, false);
-            }
-            if (preservedPublishedBy) {
-                stateManager.set('lastPublishedBy', preservedPublishedBy, false);
-            }
-        }
-        logger.info('SYSTEM', '本地新闻库加载完成', {
+        const finalNewsData = stateManager.get('newsData');
+        logger.info('SYSTEM', '本地新闻快照加载完成', {
             count: finalNewsData?.length || 0
         });
 
@@ -342,8 +263,8 @@ async function startServer() {
 
             logger.startup(config.server.port, networkHost);
             const matrixCount = getGlobalSourceMatrix().filter(s => s.enabled).length;
-            console.log(chalk.cyan(`   - 核心引擎:     CoreFeed v2.0 全球要闻精编与同步引擎 (${config.minimax.model})`));
-            console.log(chalk.cyan(`   - 全球信源矩阵: 已启用 ${matrixCount} 个国际权威信源 + GitHub 快照同步 (方案 2B)`));
+            console.log(chalk.cyan('   - 采编模式:     Antigravity 客户端内置大模型全流程精编 (零外部 API Key)'));
+            console.log(chalk.cyan(`   - 全球信源矩阵: 内置 ${matrixCount} 家国际权威外媒 + GitHub ag-snapshot 快照同步`));
 
             app.locals.services = services;
             scheduleManager.start();
@@ -364,40 +285,6 @@ async function startServer() {
                         logger.debug('SYSTEM', `启动时检查 GitHub 快照跳过: ${err.message}`);
                     }
                 });
-            }
-
-            // 启动自愈：仅当未启用 GitHub 快照同步 (单机模式) 且本地缓存的新闻存在未翻译条目或缺失配图时，才在后台执行自动补全
-            if (!githubSyncEnabled && Array.isArray(finalNewsData) && finalNewsData.length > 0 && services.aiService && services.newsAgentService) {
-                const hasUntranslated = finalNewsData.some(item => !services.aiService.isChineseText(item.translatedTitle) || !services.aiService.isChineseText(item.summary));
-                const hasMissingImages = finalNewsData.some(item => !item.urlToImage);
-                if (hasUntranslated || hasMissingImages) {
-                    setImmediate(async () => {
-                        try {
-                            let updatedList = [...finalNewsData];
-                            if (hasUntranslated) {
-                                logger.info('SYSTEM', '检测到本地缓存新闻包含未汉化条目，正在后台自动补全...');
-                                updatedList = await services.aiService.ensureBatchInChinese(updatedList, 6);
-                            }
-                            if (services.aiService.getCurrentModelInfo().apiKeyConfigured && updatedList.length > 1) {
-                                updatedList = await services.aiService.deduplicateWithLLM(updatedList, { maxInspect: 40, timeout: 25000 });
-                            } else {
-                                updatedList = services.aiService.mergeDuplicateArticlesSync(updatedList);
-                            }
-                            if (hasMissingImages) {
-                                await services.newsAgentService._enrichMissingArticleImages(updatedList);
-                            }
-                            await services.newsAgentService._publishNewsSnapshot(
-                                updatedList,
-                                updatedList,
-                                stateManager.get('sourceStats') || [],
-                                new Date(stateManager.get('lastUpdated') || Date.now()),
-                                'completed'
-                            );
-                        } catch (e) {
-                            logger.warn('SYSTEM', `缓存新闻自动补全异常: ${e.message}`);
-                        }
-                    });
-                }
             }
         });
 

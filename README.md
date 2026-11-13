@@ -1,78 +1,64 @@
 <div align="center">
-  <img src="public/images/logo.png" width="88" height="88" alt="CoreFeed Logo" style="border-radius: 14px;" />
-
-  # CoreFeed · 聚核
-
-  **全球权威外媒要闻聚合、跨源印证与中文深度阅读平台**
-
-  [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A518.0-141413?style=flat-square&logo=node.js)](https://nodejs.org/)
-  [![Docker](https://img.shields.io/badge/Docker-Ready-C83214?style=flat-square&logo=docker)](Dockerfile)
-  [![License](https://img.shields.io/badge/License-MIT-62605B?style=flat-square)](LICENSE)
+  <img src="public/images/logo.png" alt="CoreFeed Logo" width="88" height="88" />
+  <h1>CoreFeed · 聚核</h1>
+  <p><strong>全球权威外媒深度聚合 · Antigravity 内置大模型全流程精编 · 自托管双语阅读器</strong></p>
 </div>
 
 ---
 
-**CoreFeed** 面向高信噪比国际资讯阅读场景，自动巡检全球 **37+ 家主流权威媒体**（Reuters、AP、BBC、FT、WSJ、Bloomberg、NYT、The Economist、NHK、SCMP 等），在采编阶段一次性完成**跨信源同事件归并、核心要点提炼、原文全文中文精译与每日深度综述**，并通过 GitHub 快照分支实现免公网 IP、零 API Key 依赖的轻量自托管阅读体验。
+## 简介
 
-## 核心特性
+**CoreFeed（聚核）** 是一款采用「**本机 Antigravity 大模型采编 + GitHub 快照分支中转 + 软路由轻量阅读**」架构的全球要闻阅读系统：
 
-- **全球信源与交叉印证**：内置 37+ 家国际通讯社、财经与科技权威媒体矩阵，支持同事件多媒归并展示与防盗链题图代理。
-- **预译全文与每日综述**：采编阶段直接预生成中文标题、导读提要、核心要点、分段全文中文译文及《今日全球要闻深度综述》，点击卡片即可离线秒开阅读。
-- **零密钥轻量同步架构**：精编快照通过 Git Plumbing 发布至独立 `ag-snapshot` 分支；自托管服务端无需配置任何大模型 API Key 或暴露公网端口，支持每日定时拉取与一键同步。
-- **瑞士纸媒级阅读界面**：采用宣纸暖白与曜石墨黑高对比纸媒排版，Top-3 重点要闻轮播搭配三栏精炼卡片、多维筛选与深浅色主题切换。
+- **纯网络原始搬运 (`ag:harvest`)**：并发拉取内置 **37 家国际权威媒体**（Reuters、AP、Bloomberg、FT、WSJ、NYT、BBC、The Economist、SCMP、CNA、NHK、TechCrunch、Ars Technica、Nature 等），支持官方 RSS、Google News 域名代理与 Jina Reader 多级降级抓取，提取原网页外文文本与高清配图 URL。
+- **100% Antigravity 内置大模型执笔 (`/corefeed-editor`)**：**无需配置任何外部 `AI_API_KEY`，不使用任何免费机器翻译或规则拼接模板**。选稿裁剪、跨源同题合并、正文去噪提取、全文逐段中文精译、精编标题、百字导语、三条核心看点及当日《全球要闻深度综述》全部由本机 Antigravity 客户端内置大模型直接完成。
+- **GitHub 孤儿分支零污染中转 (`ag:publish`)**：通过 Git Plumbing 底层命令将精编快照推送至独立孤儿分支 `ag-snapshot/latest.json`，不触碰 `main` 分支工作区与提交历史；内网软路由无需公网 IP 或任何密钥，即可定时（`08:00 / 12:30 / 19:30`）、每 60 分钟 ETag 轮询或网页端一键拉取同步。
+- **Swiss Editorial 沉浸阅读界面**：Top-3 焦点轮播 + 12 栏 Bento 网格 SSR 首屏直出，内置外媒图片防盗链缓存代理（`/api/image-proxy`）与离线秒开的全文中英对照阅读器。
 
-## 架构概览
+---
 
-```mermaid
-flowchart LR
-    A["37+ 全球权威外媒<br/>RSS / Google News / Jina"] --> B["采编与预译引擎<br/>跨源聚类 · 全文精译 · 每日综述"]
-    B -->|"Git Plumbing 孤儿提交"| C[("GitHub 快照分支<br/>ag-snapshot/latest.json")]
-    C -->|"ETag 轮询 / 定时同步 / 一键拉取"| D["CoreFeed Web 服务端<br/>SSR + Socket.IO 实时推送"]
+## 快速使用指南
+
+### 1. 本机 Antigravity 客户端（采编与发布端）
+
+在本机用 Antigravity 打开本项目仓库后，只需在对话框输入斜杠命令：
+
+```text
+/corefeed-editor
 ```
 
-## 快速开始
+（或直接发送「更新并发布今日新闻」），Antigravity 客户端内置大模型即会自动执行：
+1. `npm run ag:harvest` — 拉取 37 家权威外媒最新原始素材至 `data/ag_candidates.json`；
+2. **内置大模型全流程精编** — 完成选稿裁剪、跨源事件合并、正文提纯、全文中文精译、标题/导语/要点精编与《全球要闻深度综述》，生成 `data/ag_compiled.json`；
+3. `npm run ag:publish` — 严格校验全中文精编契约并推送快照至 GitHub `ag-snapshot/latest.json`。
 
-### 1. 本地运行
+### 2. 软路由 / Linux Docker 服务端（只读同步与阅读端）
 
-```bash
-git clone https://github.com/alanhsun/CoreFeed.git
-cd CoreFeed
-npm run setup
-npm start
-```
-
-启动后访问 `http://localhost:3120`（Windows 环境可直接双击运行 `start-local.bat`）。
-
-### 2. Docker Compose 部署
-
-```bash
-cp .env.example .env
-docker-compose up -d
-```
-
-### 3. Linux / Docker 远程一键部署与热更新
-
-在任意终端通过 SSH 一键完成远程服务端部署（将 `<YOUR_SERVER_IP>` 替换为目标服务器地址）：
+支持通过 SSH 一键部署至 OpenWrt / iStoreOS / Debian / Ubuntu 等 Docker 环境（将 `<YOUR_SERVER_IP>` 替换为实际 IP）：
 
 ```bash
 ssh root@<YOUR_SERVER_IP> "wget -qO /tmp/deploy-router.sh https://raw.githubusercontent.com/alanhsun/CoreFeed/main/deploy-router.sh && sh /tmp/deploy-router.sh --rebuild && rm -f /tmp/deploy-router.sh"
 ```
 
-首次部署后，日常代码热更新仅需执行：
+首次部署后，日常代码秒级热更新仅需执行：
 
 ```bash
 ssh root@<YOUR_SERVER_IP> "sh /opt/corefeed/deploy-router.sh"
 ```
 
+---
+
 ## 常用命令
 
 | 命令 | 说明 |
 | :--- | :--- |
+| `/corefeed-editor` | 在 Antigravity 客户端内触发内置大模型全流程选稿、精译、综述撰写与快照发布 |
+| `npm run ag:harvest` | 纯网络拉取 37 家全球外媒原始 RSS、网页文本与配图 URL（输出 `data/ag_candidates.json`） |
+| `npm run ag:publish` | 校验 `data/ag_compiled.json` 大模型精编产物并发布至 GitHub `ag-snapshot` 分支 |
 | `npm start` | 启动 CoreFeed Web 阅读服务端（默认端口 `3120`） |
-| `npm run ag:auto` | 执行全自动全球信源采集、全文中文编译并发布至 `ag-snapshot` 快照分支 |
-| `npm run ag:daemon` | 启动采编常驻守护进程（默认每日 `07:40 / 12:10 / 19:10` 自动预采编推送） |
-| `npm run ag:schedule` | 注册操作系统级（Windows 计划任务 / Linux Crontab / macOS Launchd）定时采编 |
-| `npm test` | 运行全量自动化回归测试套件 |
+| `npm test` | 运行全量端到端自动化测试套件 |
+
+---
 
 ## 核心配置 (`.env`)
 
@@ -80,29 +66,28 @@ ssh root@<YOUR_SERVER_IP> "sh /opt/corefeed/deploy-router.sh"
 
 | 变量名 | 默认值 | 说明 |
 | :--- | :--- | :--- |
-| `PORT` | `3120` | Web 服务监听端口 |
-| `GITHUB_SYNC_ENABLED` | `true` | 是否自动从 GitHub `ag-snapshot` 分支同步最新精编快照 |
+| `PORT` | `3120` | Web 阅读服务监听端口 |
+| `GITHUB_SYNC_ENABLED` | `true` | 服务端是否自动从 GitHub `ag-snapshot` 分支同步最新精编快照 |
 | `GITHUB_SNAPSHOT_URL` | `https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json` | 远程精编快照 Raw 地址 |
-| `UPDATE_TIMES` | `08:00,12:30,19:30` | 服务端每日自动同步时间点（`Asia/Shanghai`） |
+| `UPDATE_TIMES` | `08:00,12:30,19:30` | 软路由服务端每日自动同步快照时间点（`Asia/Shanghai`） |
 | `PUBLISH_SECRET` | 空 | 跨节点直推 `/api/agent/publish` 接口鉴权密钥（可选） |
-| `AI_API_KEY` | 空 | OpenAI 兼容大模型密钥（可选；留空即使用内置免密钥翻译与综述引擎） |
+
+---
 
 ## 目录结构
 
 ```text
 CoreFeed/
-├── config/                 # 全局动态配置与 37+ 国际权威信源矩阵
-├── middleware/             # 全局异常处理与生产环境速率限制
-├── public/                 # 品牌图标、Swiss Editorial 样式表与前端交互控制器
-├── routes/                 # RESTful API、快照同步与外媒图片防盗链代理
-├── scripts/                # 信源采集、快照发布与跨平台定时任务脚本
-├── services/               # 多阶段采集巡检、事件聚类、中文预译与状态管理
-├── tests/                  # 采编同步流水线与部署脚本自动化测试
-├── utils/                  # GitHub Plumbing 快照同步器、定时调度与通用工具
-├── views/                  # EJS 服务端首屏渲染模板
-└── server.js               # Express + Socket.IO 应用主入口
+├── .agents/skills/corefeed-editor/ # Antigravity 客户端内置大模型全流程采编 Skill (/corefeed-editor)
+├── config/                         # 全局动态配置与 37 家国际权威信源矩阵
+├── middleware/                     # 全局异常处理与生产环境速率限制
+├── public/                         # 品牌图标、Swiss Editorial 样式表与前端交互控制器
+├── routes/                         # RESTful API、快照同步与外媒图片防盗链代理
+├── scripts/                        # 纯网络原始采集 (ag-harvest) 与严格快照发布 (ag-publish)
+├── services/                       # 多源网络抓取工具集、基础时效过滤与内存状态管理
+├── tests/                          # 采编发布流水线与软路由部署脚本端到端测试
+├── utils/                          # GitHub Git Plumbing 快照同步、纯数据格式化与定时轮询器
+├── views/                          # 响应式新闻阅读器 SSR 模板 (index.ejs)
+├── deploy-router.sh                # 软路由 / Linux Docker 一键部署与秒级热更新脚本
+└── server.js                       # Express + Socket.IO 主服务入口
 ```
-
-## License
-
-Released under the [MIT License](package.json).

@@ -1,5 +1,5 @@
 /**
- * 聚核 CoreFeed v2.0 — 统一结构化日志与运行指标收集器 (utils/logger.js)
+ * 聚核 CoreFeed v2.0 — 统一结构化日志输出工具 (utils/logger.js)
  */
 const chalk = require('chalk');
 
@@ -12,27 +12,6 @@ class Logger {
             success: 2,
             info: 3,
             debug: 4
-        };
-        this.metrics = {
-            errorCount: 0,
-            warnCount: 0,
-            infoCount: 0,
-            successCount: 0,
-            recentLogs: []
-        };
-    }
-
-    /**
-     * 获取日志统计指标
-     */
-    getMetrics() {
-        return {
-            errorCount: this.metrics.errorCount,
-            warnCount: this.metrics.warnCount,
-            infoCount: this.metrics.infoCount,
-            successCount: this.metrics.successCount,
-            recentCount: this.metrics.recentLogs.length,
-            recentLogs: this.metrics.recentLogs.slice(-20)
         };
     }
 
@@ -86,24 +65,6 @@ class Logger {
      * 通用日志方法
      */
     log(level, module, action, details = null) {
-        if (this.metrics) {
-            if (level === 'error') this.metrics.errorCount++;
-            else if (level === 'warn') this.metrics.warnCount++;
-            else if (level === 'success') this.metrics.successCount++;
-            else if (level === 'info') this.metrics.infoCount++;
-
-            this.metrics.recentLogs.push({
-                timestamp: new Date().toISOString(),
-                level,
-                module,
-                action,
-                details: details instanceof Error ? details.message : details
-            });
-            if (this.metrics.recentLogs.length > 100) {
-                this.metrics.recentLogs.shift();
-            }
-        }
-
         if (!this.shouldLog(level)) return;
 
         const message = this.formatMessage(level, module, action, details);

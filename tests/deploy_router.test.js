@@ -118,10 +118,8 @@ describe('CoreFeed v2.0 — deploy-router.sh End-to-End Tests', () => {
         const containerEnvLines = options.containerEnvLines ?? [
             'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
             'NODE_ENV=production',
-            'AI_BASE_URL=https://api.example-llm.com/v1',
-            'AI_API_KEY=sk-live-router-key',
-            'AI_MODEL=custom-llm-v1',
             'PUBLISH_SECRET=sec-888',
+            'GITHUB_SNAPSHOT_URL=https://mirror.example.com/ag-snapshot/latest.json',
             'UPDATE_TIMES=06:00,16:30'
         ];
 
@@ -188,10 +186,8 @@ exit 0
             inspectExitCode: 0,
             imageExists: true,
             containerEnvLines: [
-                'AI_BASE_URL=https://api.example-llm.com/v1',
-                'AI_API_KEY=sk-live-router-key',
-                'AI_MODEL=custom-llm-v1',
                 'PUBLISH_SECRET=sec-888',
+                'GITHUB_SNAPSHOT_URL=https://mirror.example.com/ag-snapshot/latest.json',
                 'UPDATE_TIMES=06:00,16:30'
             ]
         });
@@ -222,18 +218,18 @@ exit 0
         assert.ok(buildIdx !== -1, 'docker build should run when --rebuild is passed');
         assert.ok(runIdx !== -1, 'docker run -d should be executed');
 
-        // Verify .env values (container values must override .env.example stock placeholders)
+        // Verify .env values (container values must override .env.example stock placeholders, with zero AI_* keys)
         const envMap = parseDotEnvFile(path.join(remoteDir, '.env'));
-        assert.equal(envMap.AI_BASE_URL, 'https://api.example-llm.com/v1');
-        assert.equal(envMap.AI_API_KEY, 'sk-live-router-key');
-        assert.equal(envMap.AI_MODEL, 'custom-llm-v1');
+        assert.equal(envMap.AI_API_KEY, undefined);
+        assert.equal(envMap.AI_BASE_URL, undefined);
+        assert.equal(envMap.AI_MODEL, undefined);
         assert.equal(envMap.PUBLISH_SECRET, 'sec-888');
         assert.equal(envMap.AUTO_UPDATE_ENABLED, 'true');
         assert.equal(envMap.UPDATE_TIMES, '08:00,12:30,19:30');
         assert.equal(envMap.SCHEDULE_TIMEZONE, 'Asia/Shanghai');
         assert.equal(envMap.GITHUB_SYNC_ENABLED, 'true');
         assert.equal(envMap.GITHUB_SYNC_INTERVAL_MINUTES, '60');
-        assert.equal(envMap.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
+        assert.equal(envMap.GITHUB_SNAPSHOT_URL, 'https://mirror.example.com/ag-snapshot/latest.json');
 
         // Verify data/settings.json was created/synced
         const settings = JSON.parse(fs.readFileSync(path.join(remoteDir, 'data', 'settings.json'), 'utf8'));
@@ -263,14 +259,11 @@ exit 0
         fs.mkdirSync(path.join(remoteDir, 'data'), { recursive: true });
         fs.mkdirSync(binDir, { recursive: true });
 
-        // Pre-populate .env with custom AI_BASE_URL, AI_MODEL & GITHUB_SNAPSHOT_URL, empty AI_API_KEY & PUBLISH_SECRET, and legacy UPDATE_TIMES
+        // Pre-populate .env with custom GITHUB_SNAPSHOT_URL, empty PUBLISH_SECRET, and legacy UPDATE_TIMES
         fs.writeFileSync(
             path.join(remoteDir, '.env'),
             [
                 'PORT=3120',
-                'AI_BASE_URL=https://custom.user.ai/v1',
-                'AI_API_KEY=',
-                'AI_MODEL=user-custom-model',
                 'PUBLISH_SECRET=',
                 'GITHUB_SNAPSHOT_URL=https://custom.mirror.example/ag-snapshot/latest.json',
                 'GITHUB_SYNC_INTERVAL_MINUTES=5',
@@ -281,11 +274,11 @@ exit 0
             'utf8'
         );
 
-        // Pre-populate legacy data/settings.json with user-saved AI_API_KEY and old 2x schedule
+        // Pre-populate legacy data/settings.json with user-saved CLIENT_ID and old 2x schedule
         fs.writeFileSync(
             path.join(remoteDir, 'data', 'settings.json'),
             JSON.stringify({
-                AI_API_KEY: 'keep-me-in-settings',
+                CLIENT_ID: 'keep-router-node-id',
                 AUTO_UPDATE_ENABLED: false,
                 UPDATE_TIMES: '06:00,16:30',
                 scheduleTimes: ['06:00', '16:30'],
@@ -300,10 +293,8 @@ exit 0
             inspectExitCode: 0,
             imageExists: true,
             containerEnvLines: [
-                'AI_BASE_URL=https://api.example-llm.com/v1?x=1&y=2',
-                'AI_API_KEY=sk-special/key&123|456=789?abc',
-                'AI_MODEL=custom-llm-v1',
-                'PUBLISH_API_KEY=pub-sec&999|xyz=1'
+                'GITHUB_SNAPSHOT_URL=https://container.override.example/latest.json?x=1&y=2',
+                'PUBLISH_API_KEY=pub-sec/key&999|xyz=1?abc'
             ]
         });
 
@@ -322,14 +313,11 @@ exit 0
 
         const envMap = parseDotEnvFile(path.join(remoteDir, '.env'));
         // Non-empty custom values in .env must be preserved
-        assert.equal(envMap.AI_BASE_URL, 'https://custom.user.ai/v1');
-        assert.equal(envMap.AI_MODEL, 'user-custom-model');
         assert.equal(envMap.GITHUB_SNAPSHOT_URL, 'https://custom.mirror.example/ag-snapshot/latest.json');
         assert.equal(envMap.GITHUB_SYNC_ENABLED, 'true');
         assert.equal(envMap.GITHUB_SYNC_INTERVAL_MINUTES, '60');
         // Empty keys in .env must be backfilled verbatim without sed escaping corruption
-        assert.equal(envMap.AI_API_KEY, 'sk-special/key&123|456=789?abc');
-        assert.equal(envMap.PUBLISH_SECRET, 'pub-sec&999|xyz=1');
+        assert.equal(envMap.PUBLISH_SECRET, 'pub-sec/key&999|xyz=1?abc');
         // Schedule keys must be enforced to 3x daily Asia/Shanghai
         assert.equal(envMap.AUTO_UPDATE_ENABLED, 'true');
         assert.equal(envMap.UPDATE_TIMES, '08:00,12:30,19:30');
@@ -343,9 +331,9 @@ exit 0
             'Hot update without --rebuild should skip docker build when image exists'
         );
 
-        // Verify data/settings.json preserved AI_API_KEY and updated schedule to 08:00,12:30,19:30
+        // Verify data/settings.json preserved CLIENT_ID and updated schedule to 08:00,12:30,19:30
         const settings = JSON.parse(fs.readFileSync(path.join(remoteDir, 'data', 'settings.json'), 'utf8'));
-        assert.equal(settings.AI_API_KEY, 'keep-me-in-settings');
+        assert.equal(settings.CLIENT_ID, 'keep-router-node-id');
         assert.equal(settings.AUTO_UPDATE_ENABLED, true);
         assert.equal(settings.enabled, true);
         assert.equal(settings.scheduleEnabled, true);
@@ -390,8 +378,9 @@ exit 0
         });
 
         const envMap = parseDotEnvFile(path.join(remoteDir, '.env'));
-        assert.equal(envMap.AI_BASE_URL, 'https://api.openai.com/v1');
-        assert.equal(envMap.AI_MODEL, 'gpt-4o-mini');
+        assert.equal(envMap.AI_API_KEY, undefined);
+        assert.equal(envMap.AI_BASE_URL, undefined);
+        assert.equal(envMap.AI_MODEL, undefined);
         assert.equal(envMap.AUTO_UPDATE_ENABLED, 'true');
         assert.equal(envMap.UPDATE_TIMES, '08:00,12:30,19:30');
         assert.equal(envMap.SCHEDULE_TIMEZONE, 'Asia/Shanghai');

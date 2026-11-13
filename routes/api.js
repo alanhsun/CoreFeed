@@ -4,17 +4,15 @@
  * 核心路由模块：
  *   0. `/api/image-proxy`        — 外媒新闻题图防盗链与跨境加速代理
  *   1. `/api/agent/*`            — GitHub 快照拉取 (`pull-github`)、外部精编发布 (`publish`) 与同步状态 (`sync-status`)
- *   2. `/api/sources/matrix`     — 全球 37 大知名信源矩阵查询与配置
- *   3. `/api/news`, `/api/summary` — 新闻流多维筛选、增量分页与今日全球要闻深度综述
- *   4. `/api/status`, `/api/config`, `/api/schedule/*` — 系统状态遥测、动态配置持久化与定时同步管理
+ *   2. `/api/news`, `/api/summary` — 新闻流多维筛选、增量分页、全文中文翻译与今日全球要闻深度综述
+ *   3. `/api/status`, `/api/config`, `/api/schedule/*`, `/api/latest-data` — 系统遥测、动态配置持久化与聚合输出
  */
 const express = require('express');
 const axios = require('axios');
 const https = require('https');
 const config = require('../config');
-const { writeJsonFile, readJsonFile, isValidUrl, SimpleCache } = require('../utils/helpers');
+const { readJsonFile, isValidUrl, SimpleCache } = require('../utils/helpers');
 const logger = require('../utils/logger');
-const { getGlobalSourceMatrix, saveGlobalSourceMatrixUpdate } = require('../config/global_sources');
 const { applySnapshotToRouter } = require('../utils/github_sync');
 
 const proxyHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
@@ -25,7 +23,7 @@ const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
  */
 function initializeApiRoutes(services, io, stateManager) {
     const router = express.Router();
-    const { newsService, aiService, scheduleManager, newsAgentService, githubSyncManager } = services;
+    const { newsService, scheduleManager, newsAgentService, githubSyncManager } = services;
 
     const verifyPublishSecret = (req) => {
         const expectedSecret = String(
@@ -146,25 +144,7 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    // ==================== 1. Agent 状态、GitHub 快照同步与发布接口 ====================
-
-    /**
-     * 获取 Agent 引擎状态、实时日志与信源巡检统计
-     */
-    router.get('/agent/status', (req, res) => {
-        res.json({
-            success: true,
-            isRunningPatrol: newsAgentService.isRunningPatrol,
-            isUpdating: stateManager.get('isUpdating'),
-            collectionPhase: stateManager.get('collectionPhase') || 'idle',
-            progress: stateManager.get('updateProgress'),
-            aiModel: aiService.getCurrentModelInfo(),
-            jinaReaderEnabled: config.agent.jinaReaderEnabled,
-            sourceStats: stateManager.get('sourceStats') || newsAgentService.getLastSourceStats() || [],
-            recentLogs: newsAgentService.getRecentAgentLogs(),
-            githubSync: githubSyncManager ? githubSyncManager.getStatus() : null
-        });
-    });
+    // ==================== 1. GitHub 快照同步与外部精编发布接口 ====================
 
     /**
      * 获取 GitHub 快照中转同步状态
@@ -218,71 +198,6 @@ function initializeApiRoutes(services, io, stateManager) {
     });
 
     /**
-     * 触发全球知名信源巡检与编译流水线（单机模式使用）
-     */
-    router.post('/agent/patrol', async (req, res) => {
-        try {
-            if (newsAgentService.isRunningPatrol || stateManager.get('isUpdating')) {
-                return res.status(409).json({
-                    success: false,
-                    message: '全球新闻采集任务正在运行中，请稍候'
-                });
-            }
-
-            const {
-                categoryFilter = 'all',
-                maxDisplayCount = config.agent.maxCuratedArticles || 30,
-                generateSummary = true
-            } = req.body || {};
-
-            const result = await newsAgentService.runGlobalPatrolPipeline({
-                categoryFilter,
-                maxDisplayCount: Number(maxDisplayCount),
-                generateSummary: Boolean(generateSummary)
-            });
-
-            res.json(result);
-        } catch (error) {
-            logger.error('API', 'Agent 巡检执行失败', error.message);
-            res.status(500).json({
-                success: false,
-                message: error.message
-            });
-        }
-    });
-
-    /**
-     * 点击新闻卡片主体时，实时抓取外媒原文全文并执行分段中文翻译
-     */
-    router.post('/news/translate-fulltext', async (req, res) => {
-        try {
-            const { url, title, translatedTitle, sourceName, existingSummary } = req.body || {};
-            if (!url) {
-                return res.status(400).json({
-                    success: false,
-                    message: '请提供新闻原文 URL'
-                });
-            }
-
-            const result = await newsAgentService.translateArticleFullText({
-                url,
-                title,
-                translatedTitle,
-                sourceName,
-                existingSummary
-            });
-
-            res.json(result);
-        } catch (error) {
-            logger.error('API', '原文全文中文翻译失败', error.message);
-            res.status(500).json({
-                success: false,
-                message: error.message
-            });
-        }
-    });
-
-    /**
      * 接收由外部 Agent (如 Antigravity 客户端) 采集、聚类并精编完成的全球新闻与综述数据包
      */
     router.post('/agent/publish', async (req, res) => {
@@ -298,7 +213,6 @@ function initializeApiRoutes(services, io, stateManager) {
             const applied = await applySnapshotToRouter(req.body || {}, {
                 stateManager,
                 newsAgentService,
-                aiService,
                 newsService,
                 io,
                 sourceLabel: 'Antigravity 客户端'
@@ -323,46 +237,7 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    // ==================== 2. 全球知名信源矩阵管理接口 ====================
-
-    router.get('/sources/matrix', (req, res) => {
-        const matrix = getGlobalSourceMatrix();
-        const stats = stateManager.get('sourceStats') || newsAgentService.getLastSourceStats() || [];
-        const statsMap = new Map(stats.map(s => [s.id, s]));
-
-        const enriched = matrix.map(src => ({
-            ...src,
-            lastStat: statsMap.get(src.id) || null
-        }));
-
-        res.json({
-            success: true,
-            total: enriched.length,
-            enabledCount: enriched.filter(s => s.enabled).length,
-            sources: enriched
-        });
-    });
-
-    router.post('/sources/matrix', (req, res) => {
-        try {
-            const { overrides = {}, customSources = null } = req.body || {};
-            const updated = saveGlobalSourceMatrixUpdate({ overrides, customSources });
-            res.json({
-                success: true,
-                message: '全球信源矩阵配置已保存',
-                total: updated.length,
-                enabledCount: updated.filter(s => s.enabled).length,
-                sources: updated
-            });
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                message: '保存信源矩阵失败: ' + error.message
-            });
-        }
-    });
-
-    // ==================== 3. 新闻流查询、过滤与分页接口 ====================
+    // ==================== 2. 新闻流查询、过滤、分页与今日综述接口 ====================
 
     router.get('/news', (req, res) => {
         const newsData = stateManager.get('newsData') || newsService.getNewsData() || [];
@@ -431,43 +306,6 @@ function initializeApiRoutes(services, io, stateManager) {
         });
     });
 
-    /**
-     * 手动刷新新闻
-     */
-    router.post('/refresh', async (req, res) => {
-        try {
-            if (newsAgentService.isRunningPatrol || stateManager.get('isUpdating')) {
-                return res.status(409).json({
-                    success: false,
-                    message: '正在执行搜集整合任务，请勿重复点击'
-                });
-            }
-
-            const result = await newsAgentService.runGlobalPatrolPipeline({
-                generateSummary: true
-            });
-
-            res.json({
-                success: true,
-                message: `成功搜集并整合 ${result.displayedCount} 条全球权威新闻`,
-                count: result.displayedCount,
-                total: result.totalEnhancedCount,
-                news: result.news,
-                summaryArticle: result.summaryArticle,
-                sourceStats: result.sourceStats,
-                lastUpdated: result.lastUpdated
-            });
-        } catch (error) {
-            logger.error('API', '刷新新闻失败', error.message);
-            res.status(500).json({
-                success: false,
-                message: '刷新新闻失败: ' + error.message
-            });
-        }
-    });
-
-    // ==================== 4. 今日要闻深度综述接口 ====================
-
     router.get('/summary', async (req, res) => {
         let article = stateManager.get('summaryArticle');
         if (!article) {
@@ -483,39 +321,7 @@ function initializeApiRoutes(services, io, stateManager) {
         });
     });
 
-    router.post('/generate-summary', async (req, res) => {
-        try {
-            const newsData = stateManager.get('newsData') || newsService.getNewsData() || [];
-            if (!newsData.length) {
-                return res.status(400).json({
-                    success: false,
-                    message: '当前没有新闻数据，请先执行全球新闻采集'
-                });
-            }
-
-            const summaryArticle = await aiService.generateNewsSummaryArticle(newsData);
-            stateManager.updateSummaryArticle(summaryArticle);
-
-            await writeJsonFile(config.storage.summaryFile, {
-                article: summaryArticle,
-                savedAt: new Date().toISOString(),
-                version: '2.0'
-            });
-
-            res.json({
-                success: true,
-                article: summaryArticle
-            });
-        } catch (error) {
-            logger.error('API', '生成深度综述失败', error.message);
-            res.status(500).json({
-                success: false,
-                message: '生成综述失败: ' + error.message
-            });
-        }
-    });
-
-    // ==================== 5. 系统配置、AI 配置与定时调度接口 ====================
+    // ==================== 3. 系统状态、动态配置与定时调度接口 ====================
 
     router.get('/status', (req, res) => {
         const newsData = stateManager.get('newsData') || [];
@@ -533,8 +339,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 null,
             collectionPhase: stateManager.get('collectionPhase') || 'idle',
             hasSummary: Boolean(summaryArticle),
-            aiConfigured: Boolean(config.minimax.apiKey),
-            aiModel: aiService.getCurrentModelInfo(),
+            editorialEngine: 'antigravity-builtin-llm',
             schedule: scheduleManager ? scheduleManager.getStatus() : null,
             githubSync: githubSyncManager ? githubSyncManager.getStatus() : null
         });
@@ -591,12 +396,6 @@ function initializeApiRoutes(services, io, stateManager) {
                 lastPublishedBy,
                 lastSyncAt: syncStatus.lastSyncedAt || syncStatus.lastSyncCheckAt || null
             },
-            ai: {
-                baseUrl: config.minimax.baseUrl,
-                model: config.minimax.model,
-                apiKeyConfigured: Boolean(config.minimax.apiKey),
-                rateLimitRpm: config.minimax.rateLimitRpm
-            },
             schedule: scheduleStatus
         };
     };
@@ -612,7 +411,6 @@ function initializeApiRoutes(services, io, stateManager) {
         try {
             const updates = req.body || {};
             config.saveDynamicSettings(updates);
-            aiService.refreshConfig();
             if (
                 scheduleManager &&
                 (updates.AUTO_UPDATE_ENABLED !== undefined ||
@@ -701,7 +499,7 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
-    // ==================== 6. 第三方聚合数据接口 (/api/latest-data) ====================
+    // ==================== 4. 第三方聚合数据接口 (/api/latest-data) ====================
 
     router.get('/latest-data', (req, res) => {
         try {
@@ -732,7 +530,8 @@ function initializeApiRoutes(services, io, stateManager) {
                         sourceCount: item.sourceCount || 1,
                         aiCompiled: Boolean(item.aiCompiled),
                         publishedAt: item.publishedAt,
-                        url: item.url
+                        url: item.url,
+                        urlToImage: item.urlToImage || null
                     }))
                 },
                 summary: currentSummary ? {
@@ -756,15 +555,6 @@ function initializeApiRoutes(services, io, stateManager) {
                 message: '获取数据失败: ' + error.message
             });
         }
-    });
-
-    router.get('/health', (req, res) => {
-        res.json({
-            success: true,
-            status: 'ok',
-            version: '2.0.0',
-            timestamp: new Date().toISOString()
-        });
     });
 
     return router;

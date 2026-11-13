@@ -238,7 +238,7 @@ if [ ! -f .env ]; then
   if [ -f .env.example ]; then
     cp .env.example .env
     ENV_NEWLY_CREATED="1"
-    echo "📝 已生成默认 .env 配置文件 (可在 ${REMOTE_DIR}/.env 中配置 AI_API_KEY)"
+    echo "📝 已生成默认 .env 配置文件"
   else
     : > .env
     ENV_NEWLY_CREATED="1"
@@ -252,25 +252,14 @@ if command -v docker >/dev/null 2>&1; then
 fi
 
 if [ -n "${CONTAINER_ENV_DUMP}" ]; then
-  PRIOR_ENV_AI_KEY=$(get_env_var_from_file "AI_API_KEY" ".env")
-  for KEY in AI_BASE_URL AI_API_KEY AI_MODEL PUBLISH_SECRET PUBLISH_API_KEY GITHUB_SNAPSHOT_URL; do
+  for KEY in PUBLISH_SECRET PUBLISH_API_KEY GITHUB_SNAPSHOT_URL; do
     CONTAINER_VAL=$(get_env_var_from_dump "$KEY" "$CONTAINER_ENV_DUMP")
     if [ "$KEY" = "PUBLISH_SECRET" ] && is_empty_env_val "$CONTAINER_VAL"; then
       CONTAINER_VAL=$(get_env_var_from_dump "PUBLISH_API_KEY" "$CONTAINER_ENV_DUMP")
     fi
     if ! is_empty_env_val "$CONTAINER_VAL"; then
       CURRENT_VAL=$(get_env_var_from_file "$KEY" ".env")
-      SHOULD_UPDATE="0"
       if is_empty_env_val "$CURRENT_VAL" || [ "$ENV_NEWLY_CREATED" = "1" ]; then
-        SHOULD_UPDATE="1"
-      elif is_empty_env_val "$PRIOR_ENV_AI_KEY"; then
-        if [ "$KEY" = "AI_BASE_URL" ] && [ "$CURRENT_VAL" = "https://api.openai.com/v1" ]; then
-          SHOULD_UPDATE="1"
-        elif [ "$KEY" = "AI_MODEL" ] && [ "$CURRENT_VAL" = "gpt-4o-mini" ]; then
-          SHOULD_UPDATE="1"
-        fi
-      fi
-      if [ "$SHOULD_UPDATE" = "1" ]; then
         upsert_env_var "$KEY" "$CONTAINER_VAL" ".env"
       fi
     fi

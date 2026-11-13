@@ -13,114 +13,45 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 
-# 版本控制
+# 版本控制与文档
 .git
 .gitignore
 .github
-
-# 文档
-README.md
 *.md
-docs
-docs/
 
-# 日志文件
+# 运行时数据、日志与临时文件
+data
 logs
 *.log
-
-# 临时文件
 tmp
 temp
 *.tmp
 *.temp
 
-# 运行时数据
-data
-data/
-data/ag_candidates.json
-data/ag_compiled.json
-
-# 备份文件
-*.bak
-*.backup
-*.old
-
-# 操作系统文件
+# 操作系统与 IDE 文件
 .DS_Store
-.DS_Store?
 ._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
-
-# IDE文件与Agent工作区
 .vscode
 .idea
-.claude
-.claude/
 .agents
-.agents/
 *.swp
 *.swo
 *~
 
-# 缓存
+# 缓存与测试目录
 .cache
 .npm
-.eslintcache
 .node_repl_history
-
-# Docker相关
-Dockerfile
-docker-compose.yml
-docker-compose.override.yml
-.dockerignore
-
-# 部署脚本与测试目录
-deploy.sh
-deploy-router.sh
-start.bat
-start-local.bat
-scripts/start.bat
-tests
-tests/
-
-# PM2相关
-.pm2
-ecosystem.config.js
-
-# 测试覆盖率
 coverage
 .nyc_output
+tests
 
-# 构建输出
-build
-dist
-
-# SSL证书
-ssl
-*.pem
-*.key
-*.crt
-*.csr
-
-# 压缩文件
-*.zip
-*.tar.gz
-*.rar
-*.7z
-
-# 音频和媒体文件
-*.mp3
-*.wav
-*.m4a
-*.aac
-*.ogg
-*.flac
-*.epub
-
-# 数据库文件
-*.db
-*.sqlite
-*.sqlite3
+# 容器与宿主机脚本配置
+Dockerfile
+docker-compose.yml
+.dockerignore
+deploy-router.sh
+start-local.bat
+.pm2
+ecosystem.config.js

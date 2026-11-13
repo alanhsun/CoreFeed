@@ -2,15 +2,13 @@
  * 聚核 CoreFeed v2.0 — 基础新闻源清洗与本地缓存持久化服务 (services/news_service.js)
  *
  * 核心职责：
- *   1. 新闻条目时效过滤、HTML 标签剥离与敏感词过滤 (`filterAndCleanArticles`, `passesKeywordFilter`)
- *   2. 辅助 API 数据源采集 (`fetchNewsApiArticles`, `fetchGnewsArticles`) 与自定义 RSS 字符串解析 (`parseRSSSources`)
+ *   1. 新闻条目时效过滤与 HTML 标签剥离 (`filterAndCleanArticles`)
+ *   2. 自定义补充 RSS 字符串解析 (`parseRSSSources`)
  *   3. 本地 JSON 持久化读写 (`loadLocalData`, `saveLocalData`) 与内存状态桥接
  */
-const axios = require('axios');
 const path = require('path');
 const config = require('../config');
 const {
-    retryAsync,
     stripHtml,
     isValidUrl,
     readJsonFile,
@@ -18,8 +16,6 @@ const {
     ensureDirectoryExists
 } = require('../utils/helpers');
 const logger = require('../utils/logger');
-const { getSourceAuthorityScore } = require('../config/global_sources');
-const { createArticleId, cleanHeadlineSuffix } = require('./agent_tools');
 
 class NewsService {
     constructor(io = null, stateManager = null) {
@@ -27,115 +23,6 @@ class NewsService {
         this.stateManager = stateManager;
         this.newsData = [];
         this.lastUpdated = null;
-    }
-
-    setSocketIO(io) {
-        this.io = io;
-    }
-
-    setStateManager(stateManager) {
-        this.stateManager = stateManager;
-    }
-
-    /**
-     * 从 NewsAPI 获取头条新闻
-     */
-    async fetchNewsApiArticles() {
-        const { apiKey, newsApiEnabled, newsApiMaxArticles, sources } = config.news;
-        if (!newsApiEnabled || !apiKey) return [];
-
-        try {
-            const params = {
-                apiKey,
-                pageSize: newsApiMaxArticles || 15
-            };
-
-            if (Array.isArray(sources) && sources.length > 0) {
-                params.sources = sources.join(',');
-            } else {
-                params.country = 'us';
-            }
-
-            const response = await retryAsync(
-                () => axios.get('https://newsapi.org/v2/top-headlines', {
-                    params,
-                    timeout: config.network.timeout
-                }),
-                2,
-                1500,
-                'NewsAPI'
-            );
-
-            const articles = response.data?.articles || [];
-            return articles.map(a => ({
-                id: createArticleId(a.url, a.title),
-                title: cleanHeadlineSuffix(a.title, a.source?.name),
-                description: stripHtml(a.description || a.title || ''),
-                content: stripHtml(a.content || a.description || ''),
-                url: a.url,
-                urlToImage: a.urlToImage,
-                publishedAt: a.publishedAt || new Date().toISOString(),
-                source: {
-                    id: a.source?.id || 'newsapi',
-                    name: a.source?.name || 'NewsAPI',
-                    authority: getSourceAuthorityScore(a.source?.name),
-                    strategy: 'newsapi'
-                },
-                author: a.author || null,
-                region: null
-            }));
-        } catch (error) {
-            logger.warn('NEWS', `NewsAPI 获取跳过: ${error.message}`);
-            return [];
-        }
-    }
-
-    /**
-     * 从 Gnews API 获取头条新闻
-     */
-    async fetchGnewsArticles() {
-        const { apiKey, enabled, category, language, country, maxArticles } = config.gnews;
-        if (!enabled || !apiKey) return [];
-
-        try {
-            const response = await retryAsync(
-                () => axios.get('https://gnews.io/api/v4/top-headlines', {
-                    params: {
-                        category,
-                        lang: language,
-                        country,
-                        max: maxArticles || 15,
-                        apikey: apiKey
-                    },
-                    timeout: config.network.timeout
-                }),
-                2,
-                1500,
-                'Gnews'
-            );
-
-            const articles = response.data?.articles || [];
-            return articles.map(article => ({
-                id: createArticleId(article.url, article.title),
-                title: cleanHeadlineSuffix(article.title, article.source?.name),
-                description: stripHtml(article.description || ''),
-                content: stripHtml(article.content || article.description || ''),
-                url: article.url,
-                urlToImage: article.image || null,
-                publishedAt: article.publishedAt || new Date().toISOString(),
-                source: {
-                    id: 'gnews',
-                    name: article.source?.name || 'Gnews',
-                    authority: getSourceAuthorityScore(article.source?.name),
-                    strategy: 'gnews'
-                },
-                author: null,
-                region: null
-            }));
-        } catch (error) {
-            logger.warn('NEWS', `Gnews 获取跳过: ${error.message}`);
-            return [];
-        }
     }
 
     /**
@@ -176,7 +63,7 @@ class NewsService {
                     }
                 }
 
-                return this.passesKeywordFilter(article);
+                return true;
             })
             .map(article => ({
                 ...article,
@@ -188,29 +75,6 @@ class NewsService {
                     name: article.source?.name?.trim() || 'Global Media'
                 }
             }));
-    }
-
-    passesKeywordFilter(article) {
-        const { filter } = config;
-        if (!filter.enabled || !Array.isArray(filter.keywords) || filter.keywords.length === 0) {
-            return true;
-        }
-
-        const parts = [];
-        if (filter.filterTitle && article.title) parts.push(article.title.toLowerCase());
-        if (filter.filterContent) {
-            if (article.description) parts.push(article.description.toLowerCase());
-            if (article.content) parts.push(article.content.toLowerCase());
-        }
-        if (filter.filterSource && article.source?.name) parts.push(article.source.name.toLowerCase());
-
-        const combined = parts.join(' ');
-        for (const kw of filter.keywords) {
-            if (kw && kw.trim() && combined.includes(kw.toLowerCase().trim())) {
-                return false;
-            }
-        }
-        return true;
     }
 
     async loadLocalData() {

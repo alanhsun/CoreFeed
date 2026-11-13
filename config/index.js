@@ -111,8 +111,6 @@ function buildConfig() {
     const env = getConfig('NODE_ENV', 'development');
     const defaultPushToGithub = getBooleanConfig('GITHUB_PUSH_ENABLED', getBooleanConfig('AG_GITHUB_SYNC', true));
     const defaultClientId = getConfig('CLIENT_ID', getConfig('AG_CLIENT_ID', os.hostname() || 'antigravity-client'));
-    const agUpdateTimes = parseUpdateTimes(getConfig('AG_UPDATE_TIMES', getConfig('agUpdateTimes', '07:40,12:10,19:10')));
-    const resolvedAgUpdateTimes = agUpdateTimes.length > 0 ? agUpdateTimes : ['07:40', '12:10', '19:10'];
 
     const baseConfig = {
         server: {
@@ -121,7 +119,7 @@ function buildConfig() {
             env
         },
 
-        // Agent 搜集与整合引擎配置 (CoreFeed v2.0)
+        // Agent 原始采集与快照同步配置 (CoreFeed v2.0)
         agent: {
             enabled: getBooleanConfig('AGENT_ENABLED', true),
             jinaReaderEnabled: getBooleanConfig('JINA_READER_ENABLED', true),
@@ -145,9 +143,7 @@ function buildConfig() {
             clientId: defaultClientId,
             githubBranch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),
             githubRemote: getConfig('AG_GITHUB_REMOTE', 'origin'),
-            syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true),
-            updateTimes: resolvedAgUpdateTimes,
-            scheduleTimes: resolvedAgUpdateTimes
+            syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)
         },
 
         // GitHub 快照中转同步配置 (多客户端方案 2B 统一中枢: Antigravity Clients <-> GitHub ag-snapshot -> 软路由)
@@ -169,10 +165,6 @@ function buildConfig() {
 
         // 新闻源与每日定时调度配置
         news: {
-            apiKey: getConfig('NEWS_API_KEY', ''),
-            newsApiEnabled: getBooleanConfig('NEWS_API_ENABLED', true),
-            newsApiMaxArticles: getNumberConfig('NEWS_API_MAX_ARTICLES', 15),
-            sources: parseSources(getConfig('NEWS_SOURCES', '')),
             rssSources: getConfig('RSS_SOURCES', ''),
             autoUpdateEnabled: getBooleanConfig('AUTO_UPDATE_ENABLED', true),
             updateTimes: parseUpdateTimes(getConfig('UPDATE_TIMES', getConfig('scheduleTimes', '08:00,12:30,19:30'))),
@@ -182,49 +174,13 @@ function buildConfig() {
             disabledSources: parseSources(getConfig('DISABLED_SOURCES', ''))
         },
 
-        // Gnews API配置
-        gnews: {
-            apiKey: getConfig('GNEWS_API_KEY', ''),
-            enabled: getBooleanConfig('GNEWS_ENABLED', false),
-            category: getConfig('GNEWS_CATEGORY', 'general'),
-            language: getConfig('GNEWS_LANGUAGE', 'en'),
-            country: getConfig('GNEWS_COUNTRY', 'us'),
-            maxArticles: getNumberConfig('GNEWS_MAX_ARTICLES', 15)
-        },
-
-        // 内容过滤配置
-        filter: {
-            enabled: getBooleanConfig('FILTER_ENABLED', false),
-            keywords: parseSources(getConfig('FILTER_KEYWORDS', '')),
-            filterTitle: getBooleanConfig('FILTER_TITLE', true),
-            filterContent: getBooleanConfig('FILTER_CONTENT', true),
-            filterSource: getBooleanConfig('FILTER_SOURCE', false)
-        },
-
         // 数据存储配置
         storage: {
             dataDir: path.join(__dirname, '..', 'data'),
             newsFile: path.join(__dirname, '..', 'data', 'news.json'),
             stateFile: path.join(__dirname, '..', 'data', 'state.json'),
             summaryFile: path.join(__dirname, '..', 'data', 'summary.json'),
-            settingsFile: SETTINGS_FILE_PATH,
-            newsDataPath: 'data/news.json'
-        },
-
-        // AI服务配置
-        ai: {
-            maxRetries: getNumberConfig('AI_MAX_RETRIES', 3),
-            requestTimeout: getNumberConfig('AI_REQUEST_TIMEOUT', 90000),
-            batchSize: getNumberConfig('AI_BATCH_SIZE', 8)
-        },
-
-        // 大模型配置 (OpenAI 兼容端点)
-        minimax: {
-            baseUrl: getConfig('AI_BASE_URL', 'https://api.openai.com/v1'),
-            apiKey: getConfig('AI_API_KEY', ''),
-            model: getConfig('AI_MODEL', 'gpt-4o-mini'),
-            rateLimitRpm: getNumberConfig('AI_RATE_LIMIT_RPM', 30),
-            rateLimitBurst: getNumberConfig('AI_RATE_LIMIT_BURST', 5)
+            settingsFile: SETTINGS_FILE_PATH
         },
 
         // 日志配置
@@ -336,33 +292,7 @@ config.saveDynamicSettings = function (updates = {}) {
         normalizedUpdates[k] = v;
     }
 
-    // 2. 保护可选外部 AI 配置项不被空字符串或脱敏掩码 ('***') 覆盖清除
-    if (normalizedUpdates.AI_API_KEY !== undefined) {
-        const keyStr = String(normalizedUpdates.AI_API_KEY).trim();
-        if (!keyStr || keyStr.startsWith('***')) {
-            delete normalizedUpdates.AI_API_KEY;
-        } else {
-            normalizedUpdates.AI_API_KEY = keyStr;
-        }
-    }
-    if (normalizedUpdates.AI_BASE_URL !== undefined) {
-        const urlStr = String(normalizedUpdates.AI_BASE_URL).trim();
-        if (!urlStr) {
-            delete normalizedUpdates.AI_BASE_URL;
-        } else {
-            normalizedUpdates.AI_BASE_URL = urlStr;
-        }
-    }
-    if (normalizedUpdates.AI_MODEL !== undefined) {
-        const modelStr = String(normalizedUpdates.AI_MODEL).trim();
-        if (!modelStr) {
-            delete normalizedUpdates.AI_MODEL;
-        } else {
-            normalizedUpdates.AI_MODEL = modelStr;
-        }
-    }
-
-    // 3. 规范化方案 2B 与定时调度参数
+    // 2. 规范化方案 2B 与定时调度参数
     if (normalizedUpdates.GITHUB_SYNC_ENABLED !== undefined) {
         normalizedUpdates.GITHUB_SYNC_ENABLED = parseBoolInput(normalizedUpdates.GITHUB_SYNC_ENABLED);
     }

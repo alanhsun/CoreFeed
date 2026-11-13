@@ -627,34 +627,6 @@ function getGlobalSourceMatrix() {
 }
 
 /**
- * 保存信源矩阵修改（启用/禁用、单源数量、新增自定义源）
- */
-function saveGlobalSourceMatrixUpdate({ overrides = {}, customSources = null }) {
-    let current = { schemaVersion: MATRIX_SCHEMA_VERSION, overrides: {}, customSources: [] };
-    try {
-        if (fs.existsSync(MATRIX_STORAGE_PATH)) {
-            current = JSON.parse(fs.readFileSync(MATRIX_STORAGE_PATH, 'utf8'));
-        }
-    } catch (e) {
-        current = { schemaVersion: MATRIX_SCHEMA_VERSION, overrides: {}, customSources: [] };
-    }
-
-    current.schemaVersion = MATRIX_SCHEMA_VERSION;
-    current.overrides = { ...(current.overrides || {}), ...overrides };
-    if (Array.isArray(customSources)) {
-        current.customSources = customSources;
-    }
-    current.updatedAt = new Date().toISOString();
-
-    const dir = path.dirname(MATRIX_STORAGE_PATH);
-    if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(MATRIX_STORAGE_PATH, JSON.stringify(current, null, 2), 'utf8');
-    return getGlobalSourceMatrix();
-}
-
-/**
  * 根据来源名称获取权威度评分 (0-100)
  */
 function getSourceAuthorityScore(sourceName = '') {
@@ -731,6 +703,5 @@ module.exports = {
     MATRIX_SCHEMA_VERSION,
     DEFAULT_GLOBAL_SOURCES,
     getGlobalSourceMatrix,
-    saveGlobalSourceMatrixUpdate,
     getSourceAuthorityScore
 };

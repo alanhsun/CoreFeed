@@ -3,7 +3,6 @@
  */
 const fs = require('fs').promises;
 const path = require('path');
-const logger = require('./logger');
 
 /**
  * 确保目录存在
@@ -59,41 +58,6 @@ async function writeJsonFile(filePath, data, createDir = true) {
  */
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
- * 重试执行函数（指数退避）
- * @param {Function} fn - 要执行的函数
- * @param {number} maxRetries - 最大重试次数
- * @param {number} delayMs - 重试间隔
- * @param {string} context - 上下文信息（可选）
- * @returns {Promise<*>} 函数执行结果
- */
-async function retryAsync(fn, maxRetries = 3, delayMs = 1000, context = '') {
-    let lastError;
-
-    for (let i = 0; i <= maxRetries; i++) {
-        try {
-            return await fn();
-        } catch (error) {
-            lastError = error;
-
-            if (i < maxRetries) {
-                let errorMessage = error.message;
-                if (error.response) {
-                    const status = error.response.status;
-                    const url = error.config?.url || 'unknown URL';
-                    errorMessage = `Request failed with status code ${status} - ${url}`;
-                }
-
-                const contextMsg = context ? `[${context}] ` : '';
-                logger.warn('RETRY', `${contextMsg}重试 ${i + 1}/${maxRetries}`, errorMessage);
-                await delay(delayMs * Math.pow(2, i));
-            }
-        }
-    }
-
-    throw lastError;
 }
 
 /**
@@ -203,7 +167,6 @@ module.exports = {
     readJsonFile,
     writeJsonFile,
     delay,
-    retryAsync,
     stripHtml,
     truncateText,
     isValidUrl,

@@ -8,8 +8,6 @@
     "dev": "nodemon server.js",
     "prod": "NODE_ENV=production node server.js",
     "pm2:start": "pm2 start ecosystem.config.js --env production",
-    "pm2:daemon": "pm2 start ecosystem.config.js --only corefeed-ag-daemon --env production",
-    "pm2:dev": "pm2 start ecosystem.config.js --env development",
     "pm2:stop": "pm2 stop corefeed",
     "pm2:restart": "pm2 restart corefeed",
     "pm2:logs": "pm2 logs corefeed",
@@ -26,14 +24,6 @@
     "clean": "rm -rf node_modules package-lock.json && npm install",
     "ag:harvest": "node scripts/ag-harvest.js",
     "ag:publish": "node scripts/ag-publish.js",
-    "ag:publish:github": "node scripts/ag-publish.js --github --local-only",
-    "ag:auto": "node scripts/ag-auto-update.js",
-    "ag:auto:github": "node scripts/ag-auto-update.js --github",
-    "ag:daemon": "node scripts/ag-auto-update.js --daemon",
-    "ag:status": "node scripts/ag-auto-update.js --status",
-    "ag:daemon:status": "node scripts/ag-auto-update.js --status",
-    "ag:schedule": "node scripts/setup-schedule.js --install",
-    "ag:schedule:remove": "node scripts/setup-schedule.js --remove",
     "test": "node --test tests/ag_pipeline.test.js tests/deploy_router.test.js"
   },
   "dependencies": {

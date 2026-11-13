@@ -1236,18 +1236,6 @@ html.dark .tab-btn.active {
     display: none !important;
 }
 
-.sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-}
-
 /* ========== Executive Briefing Long-Form Reader (#tabPanel-summary) ========== */
 
 .taste-briefing-sheet {
@@ -1299,18 +1287,6 @@ html.dark .tab-btn.active {
     margin-top: 0;
     margin-bottom: 16px;
     color: var(--text-body);
-}
-
-.summary-content ul.summary-list {
-    margin: 10px 0 18px;
-    padding-left: 20px;
-    color: var(--text-body);
-    font-size: 15.5px;
-    line-height: 1.75;
-}
-
-.summary-content ul.summary-list li {
-    margin-bottom: 6px;
 }
 
 .news-ref-link {

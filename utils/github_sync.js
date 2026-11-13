@@ -20,6 +20,13 @@ const { execFileSync } = require('child_process');
 const config = require('../config');
 const logger = require('./logger');
 const { writeJsonFile } = require('./helpers');
+const {
+    hasChineseText,
+    normalizeRegion,
+    normalizeCategory,
+    convertSummaryToRichHtml,
+    createSummaryArticleObject
+} = require('./editorial_formatter');
 
 const syncHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
@@ -155,11 +162,6 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
     };
 }
 
-function hasChineseText(text) {
-    if (!text || typeof text !== 'string') return false;
-    return /[\u4e00-\u9fa5]/.test(text);
-}
-
 /**
  * 检测本地状态中的新闻是否为空、非快照精编或包含未翻译的英文标题
  */
@@ -180,7 +182,7 @@ function isLocalNewsPolluted(newsList) {
  */
 async function applySnapshotToRouter(
     snapshot,
-    { stateManager, newsAgentService, aiService, newsService, io, sourceLabel = 'GitHub 快照中转同步' } = {}
+    { stateManager, newsAgentService, newsService, io, sourceLabel = 'GitHub 快照中转同步' } = {}
 ) {
     const rawNews = Array.isArray(snapshot?.news)
         ? snapshot.news
@@ -219,12 +221,8 @@ async function applySnapshotToRouter(
             };
         const relatedSources = Array.isArray(item?.relatedSources) ? item.relatedSources : [];
         const keyPoints = Array.isArray(item?.keyPoints) ? item.keyPoints.filter(Boolean).map(String) : [];
-        const region = item?.region || (aiService
-            ? aiService.determineNewsRegionSync(`${rawTitle} ${zhTitle}`, `${rawDesc} ${zhSummary}`, sourceObj.name, '国际')
-            : '国际');
-        const category = item?.category || (aiService
-            ? aiService.determineNewsCategorySync(`${rawTitle} ${zhTitle}`, `${rawDesc} ${zhSummary}`, sourceObj.category || '', '国际')
-            : '国际');
+        const region = normalizeRegion(item?.region, '国际');
+        const category = normalizeCategory(item?.category, '国际');
 
         const rawFull = String(item?.fullText || item?.content || rawDesc).trim();
         const origParas = Array.isArray(item?.originalParagraphs) && item.originalParagraphs.length > 0
@@ -316,12 +314,12 @@ async function applySnapshotToRouter(
         ? summaryArticle.trim()
         : (typeof summaryMarkdown === 'string' ? summaryMarkdown.trim() : '');
 
-    if (rawMdInput && aiService) {
+    if (rawMdInput) {
         const firstLine = rawMdInput.split('\n').map(l => l.trim()).find(Boolean) || '';
         const mdWithTitle = /^(#{2,4}\s|【)/.test(firstLine)
             ? `${currentDate} 全球要闻深度综述\n\n${rawMdInput}`
             : rawMdInput;
-        finalSummary = aiService.createSummaryArticleObject(mdWithTitle, normalizedNews, currentDate);
+        finalSummary = createSummaryArticleObject(mdWithTitle, normalizedNews, currentDate);
     } else if (summaryArticle && typeof summaryArticle === 'object') {
         const rawBody = String(summaryArticle.content || summaryArticle.markdown || '').trim();
         const normalizedBody = rawBody
@@ -331,7 +329,7 @@ async function applySnapshotToRouter(
             (!summaryArticle.htmlContent || !String(summaryArticle.htmlContent).includes('news-ref-link'));
         const htmlContent = (!needsCitationRender && summaryArticle.htmlContent)
             ? summaryArticle.htmlContent
-            : ((normalizedBody && aiService) ? aiService.convertSummaryToRichHtml(normalizedBody, normalizedNews) : (summaryArticle.htmlContent || ''));
+            : (normalizedBody ? convertSummaryToRichHtml(normalizedBody, normalizedNews) : (summaryArticle.htmlContent || ''));
 
         if (htmlContent || normalizedBody) {
             const plainForSummary = normalizedBody.replace(/\[NEWS_\d+\]/g, '').replace(/#+\s*/g, '');
@@ -601,13 +599,6 @@ class GitHubSyncManager {
         throw finalErr;
     }
 
-    async checkRemoteCooldown(options = {}) {
-        return checkRemoteSnapshotCooldown({
-            ...options,
-            syncManager: this
-        });
-    }
-
     async pullAndApply(options = {}) {
         const {
             snapshotUrl = null,
@@ -706,7 +697,6 @@ class GitHubSyncManager {
             const applied = await applySnapshotToRouter(data, {
                 stateManager: this.stateManager,
                 newsAgentService: this.services.newsAgentService,
-                aiService: this.services.aiService,
                 newsService: this.services.newsService,
                 io: this.io,
                 sourceLabel: 'GitHub 快照中转同步'
