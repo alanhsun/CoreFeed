@@ -163,7 +163,7 @@ async function runPublish(customOptions = {}) {
         opts.target = customOptions.site || customOptions.url;
         opts.targetExplicit = true;
     }
-    if (customOptions.target) {
+    if (customOptions.target && customOptions.targetExplicit !== false) {
         opts.targetExplicit = true;
     }
 
@@ -547,6 +547,19 @@ async function runPublish(customOptions = {}) {
             headers['x-api-key'] = opts.secret;
         }
 
+        let isLocalOrLanTarget = false;
+        try {
+            const parsedHost = new URL(publishUrl).hostname.toLowerCase();
+            isLocalOrLanTarget =
+                parsedHost === 'localhost' ||
+                parsedHost === '127.0.0.1' ||
+                parsedHost === '::1' ||
+                parsedHost === '[::1]' ||
+                parsedHost.startsWith('192.168.') ||
+                parsedHost.startsWith('10.') ||
+                /^172\.(1[6-9]|2\d|3[0-1])\./.test(parsedHost);
+        } catch (_) {}
+
         try {
             const response = await axios.post(
                 publishUrl,
@@ -564,14 +577,19 @@ async function runPublish(customOptions = {}) {
                 {
                     headers,
                     timeout: 20000,
-                    httpsAgent: httpsAgentIgnoreTls
+                    httpsAgent: httpsAgentIgnoreTls,
+                    ...(isLocalOrLanTarget ? { proxy: false } : {})
                 }
             );
 
             remoteResponse = response.data;
             logger.success('AG-PUBLISH', `成功推送至网站 ${publishUrl}:`, remoteResponse);
         } catch (httpErr) {
-            if (githubSyncResult?.success && !opts.targetExplicit && httpErr.code === 'ECONNREFUSED') {
+            const isConnRefused =
+                httpErr.code === 'ECONNREFUSED' ||
+                httpErr.name === 'AggregateError' ||
+                (Array.isArray(httpErr.errors) && httpErr.errors.some(e => e?.code === 'ECONNREFUSED'));
+            if (githubSyncResult?.success && !opts.targetExplicit && (isConnRefused || !httpErr.response)) {
                 logger.info('AG-PUBLISH', `本地服务 ${publishUrl} 未运行，已完成 GitHub 快照发布`);
             } else {
                 throw httpErr;
