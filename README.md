@@ -50,12 +50,15 @@ ssh root@<YOUR_SERVER_IP> "sh /opt/corefeed/deploy-router.sh"
 
 CoreFeed 内置面向外部个人 AI 助手与智能音箱桥接服务（[`open-xiaoai-bridge`](https://github.com/coderzc/open-xiaoai-bridge)）的精编直读接口与零依赖 Hermes Skill（`integrations/hermes-skill/corefeed-news`），无需二次抓取网页，支持「**局域网软路由 API 优先 -> GitHub `ag-snapshot` 轻量快照自动回退**」：
 
-- **一键安装至 Hermes Agent**（在运行 Hermes 的主机上执行，替换为实际局域网地址）：
-  ```bash
-  sh integrations/hermes-skill/install.sh \
-    --corefeed-url http://<COREFEED_LAN_IP>:3120 \
-    --xiaoai-url http://127.0.0.1:9092
-  ```
+- **一键安装至 Hermes Agent**（完全兼容 Windows PowerShell 单行直粘，将 `<YOUR_SERVER_IP>` 替换为实际局域网地址）：
+  - 若 Hermes 运行在 Linux 软路由 / 服务器（支持宿主机或 Docker 容器自动识别）：
+    ```powershell
+    ssh root@<YOUR_SERVER_IP> "wget -qO /tmp/cf-hermes.sh https://raw.githubusercontent.com/alanhsun/CoreFeed/main/integrations/hermes-skill/install.sh && sh /tmp/cf-hermes.sh --corefeed-url http://<YOUR_SERVER_IP>:3120 --xiaoai-url http://<YOUR_SERVER_IP>:9092 && rm -f /tmp/cf-hermes.sh"
+    ```
+  - 若 Hermes 运行在当前 Windows 本机或 WSL2 内：
+    ```powershell
+    irm https://raw.githubusercontent.com/alanhsun/CoreFeed/main/integrations/hermes-skill/install.ps1 -OutFile $env:TEMP\cf-hermes.ps1; & $env:TEMP\cf-hermes.ps1 -CoreFeedUrl http://<YOUR_SERVER_IP>:3120 -XiaoAiUrl http://<YOUR_SERVER_IP>:9092; Remove-Item $env:TEMP\cf-hermes.ps1 -ErrorAction SilentlyContinue
+    ```
 - **智能双模态路由**：
   - **常规文字查新闻**（如「今天有什么国际科技新闻？」）：仅返回精编中文标题、导语、要点或《全球要闻深度综述》，绝不误触音箱发声；
   - **显式点名播报 / 语音唤醒**（如「用小爱播报今天的新闻」「把第 2 条全文读给我听」）：自动剥离 Markdown 与 `[NEWS_k]` 引注符号、将英文信源名转为中文媒体简称、按自然句边界切分为短语音段（`<= 240` 字），通过 `open-xiaoai-bridge`（豆包 TTS 优先 -> 小爱原生 TTS 自动降级）分段顺序朗读，并支持中途唤醒「小爱同学」打断。

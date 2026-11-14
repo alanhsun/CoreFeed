@@ -809,6 +809,12 @@ def build_parser():
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
     load_dotenv_files()
     parser = build_parser()
     args = parser.parse_args(argv)

@@ -453,4 +453,80 @@ describe('CoreFeed v2.0 — AI Briefing API & Hermes × Open-XiaoAI Bridge Integ
             await new Promise((resolve) => mockBridgeServer.close(() => resolve()));
         }
     });
+
+    it('5. PowerShell-safe single-line SSH/PS1 install contract & Docker Hermes container mount auto-sync', async () => {
+        await execFileAsync('sh', ['-n', INSTALL_SCRIPT]);
+        await execFileAsync('dash', ['-n', INSTALL_SCRIPT]);
+
+        const ps1Path = path.join(ROOT_DIR, 'integrations', 'hermes-skill', 'install.ps1');
+        assert.equal(fs.existsSync(ps1Path), true, 'install.ps1 must exist for native Windows PowerShell');
+
+        const readmeText = fs.readFileSync(path.join(ROOT_DIR, 'README.md'), 'utf8');
+        const expectedHermesSsh = 'ssh root@<YOUR_SERVER_IP> "wget -qO /tmp/cf-hermes.sh https://raw.githubusercontent.com/alanhsun/CoreFeed/main/integrations/hermes-skill/install.sh && sh /tmp/cf-hermes.sh --corefeed-url http://<YOUR_SERVER_IP>:3120 --xiaoai-url http://<YOUR_SERVER_IP>:9092 && rm -f /tmp/cf-hermes.sh"';
+        assert.ok(readmeText.includes(expectedHermesSsh), 'README.md must include single-line PowerShell-safe SSH Hermes installer');
+        const innerSsh = expectedHermesSsh.match(/"([^"]+)"/)[1];
+        assert.equal(innerSsh.includes('\\'), false);
+        assert.equal(innerSsh.includes('$'), false);
+        assert.equal(innerSsh.includes("'"), false);
+
+        // Mock a running Docker container named `hermes-agent` mounting host volume -> /opt/data
+        const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'corefeed-hermes-docker-'));
+        try {
+            const hostRootHome = path.join(tmpRoot, 'root-home');
+            const dockerMountedHermes = path.join(tmpRoot, 'opt-hermes-data');
+            const mockBin = path.join(tmpRoot, 'bin');
+            fs.mkdirSync(hostRootHome, { recursive: true });
+            fs.mkdirSync(dockerMountedHermes, { recursive: true });
+            fs.mkdirSync(mockBin, { recursive: true });
+
+            const mockDockerPath = path.join(mockBin, 'docker');
+            fs.writeFileSync(
+                mockDockerPath,
+                `#!/bin/sh
+if [ "$1" = "ps" ]; then
+  echo "hermes-agent|nousresearch/hermes-agent:latest"
+  exit 0
+fi
+if [ "$1" = "inspect" ]; then
+  echo "${dockerMountedHermes} | /opt/data"
+  exit 0
+fi
+exit 0
+`,
+                { mode: 0o755 }
+            );
+
+            await execFileAsync(
+                'sh',
+                [
+                    INSTALL_SCRIPT,
+                    '--corefeed-url',
+                    'http://10.10.20.10:3120',
+                    '--xiaoai-url',
+                    'http://10.10.20.10:9092',
+                    '--skip-check'
+                ],
+                {
+                    env: {
+                        ...process.env,
+                        HOME: hostRootHome,
+                        HERMES_HOME: path.join(hostRootHome, '.hermes'),
+                        PATH: `${mockBin}:${process.env.PATH}`
+                    },
+                    encoding: 'utf8'
+                }
+            );
+
+            assert.equal(
+                fs.existsSync(path.join(dockerMountedHermes, 'skills', 'corefeed-news', 'scripts', 'corefeed_cli.py')),
+                true,
+                'install.sh must auto-sync corefeed-news into mounted Hermes Docker volume'
+            );
+            const mountedEnv = fs.readFileSync(path.join(dockerMountedHermes, '.env'), 'utf8');
+            assert.ok(mountedEnv.includes('COREFEED_BASE_URL="http://10.10.20.10:3120"'));
+            assert.ok(mountedEnv.includes('OPENXIAOAI_BASE_URL="http://10.10.20.10:9092"'));
+        } finally {
+            fs.rmSync(tmpRoot, { recursive: true, force: true });
+        }
+    });
 });
