@@ -46,6 +46,27 @@ ssh root@<YOUR_SERVER_IP> "wget -qO /tmp/deploy-router.sh https://raw.githubuser
 ssh root@<YOUR_SERVER_IP> "sh /opt/corefeed/deploy-router.sh"
 ```
 
+### 3. 个人 AI 助手（Hermes Agent）与小爱音箱语音播报接入
+
+CoreFeed 内置面向外部个人 AI 助手与智能音箱桥接服务（[`open-xiaoai-bridge`](https://github.com/coderzc/open-xiaoai-bridge)）的精编直读接口与零依赖 Hermes Skill（`integrations/hermes-skill/corefeed-news`），无需二次抓取网页，支持「**局域网软路由 API 优先 -> GitHub `ag-snapshot` 轻量快照自动回退**」：
+
+- **一键安装至 Hermes Agent**（在运行 Hermes 的主机上执行，替换为实际局域网地址）：
+  ```bash
+  sh integrations/hermes-skill/install.sh \
+    --corefeed-url http://<COREFEED_LAN_IP>:3120 \
+    --xiaoai-url http://127.0.0.1:9092
+  ```
+- **智能双模态路由**：
+  - **常规文字查新闻**（如「今天有什么国际科技新闻？」）：仅返回精编中文标题、导语、要点或《全球要闻深度综述》，绝不误触音箱发声；
+  - **显式点名播报 / 语音唤醒**（如「用小爱播报今天的新闻」「把第 2 条全文读给我听」）：自动剥离 Markdown 与 `[NEWS_k]` 引注符号、将英文信源名转为中文媒体简称、按自然句边界切分为短语音段（`<= 240` 字），通过 `open-xiaoai-bridge`（豆包 TTS 优先 -> 小爱原生 TTS 自动降级）分段顺序朗读，并支持中途唤醒「小爱同学」打断。
+
+| AI / 语音直读端点 | 说明 |
+| :--- | :--- |
+| `GET /api/ai/briefing` | 结构化精编简报与口播分段 JSON（支持 `limit`、`region`、`category`、`source`、`q`、`mode=mixed\|headlines\|summary\|article`、`detail=brief\|full`、`format=json\|markdown\|tts\|oral`） |
+| `GET /api/ai/briefing.md` | 纯 Markdown 格式全球要闻综述与精选列表，适合任意 LLM Web Fetch 工具零配置直读 |
+| `GET /api/ai/article/:ref` | 按 1-based 序号（如 `/api/ai/article/2`）或文章 ID 获取单篇全文中文精译段落与分段口播脚本 |
+| `ag-snapshot/briefing.json` / `briefing.md` | 每次 `ag:publish` 自动同步生成的轻量级伴生快照（体积较 `latest.json` 缩减 >90%），供跨网段回退秒读 |
+
 ---
 
 ## 常用命令
@@ -80,13 +101,14 @@ ssh root@<YOUR_SERVER_IP> "sh /opt/corefeed/deploy-router.sh"
 CoreFeed/
 ├── .agents/skills/corefeed-editor/ # Antigravity 客户端内置大模型全流程采编 Skill (/corefeed-editor)
 ├── config/                         # 全局动态配置与 37 家国际权威信源矩阵
+├── integrations/hermes-skill/      # Hermes Agent 精编直读与小爱音箱 (open-xiaoai-bridge) 语音播报 Skill
 ├── middleware/                     # 全局异常处理与生产环境速率限制
 ├── public/                         # 品牌图标、Swiss Editorial 样式表与前端交互控制器
-├── routes/                         # RESTful API、快照同步与外媒图片防盗链代理
+├── routes/                         # RESTful API、AI/TTS 简报接口、快照同步与图片防盗链代理
 ├── scripts/                        # 纯网络原始采集 (ag-harvest) 与严格快照发布 (ag-publish)
 ├── services/                       # 多源网络抓取工具集、基础时效过滤与内存状态管理
-├── tests/                          # 采编发布流水线与软路由部署脚本端到端测试
-├── utils/                          # GitHub Git Plumbing 快照同步、纯数据格式化与定时轮询器
+├── tests/                          # 采编发布流水线、AI 简报/Hermes 集成与软路由部署脚本测试
+├── utils/                          # GitHub 快照同步、AI/口播纯数据格式化与定时轮询器
 ├── views/                          # 响应式新闻阅读器 SSR 模板 (index.ejs)
 ├── deploy-router.sh                # 软路由 / Linux Docker 一键部署与秒级热更新脚本
 └── server.js                       # Express + Socket.IO 主服务入口

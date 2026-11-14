@@ -27,6 +27,7 @@ const {
     convertSummaryToRichHtml,
     createSummaryArticleObject
 } = require('./editorial_formatter');
+const { buildSnapshotBriefingFiles } = require('./briefing_formatter');
 
 const syncHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
@@ -122,11 +123,29 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
         }).trim();
     };
 
-    // 1. 写入 Git Blob 对象
+    // 1. 写入 Git Blob 对象（包含完整快照 latest.json 及面向 AI/语音助手的轻量伴生快照 briefing.json / briefing.md）
     const blobSha = runGit(['hash-object', '-w', '--stdin'], jsonContent);
+    const treeFiles = new Map([[fileName, blobSha]]);
 
-    // 2. 构建仅包含 latest.json 的单文件 Git Tree 对象
-    const treeEntry = `100644 blob ${blobSha}\t${fileName}\n`;
+    let briefingJsonBlobSha = null;
+    let briefingMdBlobSha = null;
+    if (options.includeBriefingFiles !== false) {
+        const { briefingJson, briefingMarkdown } = buildSnapshotBriefingFiles(normalizedPayload);
+        briefingJsonBlobSha = runGit(['hash-object', '-w', '--stdin'], briefingJson);
+        briefingMdBlobSha = runGit(['hash-object', '-w', '--stdin'], briefingMarkdown);
+        if (!treeFiles.has('briefing.json')) {
+            treeFiles.set('briefing.json', briefingJsonBlobSha);
+        }
+        if (!treeFiles.has('briefing.md')) {
+            treeFiles.set('briefing.md', briefingMdBlobSha);
+        }
+    }
+
+    // 2. 构建按文件名排序的 Git Tree 对象
+    const treeEntry = [...treeFiles.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, sha]) => `100644 blob ${sha}\t${name}`)
+        .join('\n') + '\n';
     const treeSha = runGit(['mktree'], treeEntry);
 
     // 3. 创建无父节点的孤儿 Commit 对象，保持快照分支永远只有 1 个最新提交
@@ -146,19 +165,27 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
         }
     }
 
+    const baseRawUrl = String(config.githubSync?.snapshotUrl || config.agent?.githubSnapshotUrl || '');
+    const rawDirUrl = baseRawUrl ? baseRawUrl.replace(/\/[^/]+$/, '') : '';
+
     return {
         success: true,
         branch,
         remote,
         fileName,
+        files: [...treeFiles.keys()].sort(),
         blobSha,
+        briefingJsonBlobSha,
+        briefingMdBlobSha,
         treeSha,
         commitSha,
         pushed: !skipPush,
         publishedAt,
         publishedBy,
         clientId: resolvedClientId,
-        rawUrl: config.githubSync?.snapshotUrl || config.agent?.githubSnapshotUrl
+        rawUrl: baseRawUrl,
+        briefingJsonUrl: rawDirUrl ? `${rawDirUrl}/briefing.json` : null,
+        briefingMdUrl: rawDirUrl ? `${rawDirUrl}/briefing.md` : null
     };
 }
 

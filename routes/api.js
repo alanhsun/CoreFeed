@@ -14,6 +14,7 @@ const config = require('../config');
 const { readJsonFile, isValidUrl, SimpleCache } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const { applySnapshotToRouter } = require('../utils/github_sync');
+const { buildAiBriefing } = require('../utils/briefing_formatter');
 
 const proxyHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
@@ -555,6 +556,90 @@ function initializeApiRoutes(services, io, stateManager) {
                 message: '获取数据失败: ' + error.message
             });
         }
+    });
+
+    // ==================== 5. AI 助手精编直读与智能音箱口播接口 (/api/ai/*) ====================
+
+    const resolveCurrentNewsAndSummary = async () => {
+        const allEnhanced = stateManager.get('allEnhancedNews');
+        const displayed = stateManager.get('newsData') || newsService.getNewsData() || [];
+        const newsList = Array.isArray(allEnhanced) && allEnhanced.length >= displayed.length && displayed.length === 0
+            ? allEnhanced
+            : displayed;
+        const lastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
+        const lastPublishedBy =
+            stateManager.get('lastPublishedBy') ||
+            (githubSyncManager ? githubSyncManager.getStatus().publishedBy : null) ||
+            null;
+
+        let summaryArticle = stateManager.get('summaryArticle');
+        if (!summaryArticle) {
+            try {
+                const loaded = await readJsonFile(config.storage.summaryFile);
+                if (loaded && loaded.article) {
+                    summaryArticle = loaded.article;
+                    stateManager.set('summaryArticle', summaryArticle, false);
+                }
+            } catch (_) {
+                // ignore missing summary file
+            }
+        }
+        return { newsList, summaryArticle, lastUpdated, lastPublishedBy };
+    };
+
+    const handleAiBriefing = async (req, res, forcedQuery = {}) => {
+        try {
+            const { newsList, summaryArticle, lastUpdated, lastPublishedBy } = await resolveCurrentNewsAndSummary();
+            const mergedQuery = { ...(req.query || {}), ...forcedQuery };
+            const briefing = buildAiBriefing({
+                newsList,
+                summaryArticle,
+                lastUpdated,
+                lastPublishedBy,
+                query: mergedQuery
+            });
+
+            if (mergedQuery.mode === 'article' && briefing.items.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '未找到指定序号或 ID 的精编报道'
+                });
+            }
+
+            const format = String(mergedQuery.format || 'json').toLowerCase().trim();
+            if (format === 'markdown' || format === 'md') {
+                res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+                return res.send(briefing.markdown);
+            }
+            if (format === 'tts' || format === 'speech') {
+                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+                return res.send(briefing.tts.fullText + '\n');
+            }
+            if (format === 'oral' || format === 'short') {
+                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+                return res.send(briefing.tts.shortText + '\n');
+            }
+
+            return res.json(briefing);
+        } catch (error) {
+            logger.error('API', '生成 AI 简报数据失败', error.message);
+            return res.status(500).json({
+                success: false,
+                message: '生成 AI 简报失败: ' + error.message
+            });
+        }
+    };
+
+    router.get('/ai/briefing', (req, res) => handleAiBriefing(req, res));
+    router.get('/ai/briefing.md', (req, res) => handleAiBriefing(req, res, { format: 'markdown' }));
+    router.get('/ai/article/:ref', (req, res) => {
+        const ref = String(req.params.ref || '').trim();
+        const isOneBasedIdx = /^\d+$/.test(ref);
+        return handleAiBriefing(req, res, {
+            mode: 'article',
+            detail: 'full',
+            ...(isOneBasedIdx ? { index: ref } : { id: ref })
+        });
     });
 
     return router;

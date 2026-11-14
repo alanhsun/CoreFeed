@@ -24,7 +24,7 @@
     "clean": "rm -rf node_modules package-lock.json && npm install",
     "ag:harvest": "node scripts/ag-harvest.js",
     "ag:publish": "node scripts/ag-publish.js",
-    "test": "node --test tests/ag_pipeline.test.js tests/deploy_router.test.js"
+    "test": "node --test tests/ag_pipeline.test.js tests/deploy_router.test.js tests/ai_briefing_hermes.test.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
