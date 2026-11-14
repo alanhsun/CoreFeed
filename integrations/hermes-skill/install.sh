@@ -62,17 +62,47 @@ done
 
 RAW_SKILL_BASE="${COREFEED_RAW_SKILL_BASE:-https://raw.githubusercontent.com/alanhsun/CoreFeed/main/integrations/hermes-skill/corefeed-news}"
 
-download_file() {
+download_url_quiet() {
     _url="$1"
     _dest="$2"
+    _no_proxy_flag=""
+    case "$_url" in
+        http://10.*|http://192.168.*|http://172.1[6-9].*|http://172.2[0-9].*|http://172.3[0-1].*|http://127.*|http://localhost*)
+            _no_proxy_flag="1"
+            ;;
+    esac
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$_url" -o "$_dest"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$_dest" "$_url"
-    else
-        echo "❌ 未找到本地技能文件且系统缺少 curl/wget，无法远程拉取: $_url" >&2
-        exit 1
+        if [ -n "$_no_proxy_flag" ]; then
+            curl --noproxy '*' -fsSL --connect-timeout 4 "$_url" -o "$_dest" 2>/dev/null && return 0
+        else
+            curl -fsSL --connect-timeout 8 "$_url" -o "$_dest" 2>/dev/null && return 0
+        fi
     fi
+    if command -v wget >/dev/null 2>&1; then
+        if [ -n "$_no_proxy_flag" ]; then
+            wget --no-proxy -qO "$_dest" "$_url" 2>/dev/null && return 0
+        else
+            wget -qO "$_dest" "$_url" 2>/dev/null && return 0
+        fi
+    fi
+    return 1
+}
+
+fetch_skill_asset() {
+    _asset_rel="$1"
+    _asset_name="$2"
+    _dest="$3"
+    if [ -n "$COREFEED_URL_ARG" ]; then
+        _lan_base="${COREFEED_URL_ARG%/}"
+        if download_url_quiet "$_lan_base/api/ai/hermes-skill/$_asset_name" "$_dest" && [ -s "$_dest" ]; then
+            return 0
+        fi
+    fi
+    if download_url_quiet "$RAW_SKILL_BASE/$_asset_rel" "$_dest" && [ -s "$_dest" ]; then
+        return 0
+    fi
+    echo "❌ 无法从局域网 CoreFeed 或 GitHub 拉取技能文件: $_asset_rel" >&2
+    exit 1
 }
 
 upsert_env_key_to_file() {
@@ -125,8 +155,8 @@ if [ -f "$SRC_SKILL_DIR/SKILL.md" ] && [ -f "$SRC_SKILL_DIR/scripts/corefeed_cli
     cp "$SRC_SKILL_DIR/SKILL.md" "$DEST_SKILL_DIR/SKILL.md"
     cp "$SRC_SKILL_DIR/scripts/corefeed_cli.py" "$DEST_SKILL_DIR/scripts/corefeed_cli.py"
 else
-    download_file "$RAW_SKILL_BASE/SKILL.md" "$DEST_SKILL_DIR/SKILL.md"
-    download_file "$RAW_SKILL_BASE/scripts/corefeed_cli.py" "$DEST_SKILL_DIR/scripts/corefeed_cli.py"
+    fetch_skill_asset "SKILL.md" "SKILL.md" "$DEST_SKILL_DIR/SKILL.md"
+    fetch_skill_asset "scripts/corefeed_cli.py" "corefeed_cli.py" "$DEST_SKILL_DIR/scripts/corefeed_cli.py"
 fi
 chmod +x "$DEST_SKILL_DIR/scripts/corefeed_cli.py"
 

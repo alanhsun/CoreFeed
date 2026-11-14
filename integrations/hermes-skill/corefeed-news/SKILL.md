@@ -40,20 +40,20 @@ OPENXIAOAI_BASE_URL="http://192.168.1.5:9092"
 - **常用命令**：
   ```bash
   # 综合读取今日《全球要闻深度综述》+ 前 8 条精选要闻
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py query --limit 8
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" query --limit 8
 
   # 按领域或地区筛选（领域：政经/外交/科技/财经/军事/社会/能源/国际；地区：中国/美国/欧洲/日本/韩国/东南亚/中东/国际等）
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py query --category 科技 --limit 6
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py query --region 美国 --category 财经
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" query --category 科技 --limit 6
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" query --region 美国 --category 财经
 
   # 按关键词检索（匹配中英标题、导语、三大看点及全文译文）
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py query --keyword 芯片
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" query --keyword 芯片
 
   # 仅读取《今日全球要闻深度综述》
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py query --mode summary
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" query --mode summary
 
   # 展开查看某一条新闻的完整中文精译全文（例如第 3 条）
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py query --index 3
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" query --index 3
   ```
 
 ---
@@ -67,21 +67,21 @@ OPENXIAOAI_BASE_URL="http://192.168.1.5:9092"
 - **常用命令**：
   ```bash
   # 播报最新前 5 条全球精选要闻（默认精炼播报 5 条，时长适中）
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py speak --limit 5
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" speak --limit 5
 
   # 按指定分类、地区或关键词播报
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py speak --category 科技 --limit 5
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py speak --keyword 美联储 --limit 3
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" speak --category 科技 --limit 5
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" speak --keyword 美联储 --limit 3
 
   # 完整播报当日《全球要闻深度综述》（自动分段顺序朗读）
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py speak --mode summary
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" speak --mode summary
 
   # 朗读指定序号（如第 2 条）的单篇完整中文译文
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py speak --index 2
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" speak --index 2
 
   # 可选：指定豆包音色或强制使用小爱原生 TTS
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py speak --limit 5 --speaker zh_female_vv_uranus_bigtts
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py speak --limit 5 --engine xiaoai
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" speak --limit 5 --speaker zh_female_vv_uranus_bigtts
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" speak --limit 5 --engine xiaoai
   ```
 
 ---
@@ -91,8 +91,8 @@ OPENXIAOAI_BASE_URL="http://192.168.1.5:9092"
 
 - **操作**：调用 `query --oral` 获取单段 ≤280 字的纯口语播报稿，**直接输出纯文字作为最终回复**，不要再调用 `speak`（否则桥接器自动 TTS 会导致重复播报两遍）：
   ```bash
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py query --oral --max-chars 280
-  python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py query --category 科技 --oral --max-chars 280
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" query --oral --max-chars 280
+  python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" query --category 科技 --oral --max-chars 280
   ```
 
 ---
@@ -101,10 +101,10 @@ OPENXIAOAI_BASE_URL="http://192.168.1.5:9092"
 
 ```bash
 # 立即打断小爱音箱正在进行的播报（「别读了」「停止播报」）
-python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py stop
+python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" stop
 
 # 检查 CoreFeed 局域网接口、GitHub 快照回退及 open-xiaoai-bridge 在线状态
-python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py status
+python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py" status
 ```
 
 ---

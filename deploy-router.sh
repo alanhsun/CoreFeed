@@ -311,6 +311,7 @@ docker run -d \
   -v "${REMOTE_DIR}/middleware:/app/middleware" \
   -v "${REMOTE_DIR}/utils:/app/utils" \
   -v "${REMOTE_DIR}/scripts:/app/scripts" \
+  -v "${REMOTE_DIR}/integrations:/app/integrations" \
   -v "${REMOTE_DIR}/server.js:/app/server.js" \
   "${IMAGE_NAME}"
 

@@ -8,6 +8,8 @@
  *   3. `/api/status`, `/api/config`, `/api/schedule/*`, `/api/latest-data` — 系统遥测、动态配置持久化与聚合输出
  */
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const axios = require('axios');
 const https = require('https');
 const config = require('../config');
@@ -640,6 +642,22 @@ function initializeApiRoutes(services, io, stateManager) {
             detail: 'full',
             ...(isOneBasedIdx ? { index: ref } : { id: ref })
         });
+    });
+
+    const HERMES_SKILL_FILES = {
+        'install.sh': path.join(__dirname, '..', 'integrations', 'hermes-skill', 'install.sh'),
+        'install.ps1': path.join(__dirname, '..', 'integrations', 'hermes-skill', 'install.ps1'),
+        'SKILL.md': path.join(__dirname, '..', 'integrations', 'hermes-skill', 'corefeed-news', 'SKILL.md'),
+        'corefeed_cli.py': path.join(__dirname, '..', 'integrations', 'hermes-skill', 'corefeed-news', 'scripts', 'corefeed_cli.py')
+    };
+
+    router.get('/ai/hermes-skill/:file', (req, res) => {
+        const targetPath = HERMES_SKILL_FILES[req.params.file];
+        if (!targetPath || !fs.existsSync(targetPath)) {
+            return res.status(404).json({ success: false, message: '未找到请求的 Hermes 技能文件' });
+        }
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.send(fs.readFileSync(targetPath, 'utf8'));
     });
 
     return router;

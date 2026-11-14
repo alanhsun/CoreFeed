@@ -55,6 +55,7 @@ if (Get-Command python3 -ErrorAction SilentlyContinue) {
 if ($PythonCmd -eq "python") {
     $NormalizedCliPath = ($CliPyDest -replace "\\", "/")
     $SkillText = [System.IO.File]::ReadAllText($SkillMdDest, [System.Text.Encoding]::UTF8)
+    $SkillText = $SkillText.Replace('python3 "${HERMES_HOME:-$HOME/.hermes}/skills/corefeed-news/scripts/corefeed_cli.py"', "python `"$NormalizedCliPath`"")
     $SkillText = $SkillText.Replace("python3 ~/.hermes/skills/corefeed-news/scripts/corefeed_cli.py", "python `"$NormalizedCliPath`"")
     [System.IO.File]::WriteAllText($SkillMdDest, $SkillText, (New-Object System.Text.UTF8Encoding($false)))
 }
