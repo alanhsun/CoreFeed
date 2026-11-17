@@ -18,6 +18,8 @@ class StateManager extends EventEmitter {
             newsData: [],
             allEnhancedNews: [],
             summaryArticle: null,
+            socialPulse: null,
+            lastSocialPulseUpdatedAt: null,
             sourceStats: [],
             lastUpdated: null,
             lastSnapshotPublishedAt: null,
@@ -126,6 +128,22 @@ class StateManager extends EventEmitter {
     }
 
     /**
+     * 更新欧美社媒热议数据
+     * @param {Object|null} socialPulse - 标准化后的欧美社媒热议数据包
+     */
+    updateSocialPulse(socialPulse) {
+        const updatedAt = socialPulse?.updatedAt || (socialPulse ? new Date().toISOString() : null);
+        this.setBatch({
+            socialPulse: socialPulse || null,
+            lastSocialPulseUpdatedAt: updatedAt
+        });
+        logger.info('STATE', '欧美社媒热议数据更新完成', {
+            issueCount: socialPulse?.issueCount || 0,
+            latestKey: socialPulse?.latestKey || null
+        });
+    }
+
+    /**
      * 设置更新状态
      * @param {boolean} isUpdating - 是否正在更新
      * @param {Object} progress - 进度信息
@@ -180,6 +198,8 @@ class StateManager extends EventEmitter {
                 newsData: [],
                 allEnhancedNews: [],
                 summaryArticle: null,
+                socialPulse: null,
+                lastSocialPulseUpdatedAt: null,
                 sourceStats: [],
                 lastUpdated: null,
                 lastSnapshotPublishedAt: null,
@@ -205,7 +225,9 @@ class StateManager extends EventEmitter {
      */
     async saveToFile(filePath = null) {
         try {
-            const hasValidData = this.state.newsData && this.state.newsData.length > 0;
+            const hasValidData =
+                (this.state.newsData && this.state.newsData.length > 0) ||
+                Boolean(this.state.socialPulse && Array.isArray(this.state.socialPulse.issues) && this.state.socialPulse.issues.length > 0);
             if (!hasValidData) {
                 return;
             }

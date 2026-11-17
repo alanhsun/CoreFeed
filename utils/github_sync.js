@@ -28,6 +28,7 @@ const {
     createSummaryArticleObject
 } = require('./editorial_formatter');
 const { buildSnapshotBriefingFiles } = require('./briefing_formatter');
+const { normalizeSocialPulseBundle } = require('../services/social_pulse_service');
 
 const syncHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
@@ -392,16 +393,39 @@ async function applySnapshotToRouter(
         }
     }
 
+    // 2b. 若快照包含欧美社媒热议 (socialPulse)，同步标准化落盘并广播 pulse-updated
+    let appliedPulse = null;
+    if (snapshot.socialPulse && typeof snapshot.socialPulse === 'object') {
+        appliedPulse = normalizeSocialPulseBundle(snapshot.socialPulse, {
+            updatedAt: snapshot.socialPulseUpdatedAt || snapshot.socialPulse.updatedAt || nowIso
+        });
+        if (appliedPulse && Array.isArray(appliedPulse.issues) && appliedPulse.issues.length > 0) {
+            if (stateManager) {
+                stateManager.updateSocialPulse(appliedPulse);
+            }
+            if (config.storage?.socialPulseFile) {
+                await writeJsonFile(config.storage.socialPulseFile, appliedPulse);
+            }
+            if (io) {
+                io.emit('pulse-updated', {
+                    success: true,
+                    socialPulse: appliedPulse
+                });
+            }
+        }
+    }
+
     // 3. 立即将内存状态持久化至 data/state.json，防止 5 分钟定时器覆盖
     if (stateManager) {
         await stateManager.saveToFile();
     }
 
     if (newsAgentService && typeof newsAgentService.emitAgentEvent === 'function') {
+        const pulseNote = appliedPulse?.issueCount ? ` + 欧美社媒热议 (${appliedPulse.issueCount} 期)` : '';
         newsAgentService.emitAgentEvent(
             sourceLabel,
             'completed',
-            `已同步发布 ${normalizedNews.length} 条精选新闻${finalSummary ? '及今日全球要闻深度综述' : ''}`,
+            `已同步发布 ${normalizedNews.length} 条精选新闻${finalSummary ? '及今日全球要闻深度综述' : ''}${pulseNote}`,
             { progress: 100, current: normalizedNews.length, total: normalizedFullPool.length }
         );
     }
@@ -411,6 +435,8 @@ async function applySnapshotToRouter(
         displayedCount: normalizedNews.length,
         totalPoolCount: normalizedFullPool.length,
         hasSummary: Boolean(finalSummary),
+        hasSocialPulse: Boolean(appliedPulse?.issueCount),
+        socialPulseCount: appliedPulse?.issueCount || 0,
         publishedAt: nowIso,
         lastUpdated: nowIso,
         publishedBy
@@ -681,8 +707,20 @@ class GitHubSyncManager {
             const remotePublishedBy = String(data.publishedBy || data.clientId || '').trim() || null;
             const remoteMs = remotePublishedAt ? new Date(remotePublishedAt).getTime() : 0;
 
+            const remotePulseUpdatedAt = data.socialPulseUpdatedAt || data.socialPulse?.updatedAt || null;
+            const localPulseUpdatedAt = this.stateManager
+                ? (this.stateManager.get('lastSocialPulseUpdatedAt') || this.stateManager.get('socialPulse')?.updatedAt || null)
+                : null;
+            const hasNewerPulse = Boolean(
+                data.socialPulse &&
+                Array.isArray(data.socialPulse.issues) &&
+                data.socialPulse.issues.length > 0 &&
+                (!localPulseUpdatedAt || (remotePulseUpdatedAt && remotePulseUpdatedAt !== localPulseUpdatedAt))
+            );
+
             const isSameRemoteSnapshot =
                 localStateIntact &&
+                !hasNewerPulse &&
                 (notModified ||
                     (remoteMs > 0 &&
                         !isNaN(remoteMs) &&

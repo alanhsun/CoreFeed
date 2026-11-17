@@ -122,13 +122,25 @@
         </header>
 
         <main class="space-y-5">
+            <%
+                const ssrPulse = (typeof socialPulse !== 'undefined' && socialPulse && Array.isArray(socialPulse.issues))
+                    ? socialPulse
+                    : null;
+                const ssrPulseIssues = ssrPulse ? ssrPulse.issues : [];
+                const ssrActivePulse = ssrPulseIssues.length > 0
+                    ? (ssrPulseIssues.find(function(it) { return it.key === ssrPulse.latestKey; }) || ssrPulseIssues[0])
+                    : null;
+            %>
             <div class="kami-tabs-bar">
-                <div class="flex flex-wrap items-center gap-2" role="tablist">
-                    <button id="tabBtn-feed" type="button" onclick="app.switchTab('feed')" class="tab-btn active">
-                        <i class="fa-regular fa-newspaper mr-1.5"></i><span id="tabNews">全球要闻</span>
+                <div class="kami-tabs-list" role="tablist" focusgroup="tablist nomemory" aria-label="内容板块切换">
+                    <button id="tabBtn-feed" type="button" role="tab" aria-selected="true" focusgroupstart onclick="app.switchTab('feed')" class="tab-btn active">
+                        <i class="fa-regular fa-newspaper mr-1.5" aria-hidden="true"></i><span id="tabNews">全球要闻</span>
                     </button>
-                    <button id="tabBtn-summary" type="button" onclick="app.switchTab('summary')" class="tab-btn">
-                        <i class="fa-regular fa-compass mr-1.5"></i><span id="tabSummary">今日综述</span>
+                    <button id="tabBtn-summary" type="button" role="tab" aria-selected="false" onclick="app.switchTab('summary')" class="tab-btn">
+                        <i class="fa-regular fa-compass mr-1.5" aria-hidden="true"></i><span id="tabSummary">今日综述</span>
+                    </button>
+                    <button id="tabBtn-pulse" type="button" role="tab" aria-selected="false" onclick="app.switchTab('pulse')" class="tab-btn">
+                        <i class="fa-regular fa-comments mr-1.5" aria-hidden="true"></i><span id="tabPulse">欧美社媒</span><% if (ssrActivePulse && Array.isArray(ssrActivePulse.clusters)) { %><span id="tabPulseCount" class="tab-count-pill tabular-nums"><%= ssrActivePulse.clusters.length %></span><% } else { %><span id="tabPulseCount" class="tab-count-pill tabular-nums hidden"></span><% } %>
                     </button>
                 </div>
 
@@ -141,13 +153,37 @@
                             oninput="app.applyFilters()"
                             class="kami-input w-full text-xs sm:text-sm py-2 pl-3.5 pr-8">
                         <button id="btnClearSearch" type="button" onclick="app.clearSearch()" class="taste-search-clear hidden" title="清空搜索" aria-label="清空搜索">
-                            <i class="fa-solid fa-xmark text-xs"></i>
+                            <i class="fa-solid fa-xmark text-xs" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="pulseToolbarWrapper" class="hidden flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                    <select id="pulseIssueSelect" onchange="app.selectPulseIssue(this.value)" aria-label="切换欧美社媒热议期次" class="kami-input text-xs sm:text-sm py-2 px-3 cursor-pointer tabular-nums">
+                        <% if (ssrPulseIssues.length === 0) { %>
+                            <option value="">暂无已同步期次</option>
+                        <% } else { %>
+                            <% ssrPulseIssues.forEach(function(iss) {
+                                const issModeLabel = iss.mode === 'topic' ? ('专题 · ' + (iss.slug || '深挖')) : '全量日报';
+                                const issSelected = ssrActivePulse && iss.key === ssrActivePulse.key;
+                            %>
+                            <option value="<%= iss.key %>" <%= issSelected ? 'selected' : '' %>><%= iss.date %> · <%= issModeLabel %> (<%= (iss.clusters || []).length %> 簇)</option>
+                            <% }); %>
+                        <% } %>
+                    </select>
+                    <div class="taste-search-box flex-1 sm:w-72">
+                        <input id="pulseSearchInput" type="text" aria-label="搜索社媒议题与神评" placeholder="搜索欧美议题、阵营、神评或社区..."
+                            oninput="app.applyPulseFilters()"
+                            class="kami-input w-full text-xs sm:text-sm py-2 pl-3.5 pr-8">
+                        <button id="btnClearPulseSearch" type="button" onclick="app.clearPulseSearch()" class="taste-search-clear hidden" title="清空社媒搜索" aria-label="清空社媒搜索">
+                            <i class="fa-solid fa-xmark text-xs" aria-hidden="true"></i>
                         </button>
                     </div>
                 </div>
             </div>
 
-            <section id="tabPanel-feed" class="space-y-5">
+            <div id="tabPanelsHost" class="tab-panels-host">
+            <section id="tabPanel-feed" role="tabpanel" aria-labelledby="tabBtn-feed">
                 <div id="newsSection" class="space-y-5">
                     <div class="taste-filter-deck space-y-2.5">
                         <div id="regionFilter">
@@ -431,8 +467,8 @@
                 </div>
             </section>
 
-            <section id="tabPanel-summary" class="hidden space-y-6">
-                <div id="summarySection">
+            <section id="tabPanel-summary" role="tabpanel" aria-labelledby="tabBtn-summary" hidden="until-found">
+                <div id="summarySection" class="space-y-6">
                     <article id="summaryContent" class="kami-card taste-briefing-sheet">
                         <div class="pb-6" style="border-bottom: 1px solid var(--border-hairline);">
                             <h2 id="summaryTitle" class="taste-briefing-title">
@@ -459,6 +495,30 @@
                     </article>
                 </div>
             </section>
+
+            <section id="tabPanel-pulse" role="tabpanel" aria-labelledby="tabBtn-pulse" hidden="until-found">
+                <div id="pulseSection" class="pulse-panel-inner space-y-5">
+                    <% if (!ssrActivePulse) { %>
+                        <div class="kami-card py-14 text-center space-y-3">
+                            <div class="kami-tag mx-auto">欧美社媒热议</div>
+                            <h3 class="text-xl font-bold" style="color: var(--text-primary);">当前暂无已同步的欧美社媒热议日报</h3>
+                            <p class="text-sm max-w-md mx-auto" style="color: var(--text-muted);">每日早间 07:15 自动采集精编过去 24 小时美欧 X、Threads、Reddit 热门讨论并随快照同步；也可点击右上角「同步最新」立即拉取。</p>
+                        </div>
+                    <% } else { %>
+                        <article class="kami-card pulse-lead-sheet">
+                            <div class="pulse-lead-eyebrow">
+                                <span><%= ssrActivePulse.date %> · <%= ssrActivePulse.mode === 'topic' ? ('特定议题深挖 · ' + (ssrActivePulse.slug || '')) : '过去 24 小时欧美三平台全量舆情' %></span>
+                                <span>共 <%= (ssrActivePulse.clusters || []).length %> 个核心议题簇 · X / Threads / Reddit</span>
+                            </div>
+                            <h2 class="pulse-lead-headline"><%= ssrActivePulse.headline %></h2>
+                            <% if (ssrActivePulse.executive_summary && ssrActivePulse.executive_summary.overview) { %>
+                                <p class="pulse-lead-overview"><%= ssrActivePulse.executive_summary.overview %></p>
+                            <% } %>
+                        </article>
+                    <% } %>
+                </div>
+            </section>
+            </div>
         </main>
     </div>
 
@@ -560,9 +620,10 @@
             lastUpdated: <%- JSON.stringify(lastUpdated || null) %>,
             lastPublishedBy: <%- JSON.stringify((typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || null) %>,
             clientId: <%- JSON.stringify((typeof clientId !== 'undefined' && clientId) || null) %>,
-            githubSync: <%- JSON.stringify((typeof githubSync !== 'undefined' && githubSync) || null) %>,
-            schedule: <%- JSON.stringify((typeof schedule !== 'undefined' && schedule) || null) %>,
-            summaryArticle: <%- JSON.stringify(summaryArticle || null) %>
+            githubSync: <%- JSON.stringify((typeof githubSync !== 'undefined' && githubSync) || null).replace(/</g, '\\u003c') %>,
+            schedule: <%- JSON.stringify((typeof schedule !== 'undefined' && schedule) || null).replace(/</g, '\\u003c') %>,
+            summaryArticle: <%- JSON.stringify(summaryArticle || null).replace(/</g, '\\u003c') %>,
+            socialPulse: <%- JSON.stringify((typeof socialPulse !== 'undefined' && socialPulse) || null).replace(/</g, '\\u003c') %>
         };
     </script>
     <script src="/socket.io/socket.io.js"></script>

@@ -13,10 +13,11 @@ const path = require('path');
 const axios = require('axios');
 const https = require('https');
 const config = require('../config');
-const { readJsonFile, isValidUrl, SimpleCache } = require('../utils/helpers');
+const { readJsonFile, writeJsonFile, isValidUrl, SimpleCache } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const { applySnapshotToRouter } = require('../utils/github_sync');
 const { buildAiBriefing } = require('../utils/briefing_formatter');
+const { SocialPulseService, normalizeSocialPulseBundle } = require('../services/social_pulse_service');
 
 const proxyHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
@@ -26,7 +27,8 @@ const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
  */
 function initializeApiRoutes(services, io, stateManager) {
     const router = express.Router();
-    const { newsService, scheduleManager, newsAgentService, githubSyncManager } = services;
+    const { newsService, scheduleManager, newsAgentService, githubSyncManager, socialPulseService } = services;
+    const pulseService = socialPulseService || new SocialPulseService(io, stateManager);
 
     const verifyPublishSecret = (req) => {
         const expectedSecret = String(
@@ -54,7 +56,7 @@ function initializeApiRoutes(services, io, stateManager) {
         return { authorized: true };
     };
 
-    // 启动时加载持久化的今日综述数据
+    // 启动时加载持久化的今日综述与欧美社媒热议数据
     (async () => {
         try {
             const summaryData = await readJsonFile(config.storage.summaryFile);
@@ -63,6 +65,17 @@ function initializeApiRoutes(services, io, stateManager) {
             }
         } catch (err) {
             logger.debug('API', '加载初始综述缓存跳过', err.message);
+        }
+        try {
+            if (!stateManager.get('socialPulse')) {
+                const loadedPulse = await pulseService.loadLocalBundle();
+                if (loadedPulse) {
+                    stateManager.set('socialPulse', loadedPulse, false);
+                    stateManager.set('lastSocialPulseUpdatedAt', loadedPulse.updatedAt || null, false);
+                }
+            }
+        } catch (err) {
+            logger.debug('API', '加载初始社媒热议缓存跳过', err.message);
         }
     })();
 
@@ -240,6 +253,54 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     });
 
+    /**
+     * 接收由外部 Agent 单独同步的欧美社媒热议 (Western Social Pulse) 精编数据包
+     */
+    router.post('/agent/publish-pulse', async (req, res) => {
+        try {
+            const auth = verifyPublishSecret(req);
+            if (!auth.authorized) {
+                return res.status(401).json({
+                    success: false,
+                    message: '未授权的发布请求 (Invalid PUBLISH_SECRET)'
+                });
+            }
+
+            const rawInput = req.body?.socialPulse || req.body;
+            const normalized = normalizeSocialPulseBundle(rawInput);
+            if (!normalized) {
+                return res.status(400).json({
+                    success: false,
+                    message: '无效的 socialPulse 数据包（缺少有效议题簇或期次字段）'
+                });
+            }
+
+            if (config.storage?.socialPulseFile) {
+                await writeJsonFile(config.storage.socialPulseFile, normalized);
+            }
+            if (typeof stateManager.updateSocialPulse === 'function') {
+                stateManager.updateSocialPulse(normalized);
+            } else {
+                stateManager.set('socialPulse', normalized);
+            }
+            await stateManager.saveToFile();
+
+            res.json({
+                success: true,
+                issueCount: normalized.issueCount,
+                latestKey: normalized.latestKey,
+                updatedAt: normalized.updatedAt,
+                message: `成功同步 ${normalized.issueCount} 期欧美社媒热议`
+            });
+        } catch (error) {
+            logger.error('API', '接收欧美社媒热议数据失败', error.message);
+            res.status(500).json({
+                success: false,
+                message: '同步社媒热议失败: ' + error.message
+            });
+        }
+    });
+
     // ==================== 2. 新闻流查询、过滤、分页与今日综述接口 ====================
 
     router.get('/news', (req, res) => {
@@ -324,11 +385,39 @@ function initializeApiRoutes(services, io, stateManager) {
         });
     });
 
+    /**
+     * 获取欧美社媒热议数据包（支持可选 ?key=daily:YYYY-MM-DD 查询指定期次）
+     */
+    router.get('/pulse', async (req, res) => {
+        let pulse = stateManager.get('socialPulse');
+        if (!pulse && config.storage?.socialPulseFile) {
+            const loaded = await readJsonFile(config.storage.socialPulseFile, null);
+            pulse = normalizeSocialPulseBundle(loaded);
+            if (pulse) {
+                stateManager.set('socialPulse', pulse, false);
+            }
+        }
+        const requestedKey = String(req.query.key || '').trim();
+        let selectedIssue = null;
+        if (pulse && Array.isArray(pulse.issues) && pulse.issues.length > 0) {
+            selectedIssue = (requestedKey && pulse.issues.find(it => it.key === requestedKey)) ||
+                pulse.issues.find(it => it.key === pulse.latestKey) ||
+                pulse.issues[0];
+        }
+        res.json({
+            success: true,
+            available: Boolean(pulse && pulse.issues?.length),
+            socialPulse: pulse || null,
+            selectedIssue
+        });
+    });
+
     // ==================== 3. 系统状态、动态配置与定时调度接口 ====================
 
     router.get('/status', (req, res) => {
         const newsData = stateManager.get('newsData') || [];
         const summaryArticle = stateManager.get('summaryArticle');
+        const socialPulse = stateManager.get('socialPulse');
 
         res.json({
             success: true,
@@ -342,6 +431,10 @@ function initializeApiRoutes(services, io, stateManager) {
                 null,
             collectionPhase: stateManager.get('collectionPhase') || 'idle',
             hasSummary: Boolean(summaryArticle),
+            hasSocialPulse: Boolean(socialPulse && socialPulse.issueCount > 0),
+            socialPulseCount: socialPulse?.issueCount || 0,
+            socialPulseLatestKey: socialPulse?.latestKey || null,
+            socialPulseUpdatedAt: socialPulse?.updatedAt || null,
             editorialEngine: 'antigravity-builtin-llm',
             schedule: scheduleManager ? scheduleManager.getStatus() : null,
             githubSync: githubSyncManager ? githubSyncManager.getStatus() : null
@@ -509,6 +602,7 @@ function initializeApiRoutes(services, io, stateManager) {
             const currentNewsData = stateManager.get('newsData') || newsService.getNewsData() || [];
             const currentLastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
             const currentSummary = stateManager.get('summaryArticle');
+            const currentPulse = stateManager.get('socialPulse');
 
             const responseData = {
                 meta: {
@@ -544,6 +638,12 @@ function initializeApiRoutes(services, io, stateManager) {
                     content: currentSummary.htmlContent,
                     wordCount: currentSummary.wordCount,
                     regions: currentSummary.regions
+                } : { available: false },
+                socialPulse: currentPulse ? {
+                    available: true,
+                    updatedAt: currentPulse.updatedAt,
+                    latestKey: currentPulse.latestKey,
+                    issueCount: currentPulse.issueCount
                 } : { available: false }
             };
 

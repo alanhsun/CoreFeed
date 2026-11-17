@@ -21,6 +21,7 @@ const logger = require('../utils/logger');
 const { readJsonFile, writeJsonFile } = require('../utils/helpers');
 const stateManager = require('../services/state_manager');
 const { publishSnapshotToGitHub } = require('../utils/github_sync');
+const { SocialPulseService, normalizeSocialPulseBundle } = require('../services/social_pulse_service');
 const {
     hasChineseText,
     normalizeRegion,
@@ -453,6 +454,30 @@ async function runPublish(customOptions = {}) {
         'antigravity-client'
     ).trim();
 
+    const socialPulseService = new SocialPulseService(null, stateManager);
+    let existingPulse = null;
+    if (customOptions.socialPulse) {
+        existingPulse = normalizeSocialPulseBundle(customOptions.socialPulse);
+        if (existingPulse) {
+            await socialPulseService.saveBundle(existingPulse, { emit: false });
+        }
+    } else if (compiledData.socialPulse) {
+        existingPulse = normalizeSocialPulseBundle(compiledData.socialPulse);
+        if (existingPulse) {
+            await socialPulseService.saveBundle(existingPulse, { emit: false });
+        }
+    } else if (process.env.NODE_ENV !== 'test') {
+        existingPulse = await socialPulseService.syncFromExternalWorkspace({ emit: false });
+        if (!existingPulse) {
+            existingPulse = await socialPulseService.loadLocalBundle();
+        }
+    } else {
+        existingPulse = await socialPulseService.loadLocalBundle();
+        if (existingPulse) {
+            stateManager.updateSocialPulse(existingPulse);
+        }
+    }
+
     const snapshotPayload = {
         version: '2.0',
         publishedAt: nowIso,
@@ -467,7 +492,13 @@ async function runPublish(customOptions = {}) {
         allEnhancedNews: curatedArticles,
         summary: summaryArticle,
         summaryArticle,
-        sourceStats
+        sourceStats,
+        ...(existingPulse && existingPulse.issueCount > 0
+            ? {
+                socialPulse: existingPulse,
+                socialPulseUpdatedAt: existingPulse.updatedAt
+            }
+            : {})
     };
 
     if (opts.snapshotOut) {
@@ -503,8 +534,7 @@ async function runPublish(customOptions = {}) {
     const isUnscopedTestRun =
         process.env.NODE_ENV === 'test' &&
         !opts.repoDir &&
-        !opts.skipGitPush &&
-        process.env.GITHUB_PUSH_ENABLED !== 'true';
+        !opts.skipGitPush;
 
     if (shouldPushToGithub && !isUnscopedTestRun) {
         try {
@@ -572,7 +602,13 @@ async function runPublish(customOptions = {}) {
                     publishedAt: nowIso,
                     lastUpdated: nowIso,
                     publishedBy,
-                    clientId: publishedBy
+                    clientId: publishedBy,
+                    ...(existingPulse && existingPulse.issueCount > 0
+                        ? {
+                            socialPulse: existingPulse,
+                            socialPulseUpdatedAt: existingPulse.updatedAt
+                        }
+                        : {})
                 },
                 {
                     headers,

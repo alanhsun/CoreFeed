@@ -45,6 +45,7 @@ const DATA_DIR = config.storage.dataDir || path.join(ROOT_DIR, 'data');
 const TRACKED_DATA_FILES = [
     'news.json',
     'summary.json',
+    'social_pulse.json',
     'state.json',
     'settings.json',
     'ag_candidates.json',

@@ -27,6 +27,7 @@ const {
 
 const NewsService = require('./services/news_service');
 const NewsAgentService = require('./services/news_agent_service');
+const { SocialPulseService } = require('./services/social_pulse_service');
 const ScheduleManager = require('./utils/schedule_manager');
 const { GitHubSyncManager } = require('./utils/github_sync');
 const initializeApiRoutes = require('./routes/api');
@@ -102,7 +103,8 @@ app.use('/api', (req, res, next) => {
 // 初始化核心服务
 const newsService = new NewsService(io, stateManager);
 const newsAgentService = new NewsAgentService(io, stateManager, newsService);
-const githubSyncManager = new GitHubSyncManager({ newsService, newsAgentService }, io, stateManager);
+const socialPulseService = new SocialPulseService(io, stateManager);
+const githubSyncManager = new GitHubSyncManager({ newsService, newsAgentService, socialPulseService }, io, stateManager);
 const scheduleManager = new ScheduleManager(newsService, io, stateManager, newsAgentService, githubSyncManager);
 
 app.locals.stateManager = stateManager;
@@ -129,6 +131,15 @@ stateManager.on('summaryArticle-changed', ({ value }) => {
     }
 });
 
+stateManager.on('socialPulse-changed', ({ value }) => {
+    if (value) {
+        io.emit('pulse-updated', {
+            success: true,
+            socialPulse: value
+        });
+    }
+});
+
 stateManager.on('updateProgress-changed', ({ value }) => {
     io.emit('update-progress', value);
 });
@@ -136,6 +147,7 @@ stateManager.on('updateProgress-changed', ({ value }) => {
 const services = {
     newsService,
     newsAgentService,
+    socialPulseService,
     scheduleManager,
     githubSyncManager
 };
@@ -163,6 +175,7 @@ app.get('/', (req, res) => {
     const newsData = stateManager.get('newsData') || [];
     const allEnhanced = stateManager.get('allEnhancedNews') || newsData;
     const summaryArticle = stateManager.get('summaryArticle') || null;
+    const socialPulse = stateManager.get('socialPulse') || null;
     const lastUpdated = stateManager.get('lastUpdated');
     const githubSyncStatus = githubSyncManager ? githubSyncManager.getStatus() : null;
     const scheduleStatus = scheduleManager ? scheduleManager.getStatus() : null;
@@ -185,6 +198,7 @@ app.get('/', (req, res) => {
         totalNews: allEnhanced.length || displayNews.length,
         displayedNews: displayNews.length,
         summaryArticle,
+        socialPulse,
         lastUpdated,
         lastPublishedBy,
         clientId,
@@ -226,6 +240,17 @@ async function startServer() {
         stateManager.set('collectionPhase', 'idle', false);
 
         await newsService.loadLocalData();
+
+        if (!stateManager.get('socialPulse')) {
+            const localPulse = await socialPulseService.loadLocalBundle();
+            if (localPulse) {
+                stateManager.updateSocialPulse(localPulse);
+            } else if (process.env.NODE_ENV !== 'test') {
+                try {
+                    await socialPulseService.syncFromExternalWorkspace({ emit: false });
+                } catch (_) {}
+            }
+        }
 
         const currentNewsData = stateManager.get('newsData');
         if (!currentNewsData || currentNewsData.length === 0) {
