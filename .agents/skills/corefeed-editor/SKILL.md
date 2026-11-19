@@ -108,10 +108,22 @@ node scripts/ag-harvest.js --inspect 1,4,7,11,15,19
 }
 ```
 
-2. 执行校验与快照发布命令：
+2. 先做本地全中文契约校验与落盘（不提前推送远端，防止多次触发快照同步）：
+
+```bash
+node scripts/ag-publish.js --local-only --no-github
+```
+
+3. 调用 `/qwen3-tts-colab`（详见 `C:\Users\alan\.gemini\config\skills\qwen3-tts-colab\SKILL.md`）对应的双主播语音播报合成脚本，在单次拉起的 Google Colab `L4` 实例上以 `林远 (Lin_Yuan)`（定制克制标准普通话新闻男主播，基于 `config/voices/anchor_male_news.wav` ICL 锁音色播报深度综述评论）+ `Serena`（前 10 条重点要闻精播）交替合成并拼接生成 `data/audio/briefing-news.mp3` 与 `data/audio_broadcast.json`（自动核验 `0.0 CU/hr` 退机防扣费）：
+
+```bash
+npm run ag:tts:news
+```
+
+4. 执行最终快照与音频联合发布命令：
 
 ```bash
 npm run ag:publish
 ```
 
-- `scripts/ag-publish.js` 会严格校验每篇报道的中文标题、导语、要点、全文译文段落以及深度综述完整性（任何未翻译字段均会报错拦截），更新本地 `data/{news,summary,state}.json`，并通过 Git Plumbing 将单提交快照推送至远端 `ag-snapshot/latest.json`，供软路由自动或一键同步展示。
+- `scripts/ag-publish.js` 会严格校验每篇报道的中文标题、导语、要点、全文译文段落以及深度综述完整性（任何未翻译字段均会报错拦截），更新本地 `data/{news,summary,audio_broadcast,state}.json`，并通过 Git Plumbing 将单提交快照（含 `latest.json`、`briefing.json`、`briefing.md` 及双主播语音 `briefing-news.mp3` / `briefing-pulse.mp3`）一并推送至远端 `ag-snapshot` 分支，供软路由与网站顶部播放器同步展示与收听。

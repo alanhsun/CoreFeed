@@ -20,6 +20,8 @@ class StateManager extends EventEmitter {
             summaryArticle: null,
             socialPulse: null,
             lastSocialPulseUpdatedAt: null,
+            audioBroadcast: null,
+            lastAudioBroadcastUpdatedAt: null,
             sourceStats: [],
             lastUpdated: null,
             lastSnapshotPublishedAt: null,
@@ -131,15 +133,31 @@ class StateManager extends EventEmitter {
      * 更新欧美社媒热议数据
      * @param {Object|null} socialPulse - 标准化后的欧美社媒热议数据包
      */
-    updateSocialPulse(socialPulse) {
+    updateSocialPulse(socialPulse, emit = true) {
         const updatedAt = socialPulse?.updatedAt || (socialPulse ? new Date().toISOString() : null);
         this.setBatch({
             socialPulse: socialPulse || null,
             lastSocialPulseUpdatedAt: updatedAt
-        });
+        }, emit);
         logger.info('STATE', '欧美社媒热议数据更新完成', {
             issueCount: socialPulse?.issueCount || 0,
             latestKey: socialPulse?.latestKey || null
+        });
+    }
+
+    /**
+     * 更新双主播语音播报数据
+     * @param {Object|null} audioBroadcast - 标准化后的语音播报元数据对象
+     * @param {boolean} emit - 是否广播事件
+     */
+    updateAudioBroadcast(audioBroadcast, emit = true) {
+        const updatedAt = audioBroadcast?.updatedAt || (audioBroadcast ? new Date().toISOString() : null);
+        this.setBatch({
+            audioBroadcast: audioBroadcast || null,
+            lastAudioBroadcastUpdatedAt: updatedAt
+        }, emit);
+        logger.info('STATE', '语音播报数据更新完成', {
+            tracks: audioBroadcast?.tracks ? Object.keys(audioBroadcast.tracks) : []
         });
     }
 
@@ -200,6 +218,8 @@ class StateManager extends EventEmitter {
                 summaryArticle: null,
                 socialPulse: null,
                 lastSocialPulseUpdatedAt: null,
+                audioBroadcast: null,
+                lastAudioBroadcastUpdatedAt: null,
                 sourceStats: [],
                 lastUpdated: null,
                 lastSnapshotPublishedAt: null,
@@ -227,7 +247,8 @@ class StateManager extends EventEmitter {
         try {
             const hasValidData =
                 (this.state.newsData && this.state.newsData.length > 0) ||
-                Boolean(this.state.socialPulse && Array.isArray(this.state.socialPulse.issues) && this.state.socialPulse.issues.length > 0);
+                Boolean(this.state.socialPulse && Array.isArray(this.state.socialPulse.issues) && this.state.socialPulse.issues.length > 0) ||
+                Boolean(this.state.audioBroadcast && this.state.audioBroadcast.tracks && Object.keys(this.state.audioBroadcast.tracks).length > 0);
             if (!hasValidData) {
                 return;
             }
@@ -297,6 +318,7 @@ class StateManager extends EventEmitter {
             newsCount: this.state.newsData?.length || 0,
             allEnhancedCount: this.state.allEnhancedNews?.length || 0,
             hasSummary: !!this.state.summaryArticle,
+            hasAudioBroadcast: Boolean(this.state.audioBroadcast?.trackCount),
             lastUpdated: this.state.lastUpdated,
             lastSnapshotPublishedAt: this.state.lastSnapshotPublishedAt || null,
             lastPublishedBy: this.state.lastPublishedBy || null,

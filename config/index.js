@@ -183,10 +183,12 @@ function buildConfig() {
         // 数据存储配置
         storage: {
             dataDir: path.join(__dirname, '..', 'data'),
+            audioDir: path.join(__dirname, '..', 'data', 'audio'),
             newsFile: path.join(__dirname, '..', 'data', 'news.json'),
             stateFile: path.join(__dirname, '..', 'data', 'state.json'),
             summaryFile: path.join(__dirname, '..', 'data', 'summary.json'),
             socialPulseFile: path.join(__dirname, '..', 'data', 'social_pulse.json'),
+            audioBroadcastFile: path.join(__dirname, '..', 'data', 'audio_broadcast.json'),
             settingsFile: SETTINGS_FILE_PATH
         },
 

@@ -28,6 +28,7 @@ const {
 const NewsService = require('./services/news_service');
 const NewsAgentService = require('./services/news_agent_service');
 const { SocialPulseService } = require('./services/social_pulse_service');
+const { AudioBroadcastService } = require('./services/audio_broadcast_service');
 const ScheduleManager = require('./utils/schedule_manager');
 const { GitHubSyncManager } = require('./utils/github_sync');
 const initializeApiRoutes = require('./routes/api');
@@ -89,7 +90,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 }));
 
 app.use('/api', (req, res, next) => {
-    if (req.path === '/image-proxy') {
+    if (req.path === '/image-proxy' || req.path.startsWith('/audio/')) {
         return next();
     }
     res.set({
@@ -104,7 +105,12 @@ app.use('/api', (req, res, next) => {
 const newsService = new NewsService(io, stateManager);
 const newsAgentService = new NewsAgentService(io, stateManager, newsService);
 const socialPulseService = new SocialPulseService(io, stateManager);
-const githubSyncManager = new GitHubSyncManager({ newsService, newsAgentService, socialPulseService }, io, stateManager);
+const audioBroadcastService = new AudioBroadcastService(io, stateManager);
+const githubSyncManager = new GitHubSyncManager(
+    { newsService, newsAgentService, socialPulseService, audioBroadcastService },
+    io,
+    stateManager
+);
 const scheduleManager = new ScheduleManager(newsService, io, stateManager, newsAgentService, githubSyncManager);
 
 app.locals.stateManager = stateManager;
@@ -140,6 +146,15 @@ stateManager.on('socialPulse-changed', ({ value }) => {
     }
 });
 
+stateManager.on('audioBroadcast-changed', ({ value }) => {
+    if (value) {
+        io.emit('audio-updated', {
+            success: true,
+            audioBroadcast: value
+        });
+    }
+});
+
 stateManager.on('updateProgress-changed', ({ value }) => {
     io.emit('update-progress', value);
 });
@@ -148,6 +163,7 @@ const services = {
     newsService,
     newsAgentService,
     socialPulseService,
+    audioBroadcastService,
     scheduleManager,
     githubSyncManager
 };
@@ -176,6 +192,7 @@ app.get('/', (req, res) => {
     const allEnhanced = stateManager.get('allEnhancedNews') || newsData;
     const summaryArticle = stateManager.get('summaryArticle') || null;
     const socialPulse = stateManager.get('socialPulse') || null;
+    const audioBroadcast = stateManager.get('audioBroadcast') || null;
     const lastUpdated = stateManager.get('lastUpdated');
     const githubSyncStatus = githubSyncManager ? githubSyncManager.getStatus() : null;
     const scheduleStatus = scheduleManager ? scheduleManager.getStatus() : null;
@@ -199,6 +216,7 @@ app.get('/', (req, res) => {
         displayedNews: displayNews.length,
         summaryArticle,
         socialPulse,
+        audioBroadcast,
         lastUpdated,
         lastPublishedBy,
         clientId,
@@ -249,6 +267,13 @@ async function startServer() {
                 try {
                     await socialPulseService.syncFromExternalWorkspace({ emit: false });
                 } catch (_) {}
+            }
+        }
+
+        if (!stateManager.get('audioBroadcast')) {
+            const localAudio = await audioBroadcastService.loadLocalBundle();
+            if (localAudio) {
+                stateManager.updateAudioBroadcast(localAudio, false);
             }
         }
 

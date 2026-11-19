@@ -46,6 +46,7 @@ const TRACKED_DATA_FILES = [
     'news.json',
     'summary.json',
     'social_pulse.json',
+    'audio_broadcast.json',
     'state.json',
     'settings.json',
     'ag_candidates.json',

@@ -18,6 +18,11 @@ const logger = require('../utils/logger');
 const { applySnapshotToRouter } = require('../utils/github_sync');
 const { buildAiBriefing } = require('../utils/briefing_formatter');
 const { SocialPulseService, normalizeSocialPulseBundle } = require('../services/social_pulse_service');
+const {
+    VALID_TRACK_KEYS,
+    AudioBroadcastService,
+    normalizeAudioBroadcastBundle
+} = require('../services/audio_broadcast_service');
 
 const proxyHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
@@ -27,8 +32,9 @@ const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
  */
 function initializeApiRoutes(services, io, stateManager) {
     const router = express.Router();
-    const { newsService, scheduleManager, newsAgentService, githubSyncManager, socialPulseService } = services;
+    const { newsService, scheduleManager, newsAgentService, githubSyncManager, socialPulseService, audioBroadcastService } = services;
     const pulseService = socialPulseService || new SocialPulseService(io, stateManager);
+    const audioService = audioBroadcastService || new AudioBroadcastService(io, stateManager);
 
     const verifyPublishSecret = (req) => {
         const expectedSecret = String(
@@ -76,6 +82,17 @@ function initializeApiRoutes(services, io, stateManager) {
             }
         } catch (err) {
             logger.debug('API', '加载初始社媒热议缓存跳过', err.message);
+        }
+        try {
+            if (!stateManager.get('audioBroadcast')) {
+                const loadedAudio = await audioService.loadLocalBundle();
+                if (loadedAudio) {
+                    stateManager.set('audioBroadcast', loadedAudio, false);
+                    stateManager.set('lastAudioBroadcastUpdatedAt', loadedAudio.updatedAt || null, false);
+                }
+            }
+        } catch (err) {
+            logger.debug('API', '加载初始语音播报缓存跳过', err.message);
         }
     })();
 
@@ -230,8 +247,10 @@ function initializeApiRoutes(services, io, stateManager) {
                 stateManager,
                 newsAgentService,
                 newsService,
+                audioBroadcastService: audioService,
                 io,
-                sourceLabel: 'Antigravity 客户端'
+                sourceLabel: 'Antigravity 客户端',
+                syncAudioFiles: false
             });
 
             res.json({
@@ -297,6 +316,74 @@ function initializeApiRoutes(services, io, stateManager) {
             res.status(500).json({
                 success: false,
                 message: '同步社媒热议失败: ' + error.message
+            });
+        }
+    });
+
+    /**
+     * 接收由外部 Agent 实时热推的双主播语音播报元数据与二进制音频 (POST /api/agent/publish-audio)
+     */
+    router.post('/agent/publish-audio', async (req, res) => {
+        try {
+            const auth = verifyPublishSecret(req);
+            if (!auth.authorized) {
+                return res.status(401).json({
+                    success: false,
+                    message: '未授权的发布请求 (Invalid PUBLISH_SECRET)'
+                });
+            }
+
+            const body = req.body || {};
+            let updatedBundle = null;
+
+            if (body.track && body.trackMeta) {
+                const cleanKey = String(body.track).replace(/\.mp3$/i, '').trim().toLowerCase();
+                if (!VALID_TRACK_KEYS.includes(cleanKey)) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `不支持的语音播报音轨标识: ${body.track}`
+                    });
+                }
+                const audioBuf = (typeof body.audioBase64 === 'string' && body.audioBase64.trim())
+                    ? Buffer.from(body.audioBase64.trim(), 'base64')
+                    : null;
+                updatedBundle = await audioService.mergeTrack(cleanKey, body.trackMeta, audioBuf, { emit: true });
+            } else if (body.audioBroadcast) {
+                const filesMap = (body.files && typeof body.files === 'object') ? body.files : {};
+                for (const [k, b64] of Object.entries(filesMap)) {
+                    const cleanKey = String(k).replace(/\.mp3$/i, '').trim().toLowerCase();
+                    if (VALID_TRACK_KEYS.includes(cleanKey) && typeof b64 === 'string' && b64.trim()) {
+                        const targetPath = audioService.getTrackAudioPath(cleanKey);
+                        if (targetPath) {
+                            fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+                            fs.writeFileSync(targetPath, Buffer.from(b64.trim(), 'base64'));
+                        }
+                    }
+                }
+                updatedBundle = await audioService.saveBundle(body.audioBroadcast, { emit: true });
+            }
+
+            if (!updatedBundle) {
+                return res.status(400).json({
+                    success: false,
+                    message: '无效的语音播报数据包（缺少有效 trackMeta 或 audioBroadcast）'
+                });
+            }
+
+            await stateManager.saveToFile();
+            res.json({
+                success: true,
+                trackCount: updatedBundle.trackCount,
+                updatedAt: updatedBundle.updatedAt,
+                tracks: Object.keys(updatedBundle.tracks),
+                audioBroadcast: updatedBundle,
+                message: `成功同步双主播语音播报 (${Object.keys(updatedBundle.tracks).join(', ')})`
+            });
+        } catch (error) {
+            logger.error('API', '接收语音播报数据失败', error.message);
+            res.status(500).json({
+                success: false,
+                message: '同步语音播报失败: ' + error.message
             });
         }
     });
@@ -412,12 +499,86 @@ function initializeApiRoutes(services, io, stateManager) {
         });
     });
 
+    /**
+     * 获取双主播语音播报元数据与章节清单 (GET /api/audio)
+     */
+    router.get('/audio', async (req, res) => {
+        let bundle = stateManager.get('audioBroadcast');
+        if (!bundle) {
+            bundle = await audioService.loadLocalBundle();
+            if (bundle) {
+                stateManager.set('audioBroadcast', bundle, false);
+                stateManager.set('lastAudioBroadcastUpdatedAt', bundle.updatedAt || null, false);
+            }
+        }
+        res.json({
+            success: true,
+            available: Boolean(bundle && bundle.trackCount > 0),
+            audioBroadcast: bundle || null
+        });
+    });
+
+    /**
+     * 流式提供双主播播报 MP3 音频，原生支持 HTTP Range (206 Partial Content) 进度条拖拽
+     * 支持 /api/audio/news(.mp3) 与 /api/audio/pulse(.mp3)
+     */
+    router.get('/audio/:track', async (req, res, next) => {
+        try {
+            const rawParam = String(req.params.track || '').trim().toLowerCase();
+            const cleanKey = rawParam.replace(/\.mp3$/i, '');
+            if (!VALID_TRACK_KEYS.includes(cleanKey)) {
+                return res.status(404).json({
+                    success: false,
+                    message: '不存在的语音播报音轨'
+                });
+            }
+
+            let bundle = stateManager.get('audioBroadcast');
+            if (!bundle) {
+                bundle = await audioService.loadLocalBundle();
+                if (bundle) {
+                    stateManager.set('audioBroadcast', bundle, false);
+                }
+            }
+
+            const localAudioPath = await audioService.ensureLocalAudioFile(cleanKey, { bundle });
+            if (!localAudioPath || !fs.existsSync(localAudioPath)) {
+                return res.status(404).json({
+                    success: false,
+                    message: '当前音轨音频尚未生成或同步'
+                });
+            }
+
+            return res.sendFile(path.resolve(localAudioPath), {
+                acceptRanges: true,
+                cacheControl: true,
+                maxAge: '24h',
+                headers: {
+                    'Content-Type': 'audio/mpeg'
+                }
+            }, (sendErr) => {
+                if (sendErr && !res.headersSent) {
+                    next(sendErr);
+                }
+            });
+        } catch (error) {
+            logger.error('API', '读取语音播报音频流失败', error.message);
+            if (!res.headersSent) {
+                res.status(500).json({
+                    success: false,
+                    message: '读取音频流失败: ' + error.message
+                });
+            }
+        }
+    });
+
     // ==================== 3. 系统状态、动态配置与定时调度接口 ====================
 
     router.get('/status', (req, res) => {
         const newsData = stateManager.get('newsData') || [];
         const summaryArticle = stateManager.get('summaryArticle');
         const socialPulse = stateManager.get('socialPulse');
+        const audioBroadcast = stateManager.get('audioBroadcast');
 
         res.json({
             success: true,
@@ -435,6 +596,9 @@ function initializeApiRoutes(services, io, stateManager) {
             socialPulseCount: socialPulse?.issueCount || 0,
             socialPulseLatestKey: socialPulse?.latestKey || null,
             socialPulseUpdatedAt: socialPulse?.updatedAt || null,
+            hasAudioBroadcast: Boolean(audioBroadcast && audioBroadcast.trackCount > 0),
+            audioTrackCount: audioBroadcast?.trackCount || 0,
+            audioUpdatedAt: audioBroadcast?.updatedAt || null,
             editorialEngine: 'antigravity-builtin-llm',
             schedule: scheduleManager ? scheduleManager.getStatus() : null,
             githubSync: githubSyncManager ? githubSyncManager.getStatus() : null
@@ -603,6 +767,7 @@ function initializeApiRoutes(services, io, stateManager) {
             const currentLastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
             const currentSummary = stateManager.get('summaryArticle');
             const currentPulse = stateManager.get('socialPulse');
+            const currentAudio = stateManager.get('audioBroadcast');
 
             const responseData = {
                 meta: {
@@ -644,6 +809,12 @@ function initializeApiRoutes(services, io, stateManager) {
                     updatedAt: currentPulse.updatedAt,
                     latestKey: currentPulse.latestKey,
                     issueCount: currentPulse.issueCount
+                } : { available: false },
+                audioBroadcast: currentAudio ? {
+                    available: true,
+                    updatedAt: currentAudio.updatedAt,
+                    trackCount: currentAudio.trackCount,
+                    tracks: Object.keys(currentAudio.tracks || {})
                 } : { available: false }
             };
 

@@ -130,7 +130,191 @@
                 const ssrActivePulse = ssrPulseIssues.length > 0
                     ? (ssrPulseIssues.find(function(it) { return it.key === ssrPulse.latestKey; }) || ssrPulseIssues[0])
                     : null;
+
+                const ssrAudioBundle = (typeof audioBroadcast !== 'undefined' && audioBroadcast && audioBroadcast.tracks)
+                    ? audioBroadcast
+                    : null;
+                const ssrAudioTracks = ssrAudioBundle ? ssrAudioBundle.tracks : {};
+                const ssrDefaultTrackKey = (ssrAudioBundle && ssrAudioTracks[ssrAudioBundle.defaultTrack])
+                    ? ssrAudioBundle.defaultTrack
+                    : (ssrAudioTracks.news ? 'news' : (ssrAudioTracks.pulse ? 'pulse' : 'news'));
+                const ssrActiveAudioTrack = ssrAudioTracks[ssrDefaultTrackKey] || null;
+
+                function formatAudioClockSSR(secInput) {
+                    const total = Math.max(0, Math.round(Number(secInput) || 0));
+                    const m = Math.floor(total / 60);
+                    const s = total % 60;
+                    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+                }
             %>
+            <div id="broadcastPlayerDeck" class="kami-card broadcast-deck <%= ssrActiveAudioTrack ? '' : 'hidden' %>">
+                <div class="broadcast-eyebrow">
+                    <div class="broadcast-eyebrow-left">
+                        <span id="broadcastSignalBadge" class="broadcast-signal-badge">
+                            <span class="broadcast-signal-dot" aria-hidden="true"></span>
+                            <span>聚核电台</span>
+                        </span>
+                        <span class="kami-meta-dot" aria-hidden="true">/</span>
+                        <span id="broadcastActiveSpeaker" class="broadcast-speaker-meta">
+                            <%= ssrActiveAudioTrack ? '林远 & Serena · 双主播交替播报' : '双主播语音播报' %>
+                        </span>
+                    </div>
+
+                    <div id="broadcastTrackSwitcher" class="broadcast-track-group" role="group" aria-label="切换播报频道">
+                        <button id="btnTrack-news"
+                                type="button"
+                                onclick="app.selectBroadcastTrack('news')"
+                                aria-pressed="<%= ssrDefaultTrackKey === 'news' ? 'true' : 'false' %>"
+                                <%= ssrAudioTracks.news ? '' : 'aria-disabled="true"' %>
+                                class="broadcast-track-pill <%= ssrAudioTracks.news ? '' : 'hidden' %>">
+                            <span>全球要闻播报</span>
+                            <span id="trackDur-news" class="tabular-nums broadcast-track-dur"><%= ssrAudioTracks.news ? formatAudioClockSSR(ssrAudioTracks.news.durationSec) : '' %></span>
+                        </button>
+                        <button id="btnTrack-pulse"
+                                type="button"
+                                onclick="app.selectBroadcastTrack('pulse')"
+                                aria-pressed="<%= ssrDefaultTrackKey === 'pulse' ? 'true' : 'false' %>"
+                                <%= ssrAudioTracks.pulse ? '' : 'aria-disabled="true"' %>
+                                class="broadcast-track-pill <%= ssrAudioTracks.pulse ? '' : 'hidden' %>">
+                            <span>欧美社媒早班车</span>
+                            <span id="trackDur-pulse" class="tabular-nums broadcast-track-dur"><%= ssrAudioTracks.pulse ? formatAudioClockSSR(ssrAudioTracks.pulse.durationSec) : '' %></span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="broadcast-main-row">
+                    <button id="btnBroadcastPlay"
+                            type="button"
+                            onclick="app.toggleBroadcastPlay()"
+                            class="broadcast-play-btn"
+                            aria-label="播放本期语音播报"
+                            title="播放 / 暂停">
+                        <i id="iconBroadcastPlay" class="fa-solid fa-play" aria-hidden="true"></i>
+                    </button>
+
+                    <div class="broadcast-center-stack">
+                        <div class="broadcast-title-row">
+                            <h2 id="broadcastTitle" class="broadcast-title">
+                                <%= ssrActiveAudioTrack ? ssrActiveAudioTrack.title : '聚核双主播语音播报' %>
+                            </h2>
+                            <p id="broadcastSubtitle" class="broadcast-subtitle">
+                                <%= ssrActiveAudioTrack ? (ssrActiveAudioTrack.subtitle || '') : '' %>
+                            </p>
+                        </div>
+
+                        <div class="broadcast-scrubber-row">
+                            <span id="broadcastCurrentTime" class="broadcast-time tabular-nums">00:00</span>
+                            <label for="broadcastSeekSlider" class="visually-hidden">播报播放进度</label>
+                            <input id="broadcastSeekSlider"
+                                   type="range"
+                                   min="0"
+                                   max="<%= ssrActiveAudioTrack && ssrActiveAudioTrack.durationSec > 0 ? ssrActiveAudioTrack.durationSec : 100 %>"
+                                   step="0.1"
+                                   value="0"
+                                   aria-valuetext="已播放 0 分 0 秒"
+                                   class="broadcast-range-slider">
+                            <span id="broadcastTotalTime" class="broadcast-time tabular-nums">
+                                <%= ssrActiveAudioTrack ? formatAudioClockSSR(ssrActiveAudioTrack.durationSec) : '00:00' %>
+                            </span>
+                        </div>
+                    </div>
+
+                    <div id="broadcastAuxToolbar"
+                         class="broadcast-toolbar"
+                         role="toolbar"
+                         focusgroup="toolbar wrap"
+                         aria-label="播报辅助控制"
+                         aria-controls="broadcastAudioEl">
+                        <div class="broadcast-toolbar-group" role="group" aria-label="快进与倍速">
+                            <button id="btnBroadcastRewind"
+                                    type="button"
+                                    onclick="app.seekBroadcastRelative(-15)"
+                                    class="broadcast-ctrl-btn"
+                                    aria-label="快退 15 秒"
+                                    title="快退 15 秒">
+                                <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
+                                <span class="broadcast-ctrl-sub tabular-nums">15</span>
+                            </button>
+                            <button id="btnBroadcastForward"
+                                    type="button"
+                                    onclick="app.seekBroadcastRelative(15)"
+                                    class="broadcast-ctrl-btn"
+                                    aria-label="快进 15 秒"
+                                    title="快进 15 秒">
+                                <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+                                <span class="broadcast-ctrl-sub tabular-nums">15</span>
+                            </button>
+                            <button id="btnBroadcastSpeed"
+                                    type="button"
+                                    onclick="app.cycleBroadcastSpeed()"
+                                    class="broadcast-ctrl-btn broadcast-speed-btn tabular-nums"
+                                    aria-label="切换播放倍速，当前 1.0 倍速"
+                                    title="切换播放倍速">1.0×</button>
+                            <button id="btnBroadcastMute"
+                                    type="button"
+                                    onclick="app.toggleBroadcastMute()"
+                                    aria-pressed="false"
+                                    class="broadcast-ctrl-btn"
+                                    aria-label="静音"
+                                    title="静音 / 取消静音">
+                                <i id="iconBroadcastMute" class="fa-solid fa-volume-high" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                        <span role="separator" aria-orientation="vertical" class="broadcast-toolbar-sep"></span>
+                        <a id="linkBroadcastDownload"
+                           href="<%= ssrActiveAudioTrack ? ssrActiveAudioTrack.audioUrl : '#' %>"
+                           download="<%= ssrActiveAudioTrack ? ssrActiveAudioTrack.fileName : 'corefeed-briefing.mp3' %>"
+                           class="broadcast-ctrl-btn"
+                           aria-label="下载本期 MP3 播音文件"
+                           title="下载 MP3 音频">
+                            <i class="fa-solid fa-arrow-down" aria-hidden="true"></i>
+                        </a>
+                    </div>
+                </div>
+
+                <div id="broadcastChaptersBar" class="broadcast-chapters-bar <%= (ssrActiveAudioTrack && Array.isArray(ssrActiveAudioTrack.chapters) && ssrActiveAudioTrack.chapters.length > 0) ? '' : 'hidden' %>">
+                    <% if (ssrActiveAudioTrack && Array.isArray(ssrActiveAudioTrack.chapters)) { %>
+                        <% ssrActiveAudioTrack.chapters.forEach(function(ch, chIdx) { %>
+                            <button type="button"
+                                    data-chapter-idx="<%= chIdx %>"
+                                    onclick="app.seekBroadcastToChapter(<%= chIdx %>)"
+                                    class="broadcast-chapter-chip"
+                                    <%= chIdx === 0 ? 'aria-current="step"' : '' %>>
+                                <span class="broadcast-chapter-num tabular-nums"><%= String(ch.index || (chIdx + 1)).padStart(2, '0') %></span>
+                                <span><%= ch.title %></span>
+                                <span class="broadcast-chapter-host"><%= ch.speaker === 'Lin_Yuan' ? '林远' : (ch.speaker === 'Uncle_Fu' ? '傅老师' : 'Serena') %></span>
+                                <span class="broadcast-chapter-time tabular-nums"><%= formatAudioClockSSR(ch.startSec) %></span>
+                            </button>
+                        <% }); %>
+                    <% } %>
+                </div>
+
+                <audio id="broadcastAudioEl"
+                       preload="none"
+                       src="<%= ssrActiveAudioTrack ? ssrActiveAudioTrack.audioUrl : '' %>"
+                       aria-details="broadcastTranscriptDetails"></audio>
+
+                <details id="broadcastTranscriptDetails" class="broadcast-transcript-details">
+                    <summary class="broadcast-transcript-summary">展开本期双主播逐字播报稿</summary>
+                    <div id="broadcastTranscriptBody" class="broadcast-transcript-body">
+                        <% if (ssrActiveAudioTrack && Array.isArray(ssrActiveAudioTrack.chapters)) { %>
+                            <% ssrActiveAudioTrack.chapters.forEach(function(ch, chIdx) { %>
+                                <div class="broadcast-script-turn">
+                                    <div class="broadcast-script-head">
+                                        <button type="button" onclick="app.seekBroadcastToChapter(<%= chIdx %>)" class="broadcast-script-seek tabular-nums">
+                                            <%= formatAudioClockSSR(ch.startSec) %>
+                                        </button>
+                                        <strong class="broadcast-script-speaker"><%= ch.speakerLabel || ch.speaker %></strong>
+                                        <span class="broadcast-script-ch-title"><%= ch.title %></span>
+                                    </div>
+                                    <p class="broadcast-script-text"><%= ch.text %></p>
+                                </div>
+                            <% }); %>
+                        <% } %>
+                    </div>
+                </details>
+            </div>
+            <p id="broadcastLiveStatus" role="status" class="visually-hidden"></p>
             <div class="kami-tabs-bar">
                 <div class="kami-tabs-list" role="tablist" focusgroup="tablist nomemory" aria-label="内容板块切换">
                     <button id="tabBtn-feed" type="button" role="tab" aria-selected="true" focusgroupstart onclick="app.switchTab('feed')" class="tab-btn active">
@@ -470,17 +654,26 @@
             <section id="tabPanel-summary" role="tabpanel" aria-labelledby="tabBtn-summary" hidden="until-found">
                 <div id="summarySection" class="space-y-6">
                     <article id="summaryContent" class="kami-card taste-briefing-sheet">
-                        <div class="pb-6" style="border-bottom: 1px solid var(--border-hairline);">
-                            <h2 id="summaryTitle" class="taste-briefing-title">
-                                <%= summaryArticle ? summaryArticle.title : '今日全球要闻深度综述' %>
-                            </h2>
-                            <p id="summaryMeta" class="text-xs mt-2.5 tabular-nums" style="color: var(--text-muted); font-family: var(--font-mono);">
-                                <% if (summaryArticle) { %>
-                                    生成时间：<%= new Date(summaryArticle.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) %> / 涵盖 <%= (summaryArticle.regions || []).join('、') %>（<%= summaryArticle.wordCount || 0 %> 字）
-                                <% } else { %>
-                                    点击右上角「同步最新」获取最新一期全球要闻深度综述
-                                <% } %>
-                            </p>
+                        <div class="pb-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4" style="border-bottom: 1px solid var(--border-hairline);">
+                            <div>
+                                <h2 id="summaryTitle" class="taste-briefing-title">
+                                    <%= summaryArticle ? summaryArticle.title : '今日全球要闻深度综述' %>
+                                </h2>
+                                <p id="summaryMeta" class="text-xs mt-2.5 tabular-nums" style="color: var(--text-muted); font-family: var(--font-mono);">
+                                    <% if (summaryArticle) { %>
+                                        生成时间：<%= new Date(summaryArticle.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) %> / 涵盖 <%= (summaryArticle.regions || []).join('、') %>（<%= summaryArticle.wordCount || 0 %> 字）
+                                    <% } else { %>
+                                        点击右上角「同步最新」获取最新一期全球要闻深度综述
+                                    <% } %>
+                                </p>
+                            </div>
+                            <button id="btnSummaryListenQuick"
+                                    type="button"
+                                    onclick="app.playBroadcastTrack('news', 1)"
+                                    class="btn-ghost flex-shrink-0 <%= (ssrAudioTracks && ssrAudioTracks.news) ? '' : 'hidden' %>">
+                                <i class="fa-solid fa-headphones text-xs" aria-hidden="true"></i>
+                                <span>收听深度综述播报</span>
+                            </button>
                         </div>
 
                         <div id="summaryBody" class="summary-content mt-8">
@@ -623,7 +816,8 @@
             githubSync: <%- JSON.stringify((typeof githubSync !== 'undefined' && githubSync) || null).replace(/</g, '\\u003c') %>,
             schedule: <%- JSON.stringify((typeof schedule !== 'undefined' && schedule) || null).replace(/</g, '\\u003c') %>,
             summaryArticle: <%- JSON.stringify(summaryArticle || null).replace(/</g, '\\u003c') %>,
-            socialPulse: <%- JSON.stringify((typeof socialPulse !== 'undefined' && socialPulse) || null).replace(/</g, '\\u003c') %>
+            socialPulse: <%- JSON.stringify((typeof socialPulse !== 'undefined' && socialPulse) || null).replace(/</g, '\\u003c') %>,
+            audioBroadcast: <%- JSON.stringify((typeof audioBroadcast !== 'undefined' && audioBroadcast) || null).replace(/</g, '\\u003c') %>
         };
     </script>
     <script src="/socket.io/socket.io.js"></script>

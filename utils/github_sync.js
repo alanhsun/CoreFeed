@@ -29,6 +29,11 @@ const {
 } = require('./editorial_formatter');
 const { buildSnapshotBriefingFiles } = require('./briefing_formatter');
 const { normalizeSocialPulseBundle } = require('../services/social_pulse_service');
+const {
+    TRACK_SNAPSHOT_FILENAMES,
+    AudioBroadcastService,
+    normalizeAudioBroadcastBundle
+} = require('../services/audio_broadcast_service');
 
 const syncHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
@@ -142,6 +147,49 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
         }
     }
 
+    // 1b. 若快照包含双主播语音播报 (audioBroadcast)，将 MP3 二进制文件作为顶层 Blob 写入 ag-snapshot 树
+    const audioFilesCommitted = [];
+    const audioTracks = (normalizedPayload.audioBroadcast && typeof normalizedPayload.audioBroadcast.tracks === 'object')
+        ? normalizedPayload.audioBroadcast.tracks
+        : {};
+    const defaultRepoRoot = path.resolve(__dirname, '..');
+    const isDefaultRepo = path.resolve(repoDir) === defaultRepoRoot;
+    const primaryAudioDir = options.audioDir
+        ? path.resolve(options.audioDir)
+        : (isDefaultRepo && config.storage?.audioDir ? config.storage.audioDir : path.join(repoDir, 'data', 'audio'));
+
+    for (const [trackKey, trackFileName] of Object.entries(TRACK_SNAPSHOT_FILENAMES)) {
+        if (!audioTracks[trackKey] || treeFiles.has(trackFileName)) continue;
+        const candidatePaths = [
+            options.audioFiles?.[trackKey],
+            path.join(primaryAudioDir, trackFileName),
+            ...(config.storage?.audioDir ? [path.join(config.storage.audioDir, trackFileName)] : [])
+        ].filter(Boolean);
+
+        const localAudioFile = candidatePaths.find((p) => fs.existsSync(p));
+        let audioBlobSha = null;
+        if (localAudioFile) {
+            audioBlobSha = runGit(['hash-object', '-w', '--no-filters', '--', localAudioFile]);
+        } else {
+            for (const refPrefix of [`refs/heads/${branch}`, `refs/remotes/${remote}/${branch}`]) {
+                try {
+                    const prevSha = runGit(['rev-parse', '--verify', `${refPrefix}:${trackFileName}`]);
+                    if (prevSha && /^[0-9a-f]{40}$/i.test(prevSha)) {
+                        audioBlobSha = prevSha;
+                        break;
+                    }
+                } catch (_) {
+                    // ignore missing ref or blob
+                }
+            }
+        }
+
+        if (audioBlobSha) {
+            treeFiles.set(trackFileName, audioBlobSha);
+            audioFilesCommitted.push(trackFileName);
+        }
+    }
+
     // 2. 构建按文件名排序的 Git Tree 对象
     const treeEntry = [...treeFiles.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
@@ -175,6 +223,7 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
         remote,
         fileName,
         files: [...treeFiles.keys()].sort(),
+        audioFiles: audioFilesCommitted,
         blobSha,
         briefingJsonBlobSha,
         briefingMdBlobSha,
@@ -210,7 +259,16 @@ function isLocalNewsPolluted(newsList) {
  */
 async function applySnapshotToRouter(
     snapshot,
-    { stateManager, newsAgentService, newsService, io, sourceLabel = 'GitHub 快照中转同步' } = {}
+    {
+        stateManager,
+        newsAgentService,
+        newsService,
+        audioBroadcastService,
+        io,
+        sourceLabel = 'GitHub 快照中转同步',
+        snapshotUrl = null,
+        syncAudioFiles = true
+    } = {}
 ) {
     const rawNews = Array.isArray(snapshot?.news)
         ? snapshot.news
@@ -415,6 +473,41 @@ async function applySnapshotToRouter(
         }
     }
 
+    // 2c. 若快照包含双主播语音播报 (audioBroadcast)，同步标准化落盘、按需拉取缓存 MP3 并广播 audio-updated
+    let appliedAudio = null;
+    if (snapshot.audioBroadcast && typeof snapshot.audioBroadcast === 'object') {
+        appliedAudio = normalizeAudioBroadcastBundle(snapshot.audioBroadcast, {
+            updatedAt: snapshot.audioBroadcastUpdatedAt || snapshot.audioBroadcast.updatedAt || nowIso,
+            snapshotUrl
+        });
+        if (appliedAudio && appliedAudio.trackCount > 0) {
+            if (stateManager) {
+                if (typeof stateManager.updateAudioBroadcast === 'function') {
+                    stateManager.updateAudioBroadcast(appliedAudio);
+                } else {
+                    stateManager.set('audioBroadcast', appliedAudio);
+                }
+            }
+            if (config.storage?.audioBroadcastFile) {
+                await writeJsonFile(config.storage.audioBroadcastFile, appliedAudio);
+            }
+            if (syncAudioFiles) {
+                const audioSvc = audioBroadcastService || new AudioBroadcastService(io, stateManager);
+                try {
+                    await audioSvc.syncRemoteAudioFiles(appliedAudio, { snapshotUrl });
+                } catch (audioErr) {
+                    logger.warn('AUDIO-SYNC', `快照音频文件同步暂跳过: ${audioErr.message}`);
+                }
+            }
+            if (io) {
+                io.emit('audio-updated', {
+                    success: true,
+                    audioBroadcast: appliedAudio
+                });
+            }
+        }
+    }
+
     // 3. 立即将内存状态持久化至 data/state.json，防止 5 分钟定时器覆盖
     if (stateManager) {
         await stateManager.saveToFile();
@@ -422,10 +515,11 @@ async function applySnapshotToRouter(
 
     if (newsAgentService && typeof newsAgentService.emitAgentEvent === 'function') {
         const pulseNote = appliedPulse?.issueCount ? ` + 欧美社媒热议 (${appliedPulse.issueCount} 期)` : '';
+        const audioNote = appliedAudio?.trackCount ? ` + 双主播语音播报 (${appliedAudio.trackCount} 轨)` : '';
         newsAgentService.emitAgentEvent(
             sourceLabel,
             'completed',
-            `已同步发布 ${normalizedNews.length} 条精选新闻${finalSummary ? '及今日全球要闻深度综述' : ''}${pulseNote}`,
+            `已同步发布 ${normalizedNews.length} 条精选新闻${finalSummary ? '及今日全球要闻深度综述' : ''}${pulseNote}${audioNote}`,
             { progress: 100, current: normalizedNews.length, total: normalizedFullPool.length }
         );
     }
@@ -437,6 +531,8 @@ async function applySnapshotToRouter(
         hasSummary: Boolean(finalSummary),
         hasSocialPulse: Boolean(appliedPulse?.issueCount),
         socialPulseCount: appliedPulse?.issueCount || 0,
+        hasAudioBroadcast: Boolean(appliedAudio?.trackCount),
+        audioTrackCount: appliedAudio?.trackCount || 0,
         publishedAt: nowIso,
         lastUpdated: nowIso,
         publishedBy
@@ -718,9 +814,21 @@ class GitHubSyncManager {
                 (!localPulseUpdatedAt || (remotePulseUpdatedAt && remotePulseUpdatedAt !== localPulseUpdatedAt))
             );
 
+            const remoteAudioUpdatedAt = data.audioBroadcastUpdatedAt || data.audioBroadcast?.updatedAt || null;
+            const localAudioUpdatedAt = this.stateManager
+                ? (this.stateManager.get('lastAudioBroadcastUpdatedAt') || this.stateManager.get('audioBroadcast')?.updatedAt || null)
+                : null;
+            const hasNewerAudio = Boolean(
+                data.audioBroadcast &&
+                data.audioBroadcast.tracks &&
+                Object.keys(data.audioBroadcast.tracks).length > 0 &&
+                (!localAudioUpdatedAt || (remoteAudioUpdatedAt && remoteAudioUpdatedAt !== localAudioUpdatedAt))
+            );
+
             const isSameRemoteSnapshot =
                 localStateIntact &&
                 !hasNewerPulse &&
+                !hasNewerAudio &&
                 (notModified ||
                     (remoteMs > 0 &&
                         !isNaN(remoteMs) &&
@@ -763,8 +871,11 @@ class GitHubSyncManager {
                 stateManager: this.stateManager,
                 newsAgentService: this.services.newsAgentService,
                 newsService: this.services.newsService,
+                audioBroadcastService: this.services.audioBroadcastService,
                 io: this.io,
-                sourceLabel: 'GitHub 快照中转同步'
+                sourceLabel: 'GitHub 快照中转同步',
+                snapshotUrl: sourceUrl,
+                syncAudioFiles: true
             });
 
             this.lastSyncedAt = new Date().toISOString();

@@ -26,8 +26,12 @@
     "ag:publish": "node scripts/ag-publish.js",
     "ag:pulse": "node scripts/ag-sync-pulse.js",
     "ag:pulse:github": "node scripts/ag-sync-pulse.js --github",
-    "test": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js tests/ai_briefing_hermes.test.js tests/deploy_router.test.js",
-    "test:core": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js"
+    "ag:tts": "node scripts/ag-tts.js --mode=news",
+    "ag:tts:news": "node scripts/ag-tts.js --mode=news",
+    "ag:tts:pulse": "node scripts/ag-tts.js --mode=pulse",
+    "ag:tts:both": "node scripts/ag-tts.js --mode=both",
+    "test": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js tests/audio_broadcast_integration.test.js tests/ai_briefing_hermes.test.js tests/deploy_router.test.js",
+    "test:core": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js tests/audio_broadcast_integration.test.js"
   },
   "dependencies": {
     "axios": "^1.6.0",

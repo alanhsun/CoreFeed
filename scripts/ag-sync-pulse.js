@@ -10,6 +10,7 @@
  *      将最新 `socialPulse` 合入并通过 Git Plumbing 推送至 `origin/ag-snapshot` 分支 `latest.json`；
  *   3. 若目标 CoreFeed 服务端在线，同步调用 `POST /api/agent/publish-pulse` 触发全站 Socket.IO 实时刷新。
  */
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -22,6 +23,7 @@ const logger = require('../utils/logger');
 const { readJsonFile, writeJsonFile } = require('../utils/helpers');
 const stateManager = require('../services/state_manager');
 const { SocialPulseService, getDefaultExternalPulseDir } = require('../services/social_pulse_service');
+const { AudioBroadcastService, normalizeAudioBroadcastBundle } = require('../services/audio_broadcast_service');
 const { publishSnapshotToGitHub, GitHubSyncManager } = require('../utils/github_sync');
 
 const httpAgentNoKeepAlive = new http.Agent({ keepAlive: false });
@@ -213,6 +215,14 @@ async function runSyncPulse(customOptions = {}) {
         throw new Error('未找到可合并的欧美社媒热议精编数据（请检查 欧美社媒热议/data/digests 目录或 --file 参数）');
     }
 
+    const audioBroadcastService = new AudioBroadcastService(null, stateManager);
+    const localAudioBundle = customOptions.audioBroadcast
+        ? normalizeAudioBroadcastBundle(customOptions.audioBroadcast)
+        : await audioBroadcastService.loadLocalBundle();
+    if (localAudioBundle) {
+        await audioBroadcastService.saveBundle(localAudioBundle, { emit: false });
+    }
+
     await stateManager.saveToFile(config.storage.stateFile);
     logger.success(
         'AG-PULSE',
@@ -225,9 +235,21 @@ async function runSyncPulse(customOptions = {}) {
         !opts.repoDir &&
         !opts.skipGitPush;
 
+    const mergeAudioWithBase = (baseAudio, localAudio) => {
+        if (!baseAudio && !localAudio) return null;
+        return normalizeAudioBroadcastBundle({
+            updatedAt: localAudio?.updatedAt || baseAudio?.updatedAt || new Date().toISOString(),
+            tracks: {
+                ...(baseAudio?.tracks || {}),
+                ...(localAudio?.tracks || {})
+            }
+        });
+    };
+
     if (shouldPushToGithub && !isUnscopedTestRun) {
         const baseSnap = await resolveBaseNewsSnapshot(opts);
         if (baseSnap && Array.isArray(baseSnap.news) && baseSnap.news.length > 0) {
+            const mergedAudio = mergeAudioWithBase(baseSnap.audioBroadcast, localAudioBundle);
             const combinedPayload = {
                 ...baseSnap,
                 version: '2.0',
@@ -235,7 +257,13 @@ async function runSyncPulse(customOptions = {}) {
                 publishedAt: baseSnap.publishedAt || baseSnap.lastUpdated || new Date().toISOString(),
                 lastUpdated: baseSnap.lastUpdated || baseSnap.publishedAt || new Date().toISOString(),
                 socialPulse,
-                socialPulseUpdatedAt: socialPulse.updatedAt
+                socialPulseUpdatedAt: socialPulse.updatedAt,
+                ...(mergedAudio && mergedAudio.trackCount > 0
+                    ? {
+                        audioBroadcast: mergedAudio,
+                        audioBroadcastUpdatedAt: mergedAudio.updatedAt
+                    }
+                    : {})
             };
             try {
                 githubSyncResult = publishSnapshotToGitHub(combinedPayload, {
@@ -313,6 +341,34 @@ async function runSyncPulse(customOptions = {}) {
             );
             remoteResponse = res.data;
             logger.success('AG-PULSE', `已实时热推欧美社媒热议至 ${publishUrl}`);
+
+            if (localAudioBundle && localAudioBundle.tracks?.pulse) {
+                const pulseAudioFile = audioBroadcastService.getTrackAudioPath('pulse');
+                if (pulseAudioFile && fs.existsSync(pulseAudioFile)) {
+                    const audioUrl = `${cleanTarget}/api/agent/publish-audio`;
+                    try {
+                        await axios.post(
+                            audioUrl,
+                            {
+                                track: 'pulse',
+                                trackMeta: localAudioBundle.tracks.pulse,
+                                audioBase64: fs.readFileSync(pulseAudioFile).toString('base64'),
+                                publishedBy: opts.publishedBy
+                            },
+                            {
+                                headers,
+                                timeout: 30000,
+                                maxBodyLength: 50 * 1024 * 1024,
+                                httpAgent: httpAgentNoKeepAlive,
+                                httpsAgent: httpsAgentIgnoreTls,
+                                ...(isLocalOrLanTarget ? { proxy: false } : {})
+                            }
+                        );
+                    } catch (_) {
+                        // Ignore optional audio push error if server has not reloaded yet
+                    }
+                }
+            }
         } catch (httpErr) {
             const status = httpErr.response?.status;
             if (httpErr.code === 'ECONNREFUSED' || httpErr.code === 'ECONNRESET') {

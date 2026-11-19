@@ -10,6 +10,7 @@
  *   3. 将综述中的 `[NEWS_k]` 引用渲染为可点击 HTML 锚点，更新本地 `data/*.json`；
  *   4. 通过 Git Plumbing 零污染推送单文件快照至 GitHub `ag-snapshot/latest.json`（可选同步直推 `/api/agent/publish`）。
  */
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -22,6 +23,7 @@ const { readJsonFile, writeJsonFile } = require('../utils/helpers');
 const stateManager = require('../services/state_manager');
 const { publishSnapshotToGitHub } = require('../utils/github_sync');
 const { SocialPulseService, normalizeSocialPulseBundle } = require('../services/social_pulse_service');
+const { AudioBroadcastService, normalizeAudioBroadcastBundle } = require('../services/audio_broadcast_service');
 const {
     hasChineseText,
     normalizeRegion,
@@ -478,6 +480,25 @@ async function runPublish(customOptions = {}) {
         }
     }
 
+    const audioBroadcastService = new AudioBroadcastService(null, stateManager);
+    let existingAudio = null;
+    if (customOptions.audioBroadcast) {
+        existingAudio = normalizeAudioBroadcastBundle(customOptions.audioBroadcast);
+        if (existingAudio) {
+            await audioBroadcastService.saveBundle(existingAudio, { emit: false });
+        }
+    } else if (compiledData.audioBroadcast) {
+        existingAudio = normalizeAudioBroadcastBundle(compiledData.audioBroadcast);
+        if (existingAudio) {
+            await audioBroadcastService.saveBundle(existingAudio, { emit: false });
+        }
+    } else {
+        existingAudio = await audioBroadcastService.loadLocalBundle();
+    }
+    if (existingAudio) {
+        stateManager.updateAudioBroadcast(existingAudio, false);
+    }
+
     const snapshotPayload = {
         version: '2.0',
         publishedAt: nowIso,
@@ -497,6 +518,12 @@ async function runPublish(customOptions = {}) {
             ? {
                 socialPulse: existingPulse,
                 socialPulseUpdatedAt: existingPulse.updatedAt
+            }
+            : {}),
+        ...(existingAudio && existingAudio.trackCount > 0
+            ? {
+                audioBroadcast: existingAudio,
+                audioBroadcastUpdatedAt: existingAudio.updatedAt
             }
             : {})
     };
@@ -608,10 +635,16 @@ async function runPublish(customOptions = {}) {
                             socialPulse: existingPulse,
                             socialPulseUpdatedAt: existingPulse.updatedAt
                         }
+                        : {}),
+                    ...(existingAudio && existingAudio.trackCount > 0
+                        ? {
+                            audioBroadcast: existingAudio,
+                            audioBroadcastUpdatedAt: existingAudio.updatedAt
+                        }
                         : {})
                 },
                 {
-                    headers,
+                    headers: { ...headers, Connection: 'close' },
                     timeout: 20000,
                     httpsAgent: httpsAgentIgnoreTls,
                     ...(isLocalOrLanTarget ? { proxy: false } : {})
@@ -620,6 +653,33 @@ async function runPublish(customOptions = {}) {
 
             remoteResponse = response.data;
             logger.success('AG-PUBLISH', `成功推送至网站 ${publishUrl}:`, remoteResponse);
+
+            if (existingAudio && existingAudio.tracks?.news) {
+                const newsAudioFile = audioBroadcastService.getTrackAudioPath('news');
+                if (newsAudioFile && fs.existsSync(newsAudioFile)) {
+                    const audioEndpoint = publishUrl.replace(/\/api\/agent\/publish$/, '/api/agent/publish-audio');
+                    try {
+                        await axios.post(
+                            audioEndpoint,
+                            {
+                                track: 'news',
+                                trackMeta: existingAudio.tracks.news,
+                                audioBase64: fs.readFileSync(newsAudioFile).toString('base64'),
+                                publishedBy
+                            },
+                            {
+                                headers,
+                                timeout: 30000,
+                                maxBodyLength: 50 * 1024 * 1024,
+                                httpsAgent: httpsAgentIgnoreTls,
+                                ...(isLocalOrLanTarget ? { proxy: false } : {})
+                            }
+                        );
+                    } catch (_) {
+                        // Ignore optional binary audio hot-push failure when target does not yet expose /publish-audio
+                    }
+                }
+            }
         } catch (httpErr) {
             const isConnRefused =
                 httpErr.code === 'ECONNREFUSED' ||

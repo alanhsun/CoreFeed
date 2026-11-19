@@ -13,7 +13,7 @@
 - **纯网络原始搬运 (`ag:harvest`)**：并发拉取内置 **37 家国际权威媒体**（Reuters、AP、Bloomberg、FT、WSJ、NYT、BBC、The Economist、SCMP、CNA、NHK、TechCrunch、Ars Technica、Nature 等），支持官方 RSS、Google News 域名代理与 Jina Reader 多级降级抓取，提取原网页外文文本与高清配图 URL。
 - **100% Antigravity 内置大模型执笔 (`/corefeed-editor`)**：**无需配置任何外部 `AI_API_KEY`，不使用任何免费机器翻译或规则拼接模板**。选稿裁剪、跨源同题合并、正文去噪提取、全文逐段中文精译、精编标题、百字导语、三条核心看点及当日《全球要闻深度综述》全部由本机 Antigravity 客户端内置大模型直接完成。
 - **GitHub 孤儿分支零污染中转 (`ag:publish`)**：通过 Git Plumbing 底层命令将精编快照推送至独立孤儿分支 `ag-snapshot/latest.json`，不触碰 `main` 分支工作区与提交历史；内网软路由无需公网 IP 或任何密钥，即可定时（`08:00 / 12:30 / 19:30`）、每 60 分钟 ETag 轮询或网页端一键拉取同步。
-- **Swiss Editorial 沉浸阅读界面**：Top-3 焦点轮播 + 12 栏 Bento 网格 SSR 首屏直出，内置外媒图片防盗链缓存代理（`/api/image-proxy`）与离线秒开的全文中英对照阅读器。
+- **Swiss Editorial 沉浸阅读与双主播电台播报**：Top-3 焦点轮播 + 12 栏 Bento 网格 SSR 首屏直出，内置外媒图片防盗链缓存代理（`/api/image-proxy`）、离线秒开的全文中英对照阅读器，以及基于 `Qwen3-TTS-12Hz-1.7B`（`林远` 定制新闻男主播深度评论 + `Serena` 要闻精播）生成的双频道章节式网页语音播放器（支持 HTTP Range 拖拽、倍速、MediaSession 锁屏控制与逐字播报稿）。
 
 ---
 
@@ -68,7 +68,8 @@ CoreFeed 内置面向外部个人 AI 助手与智能音箱桥接服务（[`open-
 | `GET /api/ai/briefing` | 结构化精编简报与口播分段 JSON（支持 `limit`、`region`、`category`、`source`、`q`、`mode=mixed\|headlines\|summary\|article`、`detail=brief\|full`、`format=json\|markdown\|tts\|oral`） |
 | `GET /api/ai/briefing.md` | 纯 Markdown 格式全球要闻综述与精选列表，适合任意 LLM Web Fetch 工具零配置直读 |
 | `GET /api/ai/article/:ref` | 按 1-based 序号（如 `/api/ai/article/2`）或文章 ID 获取单篇全文中文精译段落与分段口播脚本 |
-| `ag-snapshot/briefing.json` / `briefing.md` | 每次 `ag:publish` 自动同步生成的轻量级伴生快照（体积较 `latest.json` 缩减 >90%），供跨网段回退秒读 |
+| `GET /api/audio` / `GET /api/audio/:track` | 双主播语音播报元数据清单及支持 HTTP `Range` (`206 Partial Content`) 进度拖拽的 `news.mp3` / `pulse.mp3` 音频流 |
+| `ag-snapshot/briefing.json` / `briefing.md` / `briefing-*.mp3` | 每次发布自动同步生成的轻量伴生简报与双主播 MP3 音频 Blob，供软路由与跨网段客户端自动拉取缓存 |
 
 ---
 
@@ -76,9 +77,11 @@ CoreFeed 内置面向外部个人 AI 助手与智能音箱桥接服务（[`open-
 
 | 命令 | 说明 |
 | :--- | :--- |
-| `/corefeed-editor` | 在 Antigravity 客户端内触发内置大模型全流程选稿、精译、综述撰写与快照发布 |
+| `/corefeed-editor` | 在 Antigravity 客户端内触发内置大模型全流程选稿、精译、综述撰写、双主播语音合成与快照发布 |
 | `npm run ag:harvest` | 纯网络拉取 37 家全球外媒原始 RSS、网页文本与配图 URL（输出 `data/ag_candidates.json`） |
-| `npm run ag:publish` | 校验 `data/ag_compiled.json` 大模型精编产物并发布至 GitHub `ag-snapshot` 分支 |
+| `npm run ag:tts:news` | 调用 Google Colab `Qwen3-TTS 1.7B` 为最新全球要闻合成 `林远 + Serena` 双主播播音并自动退机 |
+| `npm run ag:tts:pulse` | 调用 Google Colab `Qwen3-TTS 1.7B` 为最新欧美社媒热议合成双主播早班车播音并自动退机 |
+| `npm run ag:publish` | 校验 `data/ag_compiled.json` 大模型精编产物并连同播音文件发布至 GitHub `ag-snapshot` 分支 |
 | `npm start` | 启动 CoreFeed Web 阅读服务端（默认端口 `3120`） |
 | `npm test` | 运行全量端到端自动化测试套件 |
 

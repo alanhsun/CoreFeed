@@ -25,6 +25,7 @@ const TRACKED_FILES = [
     'news.json',
     'summary.json',
     'social_pulse.json',
+    'audio_broadcast.json',
     'state.json',
     'settings.json',
     'ag_candidates.json',
@@ -138,6 +139,8 @@ describe('CoreFeed x Western Social Pulse Integration Suite', () => {
                 backups.set(p, fs.readFileSync(p));
             }
         }
+        const audioMetaPath = path.join(DATA_DIR, 'audio_broadcast.json');
+        if (fs.existsSync(audioMetaPath)) fs.unlinkSync(audioMetaPath);
         stateManager.reset();
         await new Promise((resolve, reject) => {
             server.listen(0, '127.0.0.1', (err) => {
