@@ -1,0 +1,12 @@
+{
+  "id": "Lin_Yuan",
+  "name": "林远",
+  "role": "深度综述评论",
+  "audio_file": "anchor_male_news.wav",
+  "language": "Chinese",
+  "ref_text": "听众朋友好，欢迎收听聚核全球要闻深度综述。今天我们将聚焦主要经济体政策动向、科技产业格局变化与国际地缘局势的最新进展。",
+  "design_model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "clone_model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+  "design_seed": 101,
+  "design_instruct": "35岁标准普通话男性新闻主播，音色干净沉稳、中频清亮不浑浊，吐字字正腔圆，情绪高度克制客观，语速均匀流畅，绝不夸张拿腔，像财经新闻联播演播室播音。"
+}
