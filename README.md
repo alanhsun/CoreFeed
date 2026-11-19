@@ -10,7 +10,7 @@
 
 **CoreFeed（聚核）** 是一款采用「**本机 Antigravity 大模型采编 + GitHub 快照分支中转 + 软路由轻量阅读**」架构的全球要闻阅读系统：
 
-- **纯网络原始搬运 (`ag:harvest`)**：并发拉取内置 **56 家国际权威多语种媒体**（涵盖英/日/韩/德/西原版：Reuters、AP、Bloomberg、FT、WSJ、NYT、BBC、The Economist、POLITICO Europe、Handelsblatt、SCMP、财新国际、Focus Taiwan、CNA、NHK、朝日新闻、韩联社、韩国经济新闻、The Diplomat、Nature、Rest of World、OilPrice、Defense One、Times of Israel、Africanews、EL PAÍS América 等），采用「单源保底 + 单源上限 + 全局时间回填」分层采样（默认候选池 110 条），支持官方主/备 RSS、Google News 区域代理与 Jina Reader 多级降级抓取，提取原网页外文文本与高清配图 URL。
+- **纯网络原始搬运 (`ag:harvest`)**：并发拉取内置 **56 家国际权威多语种媒体**（涵盖英/日/韩/德/西原版：Reuters、AP、Bloomberg、FT、WSJ、NYT、BBC、The Economist、EUobserver、Handelsblatt、SCMP、财新国际、Focus Taiwan、CNA、NHK、朝日新闻、韩联社、韩国经济新闻、The Diplomat、Nature、Rest of World、OilPrice、Defense One、Jerusalem Post、Africanews、EL PAÍS América 等），采用「单源保底 + 单源上限 + 全局时间回填」分层采样（默认候选池 110 条），支持官方主/备 RSS、Google News 区域代理与 Jina Reader 多级降级抓取，提取原网页外文文本与高清配图 URL。
 - **100% Antigravity 内置大模型执笔 (`/corefeed-editor`)**：**无需配置任何外部 `AI_API_KEY`，不使用任何免费机器翻译或规则拼接模板**。选稿裁剪、跨源同题合并、正文去噪提取、全文逐段中文精译、精编标题、百字导语、三条核心看点及当日《全球要闻深度综述》全部由本机 Antigravity 客户端内置大模型直接完成。
 - **GitHub 孤儿分支零污染中转 (`ag:publish`)**：通过 Git Plumbing 底层命令将精编快照推送至独立孤儿分支 `ag-snapshot/latest.json`，不触碰 `main` 分支工作区与提交历史；内网软路由无需公网 IP 或任何密钥，即可定时（`08:00 / 12:30 / 19:30`）、每 60 分钟 ETag 轮询或网页端一键拉取同步。
 - **Swiss Editorial 沉浸阅读与双主播电台播报**：Top-3 焦点轮播 + 12 栏 Bento 网格 SSR 首屏直出，内置外媒图片防盗链缓存代理（`/api/image-proxy`）、离线秒开的全文双语原文对照阅读器，以及基于 `Qwen3-TTS-12Hz-1.7B`（`林远` 定制新闻男主播深度评论 + `Serena` 要闻精播）生成的双频道章节式网页语音播放器（支持 HTTP Range 拖拽、倍速、MediaSession 锁屏控制与逐字播报稿）。

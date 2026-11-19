@@ -366,7 +366,34 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
 
     // 如果 RSS/Proxy 成功拿到条目
     if (feed && Array.isArray(feed.items) && feed.items.length > 0) {
-        const items = feed.items.slice(0, maxItems);
+        let urlIncludeRe = null;
+        let titleExcludeRe = null;
+        try {
+            if (source.urlIncludePattern) {
+                urlIncludeRe = source.urlIncludePattern instanceof RegExp
+                    ? source.urlIncludePattern
+                    : new RegExp(source.urlIncludePattern, 'i');
+            }
+            if (source.titleExcludePattern) {
+                titleExcludeRe = source.titleExcludePattern instanceof RegExp
+                    ? source.titleExcludePattern
+                    : new RegExp(source.titleExcludePattern, 'i');
+            }
+        } catch (_) {}
+
+        let candidateItems = feed.items.filter(item => item && item.title && item.link);
+        if (urlIncludeRe || titleExcludeRe) {
+            const matched = candidateItems.filter(item => {
+                if (urlIncludeRe && !urlIncludeRe.test(String(item.link || ''))) return false;
+                if (titleExcludeRe && titleExcludeRe.test(String(item.title || '').trim())) return false;
+                return true;
+            });
+            if (matched.length > 0) {
+                candidateItems = matched;
+            }
+        }
+
+        const items = candidateItems.slice(0, maxItems);
         const articles = [];
 
         for (const item of items) {
@@ -404,6 +431,7 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
                     category: source.category || 'global',
                     language: sourceLang,
                     paywall: sourcePaywall,
+                    skipFullTextFetch: Boolean(source.skipFullTextFetch),
                     minQuota: sourceMinQuota,
                     freshnessHours: sourceFreshnessHours,
                     authority: source.authority || getSourceAuthorityScore(sourceName),
@@ -649,6 +677,13 @@ async function extractFullArticleContent(url, options = {}) {
     }
 
     const isGoogleNewsRedirect = url.includes('news.google.com/rss/articles/');
+    if (isGoogleNewsRedirect) {
+        return {
+            success: false,
+            url,
+            error: 'Google News 重定向链接跳过正文抓取，保留原始 RSS 标题与摘要'
+        };
+    }
     const fastTimeout = Math.min(options.timeout || 6500, 7500);
     const sourceLang = options.language || 'en';
     const locale = getLanguageLocaleConfig(sourceLang);

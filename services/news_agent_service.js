@@ -245,10 +245,11 @@ class NewsAgentService {
                     const isCjk = ['ja', 'ko', 'zh'].includes(lang);
                     const minRawChars = isCjk ? 260 : 450;
                     const minParaChars = isCjk ? 8 : 10;
+                    const skipFullText = article.source?.paywall === 'hard' || Boolean(article.source?.skipFullTextFetch);
                     const isTestEnv = process.env.NODE_ENV === 'test';
                     const isLocalUrl = /^https?:\/\/(127\.0\.0\.1|localhost)/i.test(article.url || '');
 
-                    if (existingRaw.length < minRawChars && article.url && (!isTestEnv || isLocalUrl)) {
+                    if (!skipFullText && existingRaw.length < minRawChars && article.url && (!isTestEnv || isLocalUrl)) {
                         try {
                             const extracted = await extractFullArticleContent(article.url, {
                                 timeout: 6000,

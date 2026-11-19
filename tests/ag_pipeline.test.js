@@ -1730,16 +1730,16 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
         }
     });
 
-    it('16. CoreFeed v3.0 56-Source Multilingual Matrix, Stratified Candidate Sampling, Per-Source Freshness & CJK Scraping Adaptation', async () => {
+    it('16. CoreFeed v3.1 56-Source Multilingual Matrix, Stratified Candidate Sampling, Per-Source Freshness, RSS Item Filtering & CJK Scraping Adaptation', async () => {
         const { MATRIX_SCHEMA_VERSION, DEFAULT_GLOBAL_SOURCES, getGlobalSourceMatrix, getSourceAuthorityScore } = require('../config/global_sources');
         const { VALID_REGIONS } = require('../utils/editorial_formatter');
         const { extractSpokenSourceName } = require('../utils/briefing_formatter');
         const { selectStratifiedCandidates } = require('../scripts/ag-harvest');
-        const { cleanHeadlineSuffix, getLanguageLocaleConfig, isCjkLanguage, extractFullArticleContent } = require('../services/agent_tools');
+        const { cleanHeadlineSuffix, getLanguageLocaleConfig, isCjkLanguage, fetchFromGlobalSource, extractFullArticleContent } = require('../services/agent_tools');
 
         // 16a. Verify 56-source matrix integrity, zero 0-source regions, and multilingual/paywall metadata
-        assert.equal(MATRIX_SCHEMA_VERSION, '3.0');
-        assert.equal(DEFAULT_GLOBAL_SOURCES.length, 56, 'v3.0 built-in matrix must contain exactly 56 sources (37 existing + 19 new)');
+        assert.equal(MATRIX_SCHEMA_VERSION, '3.1');
+        assert.equal(DEFAULT_GLOBAL_SOURCES.length, 56, 'v3.1 built-in matrix must contain exactly 56 sources (37 existing + 19 new)');
         const uniqueIds = new Set(DEFAULT_GLOBAL_SOURCES.map(s => s.id));
         assert.equal(uniqueIds.size, 56, 'All 56 source IDs must be unique');
 
@@ -1748,11 +1748,11 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
         for (const expectedId of [
             'nhk-news-jp', 'asahi-shimbun-jp', 'yonhap-kr', 'hankyung-kr',
             'focus-taiwan', 'the-diplomat', 'financial-times', 'the-economist',
-            'politico-europe', 'handelsblatt-de', 'caixin-global', 'nature-science',
-            'rest-of-world', 'oilprice-energy', 'defense-one', 'times-of-israel',
+            'euobserver', 'handelsblatt-de', 'caixin-global', 'nature-science',
+            'rest-of-world', 'oilprice-energy', 'defense-one', 'jerusalem-post',
             'africanews', 'elpais-america', 'kyiv-independent'
         ]) {
-            assert.ok(byId.has(expectedId), `Expected v3.0 source "${expectedId}" must exist`);
+            assert.ok(byId.has(expectedId), `Expected v3.1 source "${expectedId}" must exist`);
             const spoken = extractSpokenSourceName(byId.get(expectedId).name);
             assert.ok(/[\u4e00-\u9fff]/.test(spoken), `Source "${expectedId}" spoken name ("${spoken}") must resolve to Chinese for TTS`);
         }
@@ -1766,8 +1766,9 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
             assert.ok((regionCounts.get(region) || 0) >= 1, `Region "${region}" must have >= 1 built-in source`);
         }
 
-        // Verify native non-English languages & hard-paywall radar flags
+        // Verify native non-English languages, hard-paywall radar flags, and Nature/NHK polish flags
         assert.equal(byId.get('nhk-news-jp').language, 'ja');
+        assert.equal(byId.get('nhk-news-jp').skipFullTextFetch, true);
         assert.equal(byId.get('asahi-shimbun-jp').language, 'ja');
         assert.equal(byId.get('yonhap-kr').language, 'ko');
         assert.equal(byId.get('hankyung-kr').language, 'ko');
@@ -1777,8 +1778,10 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
         assert.equal(byId.get('the-economist').paywall, 'hard');
         assert.equal(byId.get('caixin-global').paywall, 'hard');
         assert.equal(byId.get('the-economist').freshnessHours, 120);
+        assert.ok(byId.get('nature-science').urlIncludePattern.includes('d41586'));
         assert.ok(getSourceAuthorityScore('Caixin Global (财新国际)') >= 90);
-        assert.ok(getSourceAuthorityScore('NHK NEWS WEB (日本放送协会)') >= 94);
+        assert.ok(getSourceAuthorityScore('EUobserver (欧盟观察家)') >= 90);
+        assert.ok(getSourceAuthorityScore('The Jerusalem Post (耶路撒冷邮报)') >= 88);
 
         // 16b. Verify parseArgs default limit=110 & maxPerSource=4, and stratified candidate sampling
         const defaultHarvestOpts = parseHarvestArgs([]);
@@ -1836,7 +1839,10 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
         assert.equal(filteredFresh.length, 1);
         assert.equal(filteredFresh[0].id, 'weekly-economist', '120h per-source freshness window must keep 72h-old weekly story while filtering 48h wire');
 
-        // 16d. Verify multilingual headline suffix cleaning, locale headers, and CJK full-text extraction
+        // 16d. Verify Google News redirect early bailout, multilingual suffix cleaning, Nature item filter, paywall skip & CJK extraction
+        const gnewsSkip = await extractFullArticleContent('https://news.google.com/rss/articles/CBMiTestRedirectToken');
+        assert.equal(gnewsSkip.success, false, 'Google News redirect URL must bail out early instead of scraping generic Google News meta description');
+
         assert.equal(cleanHeadlineSuffix('日銀が政策金利の引き上げを決定 - 朝日新聞デジタル'), '日銀が政策金利の引き上げを決定');
         assert.equal(cleanHeadlineSuffix('삼성전자 차세대 HBM4 양산 돌입 - 연합뉴스'), '삼성전자 차세대 HBM4 양산 돌입');
         assert.equal(cleanHeadlineSuffix('América Latina acelera inversión energética | EL PAÍS'), 'América Latina acelera inversión energética');
@@ -1849,7 +1855,24 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
         assert.equal(getLanguageLocaleConfig('es').ceid, 'MX:es-419');
 
         let observedAcceptLang = '';
-        const mockCjkServer = http.createServer((req, res) => {
+        let paywallPageHitCount = 0;
+        const mockServer = http.createServer((req, res) => {
+            if (req.url === '/nature.rss') {
+                res.writeHead(200, { 'Content-Type': 'application/rss+xml; charset=utf-8' });
+                res.end(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Nature Mock</title>
+  <item><title>Retraction Note: Detection of cosmic noise</title><link>https://www.nature.com/articles/s41586-026-99999-1</link><description>Retraction</description></item>
+  <item><title>Author Correction: Old Paper</title><link>https://www.nature.com/articles/s41586-026-99999-2</link><description>Correction</description></item>
+  <item><title>AI is ditching hallucinated references</title><link>https://www.nature.com/articles/d41586-026-03753-1</link><description>Breakthrough science journalism</description></item>
+</channel></rss>`);
+                return;
+            }
+            if (req.url === '/paywalled-article') {
+                paywallPageHitCount += 1;
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end('<html><body><p>Skip to navigation Subscribe Pro Login Menu</p></body></html>');
+                return;
+            }
             observedAcceptLang = String(req.headers['accept-language'] || '');
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(`<!doctype html>
@@ -1865,12 +1888,49 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
 </html>`);
         });
 
-        await new Promise((resolve, reject) => mockCjkServer.listen(0, '127.0.0.1', (e) => (e ? reject(e) : resolve())));
-        const cjkPort = mockCjkServer.address().port;
+        await new Promise((resolve, reject) => mockServer.listen(0, '127.0.0.1', (e) => (e ? reject(e) : resolve())));
+        const mockPort = mockServer.address().port;
         const prevNoProxy = process.env.NO_PROXY;
         try {
             process.env.NO_PROXY = '127.0.0.1,localhost';
-            const extracted = await extractFullArticleContent(`http://127.0.0.1:${cjkPort}/nhk-test`, {
+
+            // Verify Nature errata filtering selects ONLY d41586 news item
+            const natureItems = await fetchFromGlobalSource({
+                id: 'nature-science',
+                name: 'Nature (自然杂志)',
+                language: 'en',
+                maxArticles: 4,
+                rssUrl: `http://127.0.0.1:${mockPort}/nature.rss`,
+                urlIncludePattern: '/articles/d41586-',
+                titleExcludePattern: '^(?:Retraction Note|Author Correction|Publisher Correction|Erratum|Corrigendum):'
+            });
+            assert.equal(natureItems.length, 1, 'Nature filter must exclude Retraction Note / Author Correction academic errata');
+            assert.equal(natureItems[0].title, 'AI is ditching hallucinated references');
+
+            // Verify hard-paywall & skipFullTextFetch articles bypass webpage scraping cleanly
+            const paywallArticles = [
+                {
+                    id: 'ft-1',
+                    title: 'FT Hard Paywall Lead',
+                    description: 'Clean RSS summary from FT.',
+                    url: `http://127.0.0.1:${mockPort}/paywalled-article`,
+                    source: { id: 'financial-times', language: 'en', paywall: 'hard' }
+                },
+                {
+                    id: 'nhk-1',
+                    title: 'NHK Clean RSS Lead',
+                    description: '高市総理大臣は電話会談を行いました。',
+                    url: `http://127.0.0.1:${mockPort}/paywalled-article`,
+                    source: { id: 'nhk-news-jp', language: 'ja', paywall: 'open', skipFullTextFetch: true }
+                }
+            ];
+            await services.newsAgentService._enrichMissingArticleFullTexts(paywallArticles);
+            assert.equal(paywallPageHitCount, 0, 'Hard-paywall and skipFullTextFetch sources must NEVER fetch webpage nav chrome');
+            assert.equal(paywallArticles[0].fullText, 'Clean RSS summary from FT.');
+            assert.equal(paywallArticles[1].fullText, '高市総理大臣は電話会談を行いました。');
+
+            // Verify Japanese CJK article extraction & Accept-Language header
+            const extracted = await extractFullArticleContent(`http://127.0.0.1:${mockPort}/asahi-test`, {
                 language: 'ja',
                 forceRefresh: true
             });
@@ -1881,7 +1941,7 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
         } finally {
             if (prevNoProxy === undefined) delete process.env.NO_PROXY;
             else process.env.NO_PROXY = prevNoProxy;
-            await new Promise((resolve) => mockCjkServer.close(() => resolve()));
+            await new Promise((resolve) => mockServer.close(() => resolve()));
         }
     });
 });

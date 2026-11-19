@@ -4,10 +4,10 @@ const path = require('path');
 /**
  * 信源矩阵配置版本号（升级此版本号将自动刷新内置信源的 RSS 地址与采集策略，同时保留用户的启用开关与自定义源）
  */
-const MATRIX_SCHEMA_VERSION = '3.0';
+const MATRIX_SCHEMA_VERSION = '3.1';
 
 /**
- * 聚核 CoreFeed v3.0 — 全球 56 大权威信源矩阵定义与采集策略 (config/global_sources.js, v3.0)
+ * 聚核 CoreFeed v3.1 — 全球 56 大权威信源矩阵定义与采集策略 (config/global_sources.js, v3.1)
  *
  * 覆盖九大领域 (`wire`, `western`, `asiapacific`, `finance`, `tech`, `science`, `energy`, `defense`, `globalsouth`) 共 56 家国际权威媒体，
  * 支持英 / 日 / 韩 / 德 / 西多语种原版外媒直采（由内置大模型全流程精译为中文）：
@@ -309,22 +309,22 @@ const DEFAULT_GLOBAL_SOURCES = [
         description: '加拿大国家公共广播公司国际新闻源（原生携带图片与摘要）'
     },
     {
-        id: 'politico-europe',
-        name: 'POLITICO Europe (欧洲政经)',
+        id: 'euobserver',
+        name: 'EUobserver (欧盟观察家)',
         category: 'western',
         region: '欧洲',
         language: 'en',
-        authority: 93,
+        authority: 91,
         enabled: true,
         maxArticles: 5,
         minQuota: 2,
         strategy: 'rss',
         paywall: 'open',
         hasNativeImages: true,
-        domain: 'politico.eu',
-        url: 'https://www.politico.eu',
-        rssUrl: 'https://www.politico.eu/feed/',
-        description: '布鲁塞尔与欧盟核心政策风向标，聚焦欧盟关税贸易、AI监管法案、防务与欧洲政局（开放全文带高清图）'
+        domain: 'euobserver.com',
+        url: 'https://euobserver.com',
+        rssUrl: 'https://euobserver.com/rss',
+        description: '布鲁塞尔最具影响力的独立欧盟政策新闻媒体，RSS 原生直出完整正文与高清图，聚焦欧盟外交、贸易、防务与数字监管'
     },
     {
         id: 'kyiv-independent',
@@ -452,12 +452,13 @@ const DEFAULT_GLOBAL_SOURCES = [
         minQuota: 2,
         strategy: 'rss',
         paywall: 'open',
+        skipFullTextFetch: true,
         hasNativeImages: false,
         domain: 'nhk.or.jp',
         url: 'https://www3.nhk.or.jp/news/',
         rssUrl: 'https://www.nhk.or.jp/rss/news/cat0.xml',
         backupRssUrl: 'https://www.nhk.or.jp/rss/news/cat6.xml',
-        description: '日本公共广播机构日文原版新闻流，免费无墙、更新极快，一手覆盖日本政经、央行货币政策与东亚局势'
+        description: '日本公共广播机构日文原版新闻流，保留干净的日文官方 RSS 导语与高清 og:image（跳过新版 NHK ONE 侧边栏抓取）'
     },
     {
         id: 'asahi-shimbun-jp',
@@ -900,10 +901,12 @@ const DEFAULT_GLOBAL_SOURCES = [
         strategy: 'rss',
         paywall: 'open',
         hasNativeImages: false,
+        urlIncludePattern: '/articles/d41586-',
+        titleExcludePattern: '^(?:Retraction Note|Author Correction|Publisher Correction|Erratum|Corrigendum):',
         domain: 'nature.com',
         url: 'https://www.nature.com/news',
         rssUrl: 'https://www.nature.com/nature.rss',
-        description: '全球最具权威性的顶级科学期刊官方源，覆盖 AI 科学突破、生物医药、核聚变、气候与科研政策'
+        description: '全球最具权威性的顶级科学期刊新闻部（定向筛选 d41586 新闻特稿、剔除学术勘误与撤稿声明）'
     },
 
     // ==================== 7. 全球能源与大宗商品 (Global Energy & Commodities) ====================
@@ -950,8 +953,8 @@ const DEFAULT_GLOBAL_SOURCES = [
 
     // ==================== 9. 全球南方与热点地区多元视角 (Global South & Regional Balance) ====================
     {
-        id: 'times-of-israel',
-        name: 'The Times of Israel (以色列时报)',
+        id: 'jerusalem-post',
+        name: 'The Jerusalem Post (耶路撒冷邮报)',
         category: 'globalsouth',
         region: '中东',
         language: 'en',
@@ -962,11 +965,10 @@ const DEFAULT_GLOBAL_SOURCES = [
         strategy: 'rss',
         paywall: 'open',
         hasNativeImages: true,
-        domain: 'timesofisrael.com',
-        url: 'https://www.timesofisrael.com',
-        rssUrl: 'https://www.timesofisrael.com/israel-and-the-region/feed/',
-        backupRssUrl: 'https://www.timesofisrael.com/feed/',
-        description: '中东核心英文独立媒体，完全无付费墙，与半岛电视台形成中东局势双视角交叉核实'
+        domain: 'jpost.com',
+        url: 'https://www.jpost.com',
+        rssUrl: 'https://www.jpost.com/rss/rssfeedsfrontpage.aspx',
+        description: '以色列最具影响力的主流英文日报，官方直连 RSS 稳定抓取完整正文与高清配图，与半岛电视台形成中东双视角对冲'
     },
     {
         id: 'africanews',
@@ -1139,6 +1141,8 @@ function getSourceAuthorityScore(sourceName = '') {
         'diplomat': 91,
         '外交学者': 91,
         'rest of world': 91,
+        'euobserver': 91,
+        '欧盟观察家': 91,
         'abc news': 90,
         'fortune': 90,
         'wired': 90,
@@ -1148,6 +1152,8 @@ function getSourceAuthorityScore(sourceName = '') {
         'focus taiwan': 89,
         '台湾中央社': 89,
         'oilprice': 89,
+        'jerusalem post': 89,
+        '耶路撒冷邮报': 89,
         'times of israel': 89,
         '以色列时报': 89,
         'kyiv independent': 89,
