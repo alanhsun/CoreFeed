@@ -47,9 +47,9 @@ class NewsService {
      * 过滤和清洗新闻文章
      */
     filterAndCleanArticles(articles = []) {
-        const freshnessHours = config.agent?.freshnessHours || 48;
-        const cutoffTime = Date.now() - freshnessHours * 3600000;
-        const tomorrow = Date.now() + 24 * 3600000;
+        const defaultFreshnessHours = config.agent?.freshnessHours || 48;
+        const now = Date.now();
+        const tomorrow = now + 24 * 3600000;
 
         return articles
             .filter(article => {
@@ -58,6 +58,11 @@ class NewsService {
 
                 if (article.publishedAt) {
                     const pubTime = new Date(article.publishedAt).getTime();
+                    const sourceFreshness = Number(article.source?.freshnessHours);
+                    const effectiveHours = (Number.isFinite(sourceFreshness) && sourceFreshness > 0)
+                        ? sourceFreshness
+                        : defaultFreshnessHours;
+                    const cutoffTime = now - effectiveHours * 3600000;
                     if (!isNaN(pubTime) && (pubTime < cutoffTime || pubTime > tomorrow)) {
                         return false;
                     }

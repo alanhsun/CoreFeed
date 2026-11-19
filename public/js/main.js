@@ -1132,10 +1132,13 @@ class CoreFeedApp {
             </div>
         ` : '';
 
+        const origLang = (article?.source?.language && typeof article.source.language === 'string')
+            ? article.source.language.trim()
+            : 'en';
         const origParagraphsHtml = originalParagraphs.length > 0 ? `
             <details class="fulltext-orig-details">
-                <summary class="fulltext-orig-summary">查看外媒英文原文对照（共 ${originalParagraphs.length} 段）</summary>
-                <div class="fulltext-orig-body" lang="en">
+                <summary class="fulltext-orig-summary">查看外媒原文对照（共 ${originalParagraphs.length} 段）</summary>
+                <div class="fulltext-orig-body" lang="${this.escapeHtml(origLang)}">
                     ${originalParagraphs.map(p => `<p>${this.escapeHtml(p)}</p>`).join('')}
                 </div>
             </details>

@@ -2,7 +2,7 @@
  * 聚核 CoreFeed v2.0 — 全球信源纯网络抓取与快照状态广播服务 (services/news_agent_service.js)
  *
  * 核心职责：
- *   1. 纯网络搬运 (`_executeScoutPatrol`)：并发拉取全球 37 家权威外媒原始 RSS / Google News 代理 / Jina 列表
+ *   1. 纯网络搬运 (`_executeScoutPatrol`)：并发拉取全球 56 家权威多语种外媒原始 RSS / Google News 代理 / Jina 列表
  *   2. 原始媒体资源提取 (`_enrichMissingArticleImages`, `_enrichMissingArticleFullTexts`)：抓取网页 og:image 题图 URL 与原始外文文本
  *   3. 快照状态广播 (`_publishNewsSnapshot`)：同步更新内存 `stateManager`、`data/news.json` 与 Socket.IO 实时推送
  *
@@ -129,9 +129,12 @@ class NewsAgentService {
                 name: envSrc.name || new URL(envSrc.url).hostname,
                 category: 'custom',
                 region: null,
+                language: 'en',
                 authority: getSourceAuthorityScore(envSrc.name),
                 enabled: true,
                 maxArticles: config.news.maxArticlesPerSource || 5,
+                minQuota: 1,
+                paywall: 'open',
                 strategy: 'rss',
                 rssUrl: envSrc.url,
                 url: envSrc.url
@@ -154,6 +157,8 @@ class NewsAgentService {
                             id: src.id,
                             name: src.name,
                             category: src.category,
+                            language: src.language || 'en',
+                            paywall: src.paywall || 'open',
                             count: items.length,
                             status: items.length > 0 ? 'ok' : 'empty',
                             strategy: items[0]?.source?.strategy || src.strategy,
@@ -165,6 +170,8 @@ class NewsAgentService {
                             id: src.id,
                             name: src.name,
                             category: src.category,
+                            language: src.language || 'en',
+                            paywall: src.paywall || 'open',
                             count: 0,
                             status: 'error',
                             error: err.message,
@@ -206,7 +213,9 @@ class NewsAgentService {
             await Promise.all(
                 slice.map(async (article) => {
                     try {
-                        let img = await fetchArticleLeadImage(article.url, 4500);
+                        let img = await fetchArticleLeadImage(article.url, 4500, {
+                            language: article.source?.language || 'en'
+                        });
                         if (!img && article.title) {
                             img = await searchNewsImageByTitle(article.title, article.source?.domain || '', 4000);
                         }
@@ -232,12 +241,20 @@ class NewsAgentService {
                 slice.map(async (article) => {
                     if (!article) return;
                     const existingRaw = String(article.fullText || article.content || article.description || '').trim();
+                    const lang = String(article.source?.language || 'en').toLowerCase();
+                    const isCjk = ['ja', 'ko', 'zh'].includes(lang);
+                    const minRawChars = isCjk ? 260 : 450;
+                    const minParaChars = isCjk ? 8 : 10;
                     const isTestEnv = process.env.NODE_ENV === 'test';
                     const isLocalUrl = /^https?:\/\/(127\.0\.0\.1|localhost)/i.test(article.url || '');
 
-                    if (existingRaw.length < 450 && article.url && (!isTestEnv || isLocalUrl)) {
+                    if (existingRaw.length < minRawChars && article.url && (!isTestEnv || isLocalUrl)) {
                         try {
-                            const extracted = await extractFullArticleContent(article.url, { timeout: 6000, maxLength: 6500 });
+                            const extracted = await extractFullArticleContent(article.url, {
+                                timeout: 6000,
+                                maxLength: 6500,
+                                language: lang
+                            });
                             if (extracted?.success && extracted.content && extracted.content.length > existingRaw.length) {
                                 article.fullText = extracted.content;
                                 if ((article.content || '').length < extracted.content.length) {
@@ -255,7 +272,7 @@ class NewsAgentService {
                         article.originalParagraphs = stripHtml(finalRaw)
                             .split(/\n+/)
                             .map(p => p.trim())
-                            .filter(p => p.length >= 10);
+                            .filter(p => p.length >= minParaChars);
                     }
                 })
             );

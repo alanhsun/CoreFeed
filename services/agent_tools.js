@@ -53,12 +53,39 @@ function createArticleId(url, title = '') {
 }
 
 /**
- * 清理 Google News 或 RSS 标题末尾自带的 " - Source Name" 后缀
+ * 按信源语种返回对应的 Accept-Language 请求头与 Google News 区域参数
+ */
+function getLanguageLocaleConfig(language = 'en') {
+    const lang = String(language || 'en').toLowerCase().trim();
+    const map = {
+        ja: { acceptLanguage: 'ja-JP,ja;q=0.9,en-US;q=0.5', hl: 'ja', gl: 'JP', ceid: 'JP:ja' },
+        ko: { acceptLanguage: 'ko-KR,ko;q=0.9,en-US;q=0.5', hl: 'ko', gl: 'KR', ceid: 'KR:ko' },
+        de: { acceptLanguage: 'de-DE,de;q=0.9,en-US;q=0.5', hl: 'de', gl: 'DE', ceid: 'DE:de' },
+        es: { acceptLanguage: 'es-419,es;q=0.9,en-US;q=0.5', hl: 'es-419', gl: 'MX', ceid: 'MX:es-419' },
+        fr: { acceptLanguage: 'fr-FR,fr;q=0.9,en-US;q=0.5', hl: 'fr', gl: 'FR', ceid: 'FR:fr' }
+    };
+    return map[lang] || {
+        acceptLanguage: 'en-US,en;q=0.9,zh-CN;q=0.8',
+        hl: 'en-US',
+        gl: 'US',
+        ceid: 'US:en'
+    };
+}
+
+/**
+ * 判断语种是否属于高信息密度 CJK 文字（日/韩/中），用于自适应调整正文段落字数门槛
+ */
+function isCjkLanguage(language = 'en') {
+    return ['ja', 'ko', 'zh'].includes(String(language || '').toLowerCase().trim());
+}
+
+/**
+ * 清理 Google News 或 RSS 标题末尾自带的 " - Source Name" / " | 媒体名" 多语种尾缀
  */
 function cleanHeadlineSuffix(title = '') {
     if (!title) return '';
     let cleaned = title.trim();
-    cleaned = cleaned.replace(/\s+[-|—]\s+[A-Za-z0-9\s.&'()/\u4e00-\u9fa5]{2,35}$/, '').trim();
+    cleaned = cleaned.replace(/\s+[-|—｜]\s+[\p{L}\p{N}\s.&'()/+]{2,35}$/u, '').trim();
     return cleaned || title.trim();
 }
 
@@ -262,14 +289,16 @@ function extractImageFromItem(item, baseUrl = null) {
 /**
  * 解析单个 RSS URL（优先使用 axios 获取并清洗 XML，再交由 rss-parser 解析）
  */
-async function parseRssUrlRobust(rssUrl, timeout = 10000) {
+async function parseRssUrlRobust(rssUrl, timeout = 10000, options = {}) {
+    const locale = getLanguageLocaleConfig(options.language);
     try {
         const response = await axios.get(rssUrl, {
             timeout,
             httpsAgent: httpsAgentIgnoreTls,
             headers: {
                 'User-Agent': config.webScraping.userAgent,
-                'Accept': 'application/rss+xml, application/xml, text/xml, application/atom+xml, */*'
+                'Accept': 'application/rss+xml, application/xml, text/xml, application/atom+xml, */*',
+                'Accept-Language': locale.acceptLanguage
             },
             responseType: 'text'
         });
@@ -289,29 +318,34 @@ function buildGoogleNewsDomainRssUrl(domain, when = '24h', hl = 'en-US', gl = 'U
 }
 
 /**
- * 采集单个全球知名信源 (支持主 RSS + 备用官方 RSS + Google News 站点代理 + Jina 列表抽取)
+ * 采集单个全球知名信源 (支持主 RSS + 备用官方 RSS + Google News 区域代理 + Jina 列表抽取)
  */
 async function fetchFromGlobalSource(source, maxItemsOverride = null) {
     const maxItems = maxItemsOverride || source.maxArticles || config.news.maxArticlesPerSource || 5;
     const sourceName = source.name || source.id || '未知信源';
+    const sourceLang = source.language || 'en';
+    const locale = getLanguageLocaleConfig(sourceLang);
+    const sourcePaywall = source.paywall || 'open';
+    const sourceMinQuota = Number(source.minQuota) || 1;
+    const sourceFreshnessHours = Number(source.freshnessHours) || null;
 
     let feed = null;
     let usedStrategy = source.strategy || 'rss';
 
     try {
         if (source.rssUrl) {
-            feed = await parseRssUrlRobust(source.rssUrl, 10000);
+            feed = await parseRssUrlRobust(source.rssUrl, 10000, { language: sourceLang });
         } else if (source.domain) {
             usedStrategy = 'gnews_proxy';
-            const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '24h');
-            feed = await parseRssUrlRobust(proxyUrl, 10000);
+            const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '24h', locale.hl, locale.gl, locale.ceid);
+            feed = await parseRssUrlRobust(proxyUrl, 10000, { language: sourceLang });
         }
     } catch (rssError) {
         // 优先尝试该信源配置的备用官方 RSS (backupRssUrl)
         if (source.backupRssUrl) {
             try {
                 usedStrategy = 'backup_rss';
-                feed = await parseRssUrlRobust(source.backupRssUrl, 10000);
+                feed = await parseRssUrlRobust(source.backupRssUrl, 10000, { language: sourceLang });
             } catch (_) {}
         }
 
@@ -319,9 +353,9 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
         if ((!feed || !Array.isArray(feed.items) || feed.items.length === 0) && source.domain && config.agent.enableGoogleNewsFallback !== false) {
             try {
                 usedStrategy = 'gnews_proxy_fallback';
-                const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '24h');
-                logger.debug('AGENT_TOOL', `${sourceName} 直接RSS受阻，自动切换 Google News 站点代理: site:${source.domain}`);
-                feed = await parseRssUrlRobust(proxyUrl, 10000);
+                const proxyUrl = buildGoogleNewsDomainRssUrl(source.domain, '24h', locale.hl, locale.gl, locale.ceid);
+                logger.debug('AGENT_TOOL', `${sourceName} 直接RSS受阻，自动切换 Google News 站点代理: site:${source.domain} (${locale.ceid})`);
+                feed = await parseRssUrlRobust(proxyUrl, 10000, { language: sourceLang });
             } catch (fallbackErr) {
                 logger.warn('AGENT_TOOL', `${sourceName} 代理采集亦失败: ${fallbackErr.message}`);
             }
@@ -348,7 +382,7 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
             if (cleanDesc && cleanDesc.startsWith(cleanTitle)) {
                 cleanDesc = cleanDesc.substring(cleanTitle.length).replace(/^[\s\-|—:]+/, '').trim();
             }
-            if (!cleanDesc || cleanDesc.length < 15) {
+            if (!cleanDesc || cleanDesc.length < (isCjkLanguage(sourceLang) ? 8 : 15)) {
                 cleanDesc = cleanTitle;
             }
 
@@ -368,6 +402,10 @@ async function fetchFromGlobalSource(source, maxItemsOverride = null) {
                     name: sourceName,
                     domain: source.domain || null,
                     category: source.category || 'global',
+                    language: sourceLang,
+                    paywall: sourcePaywall,
+                    minQuota: sourceMinQuota,
+                    freshnessHours: sourceFreshnessHours,
                     authority: source.authority || getSourceAuthorityScore(sourceName),
                     strategy: usedStrategy
                 },
@@ -439,6 +477,10 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
                 name: source.name || new URL(source.url).hostname,
                 domain: source.domain || null,
                 category: source.category || 'global',
+                language: source.language || 'en',
+                paywall: source.paywall || 'open',
+                minQuota: Number(source.minQuota) || 1,
+                freshnessHours: Number(source.freshnessHours) || null,
                 authority: source.authority || getSourceAuthorityScore(source.name),
                 strategy: 'jina_scrape'
             },
@@ -454,13 +496,15 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
  * 轻量级快速抓取文章 og:image / twitter:image / JSON-LD 封面图
  * （移除会导致部分 CDN 返回 416 错误的 Range 请求头，改用标准 HTML 读取）
  */
-async function fetchArticleLeadImage(url, timeout = 5500) {
+async function fetchArticleLeadImage(url, timeout = 5500, options = {}) {
     if (!url || !isValidUrl(url) || url.includes('news.google.com/rss/articles/')) {
         return null;
     }
 
     const cached = imageLookupCache.get(`url:${url}`);
     if (cached) return cached;
+
+    const locale = getLanguageLocaleConfig(options.language);
 
     try {
         const response = await axios.get(url, {
@@ -471,7 +515,7 @@ async function fetchArticleLeadImage(url, timeout = 5500) {
             headers: {
                 'User-Agent': config.webScraping.userAgent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8'
+                'Accept-Language': locale.acceptLanguage
             },
             responseType: 'text'
         });
@@ -606,6 +650,15 @@ async function extractFullArticleContent(url, options = {}) {
 
     const isGoogleNewsRedirect = url.includes('news.google.com/rss/articles/');
     const fastTimeout = Math.min(options.timeout || 6500, 7500);
+    const sourceLang = options.language || 'en';
+    const locale = getLanguageLocaleConfig(sourceLang);
+    const isCjk = isCjkLanguage(sourceLang);
+    const minParaLen = isCjk ? 14 : 28;
+    const minFallbackParaLen = isCjk ? 20 : 40;
+    const minSelectorTotal = isCjk ? 110 : 200;
+    const minBodyLen = isCjk ? 120 : 220;
+    const minPartialLen = isCjk ? 35 : 60;
+    const minJinaLen = isCjk ? 90 : 150;
     let partialLocalResult = null;
 
     // 策略 A: 本地 HTTP + JSON-LD articleBody + Cheerio Readability 正文抽取
@@ -617,7 +670,7 @@ async function extractFullArticleContent(url, options = {}) {
             headers: {
                 'User-Agent': config.webScraping.userAgent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8'
+                'Accept-Language': locale.acceptLanguage
             }
         });
 
@@ -628,7 +681,7 @@ async function extractFullArticleContent(url, options = {}) {
 
             let jsonLdBody = '';
             $('script[type="application/ld+json"]').each((_, el) => {
-                if (jsonLdBody.length >= 400) return;
+                if (jsonLdBody.length >= (isCjk ? 240 : 400)) return;
                 try {
                     const rawJson = $(el).html();
                     if (!rawJson) return;
@@ -662,6 +715,11 @@ async function extractFullArticleContent(url, options = {}) {
                 'article .story-body p',
                 'article .text-long p',
                 'article .c-article-body p',
+                '.content--detail-body p',
+                '.story-news p',
+                '#articleBody p',
+                '.article-txt p',
+                '.a_c p',
                 'article p',
                 'main article p',
                 '.article-content p',
@@ -675,11 +733,11 @@ async function extractFullArticleContent(url, options = {}) {
                 const found = [];
                 $(sel).each((_, el) => {
                     const txt = $(el).text().replace(/\s+/g, ' ').trim();
-                    if (txt.length >= 28 && !/^(Read more|Subscribe|Sign up|Copyright|All rights reserved|Advertisement|Follow us)/i.test(txt)) {
+                    if (txt.length >= minParaLen && !/^(Read more|Subscribe|Sign up|Copyright|All rights reserved|Advertisement|Follow us)/i.test(txt)) {
                         found.push(txt);
                     }
                 });
-                if (found.join('\n\n').length >= 200) {
+                if (found.join('\n\n').length >= minSelectorTotal) {
                     paragraphs = found;
                     break;
                 }
@@ -688,7 +746,7 @@ async function extractFullArticleContent(url, options = {}) {
             if (paragraphs.length === 0) {
                 $('p').each((_, el) => {
                     const txt = $(el).text().replace(/\s+/g, ' ').trim();
-                    if (txt.length >= 40 && !/^(Read more|Subscribe|Sign up|Copyright|All rights reserved)/i.test(txt)) {
+                    if (txt.length >= minFallbackParaLen && !/^(Read more|Subscribe|Sign up|Copyright|All rights reserved)/i.test(txt)) {
                         paragraphs.push(txt);
                     }
                 });
@@ -697,7 +755,7 @@ async function extractFullArticleContent(url, options = {}) {
             const domBodyText = paragraphs.join('\n\n').trim();
             const bestBodyText = (domBodyText.length >= jsonLdBody.length ? domBodyText : jsonLdBody) || stripHtml(metaDesc);
 
-            if (bestBodyText && bestBodyText.length >= 220) {
+            if (bestBodyText && bestBodyText.length >= minBodyLen) {
                 const result = {
                     success: true,
                     url: resolvedUrl,
@@ -708,7 +766,7 @@ async function extractFullArticleContent(url, options = {}) {
                 };
                 fullTextCache.set(url, result);
                 return result;
-            } else if (bestBodyText && bestBodyText.length >= 60) {
+            } else if (bestBodyText && bestBodyText.length >= minPartialLen) {
                 partialLocalResult = {
                     success: true,
                     url: resolvedUrl,
@@ -755,7 +813,7 @@ async function extractFullArticleContent(url, options = {}) {
 
             const cleanedContent = cleanExtractedMarkdown(content);
 
-            if (cleanedContent && cleanedContent.length >= 150) {
+            if (cleanedContent && cleanedContent.length >= minJinaLen) {
                 const result = {
                     success: true,
                     url,
@@ -786,6 +844,8 @@ async function extractFullArticleContent(url, options = {}) {
 
 module.exports = {
     createArticleId,
+    getLanguageLocaleConfig,
+    isCjkLanguage,
     cleanHeadlineSuffix,
     normalizeValidImageUrl,
     upgradeImageResolution,

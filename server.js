@@ -2,7 +2,7 @@
  * 聚核 CoreFeed v2.0 — 全球权威媒体要闻阅读与快照同步服务端主入口 (server.js)
  *
  * 架构概览：
- *   - 采编与精译（本机 Antigravity 客户端）：`ag:harvest` 纯网络搬运 37 家权威外媒原始素材，由 Antigravity 客户端内置大模型
+ *   - 采编与精译（本机 Antigravity 客户端）：`ag:harvest` 纯网络搬运 56 家权威多语种外媒原始素材，由 Antigravity 客户端内置大模型
  *     全流程完成选稿裁剪、跨源合并、正文提取、全文精译、标题/导语/要点精编与《全球要闻深度综述》，通过 `ag:publish` 推送至 GitHub `ag-snapshot/latest.json`；
  *   - 软路由只读拉取（本服务）：启动自检、每日定时任务 (08:00 / 12:30 / 19:30)、每 60 分钟 ETag 轮询及网页一键同步从 GitHub 拉取最新快照；
  *   - 界面渲染：Swiss Editorial 焦点轮播 + Bento 网格 SSR 首屏直出 + Socket.IO 实时刷新 + 离线秒开全文双语阅读器。

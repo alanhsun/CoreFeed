@@ -10,10 +10,10 @@
 
 **CoreFeed（聚核）** 是一款采用「**本机 Antigravity 大模型采编 + GitHub 快照分支中转 + 软路由轻量阅读**」架构的全球要闻阅读系统：
 
-- **纯网络原始搬运 (`ag:harvest`)**：并发拉取内置 **37 家国际权威媒体**（Reuters、AP、Bloomberg、FT、WSJ、NYT、BBC、The Economist、SCMP、CNA、NHK、TechCrunch、Ars Technica、Nature 等），支持官方 RSS、Google News 域名代理与 Jina Reader 多级降级抓取，提取原网页外文文本与高清配图 URL。
+- **纯网络原始搬运 (`ag:harvest`)**：并发拉取内置 **56 家国际权威多语种媒体**（涵盖英/日/韩/德/西原版：Reuters、AP、Bloomberg、FT、WSJ、NYT、BBC、The Economist、POLITICO Europe、Handelsblatt、SCMP、财新国际、Focus Taiwan、CNA、NHK、朝日新闻、韩联社、韩国经济新闻、The Diplomat、Nature、Rest of World、OilPrice、Defense One、Times of Israel、Africanews、EL PAÍS América 等），采用「单源保底 + 单源上限 + 全局时间回填」分层采样（默认候选池 110 条），支持官方主/备 RSS、Google News 区域代理与 Jina Reader 多级降级抓取，提取原网页外文文本与高清配图 URL。
 - **100% Antigravity 内置大模型执笔 (`/corefeed-editor`)**：**无需配置任何外部 `AI_API_KEY`，不使用任何免费机器翻译或规则拼接模板**。选稿裁剪、跨源同题合并、正文去噪提取、全文逐段中文精译、精编标题、百字导语、三条核心看点及当日《全球要闻深度综述》全部由本机 Antigravity 客户端内置大模型直接完成。
 - **GitHub 孤儿分支零污染中转 (`ag:publish`)**：通过 Git Plumbing 底层命令将精编快照推送至独立孤儿分支 `ag-snapshot/latest.json`，不触碰 `main` 分支工作区与提交历史；内网软路由无需公网 IP 或任何密钥，即可定时（`08:00 / 12:30 / 19:30`）、每 60 分钟 ETag 轮询或网页端一键拉取同步。
-- **Swiss Editorial 沉浸阅读与双主播电台播报**：Top-3 焦点轮播 + 12 栏 Bento 网格 SSR 首屏直出，内置外媒图片防盗链缓存代理（`/api/image-proxy`）、离线秒开的全文中英对照阅读器，以及基于 `Qwen3-TTS-12Hz-1.7B`（`林远` 定制新闻男主播深度评论 + `Serena` 要闻精播）生成的双频道章节式网页语音播放器（支持 HTTP Range 拖拽、倍速、MediaSession 锁屏控制与逐字播报稿）。
+- **Swiss Editorial 沉浸阅读与双主播电台播报**：Top-3 焦点轮播 + 12 栏 Bento 网格 SSR 首屏直出，内置外媒图片防盗链缓存代理（`/api/image-proxy`）、离线秒开的全文双语原文对照阅读器，以及基于 `Qwen3-TTS-12Hz-1.7B`（`林远` 定制新闻男主播深度评论 + `Serena` 要闻精播）生成的双频道章节式网页语音播放器（支持 HTTP Range 拖拽、倍速、MediaSession 锁屏控制与逐字播报稿）。
 
 ---
 
@@ -28,7 +28,7 @@
 ```
 
 （或直接发送「更新并发布今日新闻」），Antigravity 客户端内置大模型即会自动执行：
-1. `npm run ag:harvest` — 拉取 37 家权威外媒最新原始素材至 `data/ag_candidates.json`；
+1. `npm run ag:harvest` — 拉取 56 家权威多语种外媒最新原始素材至 `data/ag_candidates.json`；
 2. **内置大模型全流程精编** — 完成选稿裁剪、跨源事件合并、正文提纯、全文中文精译、标题/导语/要点精编与《全球要闻深度综述》，生成 `data/ag_compiled.json`；
 3. `npm run ag:publish` — 严格校验全中文精编契约并推送快照至 GitHub `ag-snapshot/latest.json`。
 
@@ -78,7 +78,7 @@ CoreFeed 内置面向外部个人 AI 助手与智能音箱桥接服务（[`open-
 | 命令 | 说明 |
 | :--- | :--- |
 | `/corefeed-editor` | 在 Antigravity 客户端内触发内置大模型全流程选稿、精译、综述撰写、双主播语音合成与快照发布 |
-| `npm run ag:harvest` | 纯网络拉取 37 家全球外媒原始 RSS、网页文本与配图 URL（输出 `data/ag_candidates.json`） |
+| `npm run ag:harvest` | 纯网络拉取 56 家全球多语种外媒原始 RSS、网页文本与配图 URL（输出 `data/ag_candidates.json`） |
 | `npm run ag:tts:news` | 调用 Google Colab `Qwen3-TTS 1.7B` 为最新全球要闻合成 `林远 + Serena` 双主播播音并自动退机 |
 | `npm run ag:tts:pulse` | 调用 Google Colab `Qwen3-TTS 1.7B` 为最新欧美社媒热议合成双主播早班车播音并自动退机 |
 | `npm run ag:publish` | 校验 `data/ag_compiled.json` 大模型精编产物并连同播音文件发布至 GitHub `ag-snapshot` 分支 |
@@ -106,7 +106,7 @@ CoreFeed 内置面向外部个人 AI 助手与智能音箱桥接服务（[`open-
 ```text
 CoreFeed/
 ├── .agents/skills/corefeed-editor/ # Antigravity 客户端内置大模型全流程采编 Skill (/corefeed-editor)
-├── config/                         # 全局动态配置与 37 家国际权威信源矩阵
+├── config/                         # 全局动态配置与 56 家国际权威多语种信源矩阵
 ├── integrations/hermes-skill/      # Hermes Agent 精编直读与小爱音箱 (open-xiaoai-bridge) 语音播报 Skill
 ├── middleware/                     # 全局异常处理与生产环境速率限制
 ├── public/                         # 品牌图标、Swiss Editorial 样式表与前端交互控制器
