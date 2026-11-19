@@ -158,6 +158,7 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
         ? path.resolve(options.audioDir)
         : (isDefaultRepo && config.storage?.audioDir ? config.storage.audioDir : path.join(repoDir, 'data', 'audio'));
 
+    let remoteBranchFetched = false;
     for (const [trackKey, trackFileName] of Object.entries(TRACK_SNAPSHOT_FILENAMES)) {
         if (!audioTracks[trackKey] || treeFiles.has(trackFileName)) continue;
         const candidatePaths = [
@@ -171,15 +172,28 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
         if (localAudioFile) {
             audioBlobSha = runGit(['hash-object', '-w', '--no-filters', '--', localAudioFile]);
         } else {
-            for (const refPrefix of [`refs/heads/${branch}`, `refs/remotes/${remote}/${branch}`]) {
-                try {
-                    const prevSha = runGit(['rev-parse', '--verify', `${refPrefix}:${trackFileName}`]);
-                    if (prevSha && /^[0-9a-f]{40}$/i.test(prevSha)) {
-                        audioBlobSha = prevSha;
-                        break;
+            const resolveExistingBlob = () => {
+                for (const refPrefix of [`refs/heads/${branch}`, `refs/remotes/${remote}/${branch}`]) {
+                    try {
+                        const prevSha = runGit(['rev-parse', '--verify', `${refPrefix}:${trackFileName}`]);
+                        if (prevSha && /^[0-9a-f]{40}$/i.test(prevSha)) {
+                            return prevSha;
+                        }
+                    } catch (_) {
+                        // ignore missing ref or blob
                     }
+                }
+                return null;
+            };
+
+            audioBlobSha = resolveExistingBlob();
+            if (!audioBlobSha && !skipPush && !remoteBranchFetched) {
+                remoteBranchFetched = true;
+                try {
+                    runGit(['fetch', '--depth=1', remote, `${branch}:refs/remotes/${remote}/${branch}`]);
+                    audioBlobSha = resolveExistingBlob();
                 } catch (_) {
-                    // ignore missing ref or blob
+                    // ignore if remote snapshot branch does not exist yet
                 }
             }
         }
@@ -239,6 +253,35 @@ function publishSnapshotToGitHub(snapshotPayload, options = {}) {
     };
 }
 
+const KNOWN_TEST_FIXTURE_IDS = new Set([
+    'standalone-1',
+    'lan-push-1',
+    'gh-snap-1',
+    'ui-sync-news-1',
+    'cooldown-news-1',
+    'router-sync-1',
+    'pollute-test-1'
+]);
+
+/**
+ * 检测新闻列表是否疑似来自自动化单元测试夹具（防止测试残留数据意外覆盖线上 ag-snapshot）
+ */
+function isSuspectedTestFixtureNews(newsList) {
+    if (!Array.isArray(newsList) || newsList.length === 0) {
+        return false;
+    }
+    return newsList.some((item) => {
+        if (!item || typeof item !== 'object') return false;
+        const id = String(item.id || '').trim();
+        const title = String(item.translatedTitle || item.title || '').trim();
+        if (KNOWN_TEST_FIXTURE_IDS.has(id)) return true;
+        if (/独立自包含精编快照条目|自托管服务端直推测试文章|前端一键同步最新快照测试/.test(title)) {
+            return true;
+        }
+        return false;
+    });
+}
+
 /**
  * 检测本地状态中的新闻是否为空、非快照精编或包含未翻译的英文标题
  */
@@ -267,7 +310,8 @@ async function applySnapshotToRouter(
         io,
         sourceLabel = 'GitHub 快照中转同步',
         snapshotUrl = null,
-        syncAudioFiles = true
+        syncAudioFiles = true,
+        awaitAudioSync = true
     } = {}
 ) {
     const rawNews = Array.isArray(snapshot?.news)
@@ -506,12 +550,19 @@ async function applySnapshotToRouter(
     }
 
     // 3b. 同步缓存远端 MP3 至本地 data/audio/，确保本机 /api/audio/:track 播放拖拽秒开
+    //     交互式网页「同步最新」(awaitAudioSync=false) 采用后台异步预热，避免 11MB 音频下载阻塞新闻拉取响应
     if (appliedAudio && appliedAudio.trackCount > 0 && syncAudioFiles) {
         const audioSvc = audioBroadcastService || new AudioBroadcastService(io, stateManager);
-        try {
-            await audioSvc.syncRemoteAudioFiles(appliedAudio, { snapshotUrl });
-        } catch (audioErr) {
-            logger.warn('AUDIO-SYNC', `快照音频文件同步暂跳过: ${audioErr.message}`);
+        if (awaitAudioSync) {
+            try {
+                await audioSvc.syncRemoteAudioFiles(appliedAudio, { snapshotUrl });
+            } catch (audioErr) {
+                logger.warn('AUDIO-SYNC', `快照音频文件同步暂跳过: ${audioErr.message}`);
+            }
+        } else {
+            audioSvc.syncRemoteAudioFiles(appliedAudio, { snapshotUrl }).catch((audioErr) => {
+                logger.warn('AUDIO-SYNC', `后台异步缓存音频暂跳过: ${audioErr.message}`);
+            });
         }
     }
 
@@ -631,16 +682,32 @@ class GitHubSyncManager {
     }
 
     buildCandidateEndpoints(primaryUrl) {
-        const cleanUrl = String(primaryUrl || '').trim();
+        let cleanUrl = String(primaryUrl || '').trim();
         const endpoints = [];
+
+        // 兼容 ghfast.top 前缀代理与 GitHub Contents API URL，统一还原为 canonical raw URL 以启用全量镜像回退
+        const proxyUnwrap = cleanUrl.match(/^https:\/\/ghfast\.top\/(https:\/\/.+)$/i);
+        if (proxyUnwrap) {
+            cleanUrl = proxyUnwrap[1];
+        }
+        const apiMatch = cleanUrl.match(
+            /^https:\/\/api\.github\.com\/repos\/([^/?#]+)\/([^/?#]+)\/contents\/([^?#]+)(?:\?([^#]*))?$/i
+        );
+        if (apiMatch) {
+            const [, owner, repo, relPath, qs = ''] = apiMatch;
+            const params = new URLSearchParams(qs);
+            const branch = (params.get('ref') || 'ag-snapshot').trim();
+            cleanUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${relPath}`;
+        }
 
         const rawMatch = cleanUrl.match(
             /^https:\/\/raw\.githubusercontent\.com\/([^/?#]+)\/([^/?#]+)\/([^/?#]+)\/([^?#]+)$/
         );
         if (rawMatch) {
             const [, owner, repo, branch, filePath] = rawMatch;
+            const decodedBranch = decodeURIComponent(branch);
             endpoints.push({
-                url: `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${encodeURIComponent(branch)}`,
+                url: `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${encodeURIComponent(decodedBranch)}`,
                 headers: {
                     Accept: 'application/vnd.github.v3.raw'
                 }
@@ -676,7 +743,9 @@ class GitHubSyncManager {
         const candidates = this.buildCandidateEndpoints(targetUrl);
         let lastError = null;
 
-        for (const candidate of candidates) {
+        for (let idx = 0; idx < candidates.length; idx++) {
+            const candidate = candidates[idx];
+            const hasMoreMirrors = idx < candidates.length - 1;
             const sep = candidate.url.includes('?') ? '&' : '?';
             const requestUrl = `${candidate.url}${sep}_t=${Date.now()}`;
             const cachedEntry = useEtag ? this.etagCache.get(candidate.url) : null;
@@ -690,13 +759,20 @@ class GitHubSyncManager {
                 reqHeaders['If-None-Match'] = cachedEntry.etag;
             }
 
+            let isLocalHost = false;
+            try {
+                const host = new URL(requestUrl).hostname.toLowerCase();
+                isLocalHost = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+            } catch (_) {}
+
             try {
                 const response = await axios.get(requestUrl, {
                     timeout: 15000,
                     httpsAgent: syncHttpsAgent,
                     responseType: 'json',
                     validateStatus: (status) => (status >= 200 && status < 300) || status === 304,
-                    headers: reqHeaders
+                    headers: reqHeaders,
+                    ...(isLocalHost ? { proxy: false } : {})
                 });
 
                 if (response.status === 304 && cachedEntry && cachedEntry.data) {
@@ -714,10 +790,30 @@ class GitHubSyncManager {
                     parsed = JSON.parse(parsed);
                 }
 
+                // 兼容上游代理剥离 Accept: vnd.github.v3.raw 后 GitHub Contents API 返回的 base64 JSON 包装
+                if (
+                    parsed &&
+                    typeof parsed === 'object' &&
+                    parsed.encoding === 'base64' &&
+                    typeof parsed.content === 'string' &&
+                    !Array.isArray(parsed.news) &&
+                    !Array.isArray(parsed.articles)
+                ) {
+                    const decodedStr = Buffer.from(parsed.content.replace(/\s+/g, ''), 'base64').toString('utf8');
+                    parsed = JSON.parse(decodedStr);
+                }
+
                 if (!parsed || typeof parsed !== 'object') {
                     const schemaErr = new Error('远端快照返回内容不是有效的 JSON 对象');
                     schemaErr.statusCode = 400;
                     throw schemaErr;
+                }
+
+                const hasNewsArray = Array.isArray(parsed.news) || Array.isArray(parsed.articles);
+                if (!hasNewsArray && hasMoreMirrors) {
+                    const mirrorErr = new Error('当前镜像返回内容缺少 news 数组，尝试切换下一镜像');
+                    mirrorErr.statusCode = 502;
+                    throw mirrorErr;
                 }
 
                 const responseEtag = String(response.headers?.etag || response.headers?.ETag || '').trim() || null;
@@ -739,7 +835,7 @@ class GitHubSyncManager {
                 };
             } catch (err) {
                 lastError = err;
-                if (err.statusCode === 400) {
+                if (err.statusCode === 400 && !hasMoreMirrors) {
                     throw err;
                 }
             }
@@ -754,7 +850,8 @@ class GitHubSyncManager {
         const {
             snapshotUrl = null,
             force = false,
-            trigger = 'manual'
+            trigger = 'manual',
+            awaitAudioSync = true
         } = options;
 
         if (this.isSyncing && !force) {
@@ -877,7 +974,8 @@ class GitHubSyncManager {
                 io: this.io,
                 sourceLabel: 'GitHub 快照中转同步',
                 snapshotUrl: sourceUrl,
-                syncAudioFiles: true
+                syncAudioFiles: true,
+                awaitAudioSync
             });
 
             this.lastSyncedAt = new Date().toISOString();
@@ -965,5 +1063,6 @@ module.exports = {
     applySnapshotToRouter,
     checkRemoteSnapshotCooldown,
     isLocalNewsPolluted,
+    isSuspectedTestFixtureNews,
     GitHubSyncManager
 };

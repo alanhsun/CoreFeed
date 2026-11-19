@@ -87,7 +87,11 @@ class NewsAgentService {
         if (this.stateManager) {
             this.stateManager.set('collectionPhase', phase, false);
             this.stateManager.set('sourceStats', sourceStats, false);
-            this.stateManager.updateNewsData(displayList, fullPool);
+            this.stateManager.updateNewsData(
+                displayList,
+                fullPool,
+                timestamp && typeof timestamp.toISOString === 'function' ? timestamp.toISOString() : timestamp
+            );
         }
 
         if (this.io) {

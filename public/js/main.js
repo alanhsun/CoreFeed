@@ -1051,6 +1051,7 @@ class CoreFeedApp {
             keyPoints,
             translatedParagraphs: isLegacySummaryOnly ? [] : readableParas,
             originalParagraphs: origParas,
+            originalLanguage: article?.source?.language || 'en',
             isLegacySummaryOnly
         });
 
@@ -1132,8 +1133,8 @@ class CoreFeedApp {
             </div>
         ` : '';
 
-        const origLang = (article?.source?.language && typeof article.source.language === 'string')
-            ? article.source.language.trim()
+        const origLang = (data.originalLanguage && typeof data.originalLanguage === 'string')
+            ? data.originalLanguage.trim()
             : 'en';
         const origParagraphsHtml = originalParagraphs.length > 0 ? `
             <details class="fulltext-orig-details">
@@ -1178,6 +1179,9 @@ class CoreFeedApp {
             const data = await res.json();
             if (!data || !data.success) return;
 
+            const prevLastUpdated = this.lastUpdated;
+            const prevNewsCount = this.news.length;
+
             if (data.lastUpdated) {
                 this.lastUpdated = data.lastUpdated;
             }
@@ -1195,6 +1199,16 @@ class CoreFeedApp {
             }
             if (data.schedule) {
                 this.schedule = data.schedule;
+            }
+            const newsChanged = Boolean(
+                (data.lastUpdated && data.lastUpdated !== prevLastUpdated) ||
+                (typeof data.newsCount === 'number' && data.newsCount > 0 && data.newsCount !== prevNewsCount)
+            );
+            if (newsChanged) {
+                this.fetchLatestNews();
+                if (data.hasSummary) {
+                    this.fetchLatestSummary();
+                }
             }
             if (data.hasAudioBroadcast) {
                 const curAudioTs = this.audioBroadcast?.updatedAt || null;

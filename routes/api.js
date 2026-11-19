@@ -213,10 +213,14 @@ function initializeApiRoutes(services, io, stateManager) {
             }
 
             const forcePull = req.body?.force !== undefined ? Boolean(req.body.force) : true;
+            const awaitAudioSync = req.body?.awaitAudioSync !== undefined
+                ? Boolean(req.body.awaitAudioSync)
+                : !isWebUiDefaultPull;
             const result = await githubSyncManager.pullAndApply({
                 snapshotUrl: req.body?.snapshotUrl || null,
                 force: forcePull,
-                trigger: req.body?.trigger || (isWebUiDefaultPull ? 'ui' : 'api')
+                trigger: req.body?.trigger || (isWebUiDefaultPull ? 'ui' : 'api'),
+                awaitAudioSync
             });
 
             res.json(result);

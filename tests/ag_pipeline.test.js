@@ -1944,4 +1944,148 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
             await new Promise((resolve) => mockServer.close(() => resolve()));
         }
     });
+
+    it('17. Router Sync Resilience: canonical mirror fallback, GitHub base64 envelope decoding, non-blocking UI audio sync, test-fixture guard, and main.js modal/status fixes', async () => {
+        const { GitHubSyncManager, isSuspectedTestFixtureNews } = require('../utils/github_sync');
+
+        // 17a. main.js regression checks: renderFullTextModalContent must use data.originalLanguage (not undefined `article`) and fetchStatus must refresh news on change
+        const mainJsSrc = fs.readFileSync(path.join(ROOT_DIR, 'public', 'js', 'main.js'), 'utf8');
+        const modalRenderMatch = mainJsSrc.match(/renderFullTextModalContent\(data = \{\}\) \{[\s\S]*?\n    \}/);
+        assert.ok(modalRenderMatch, 'renderFullTextModalContent should exist in public/js/main.js');
+        assert.equal(
+            modalRenderMatch[0].includes('article?.source?.language'),
+            false,
+            'renderFullTextModalContent must NOT reference undefined `article` variable'
+        );
+        assert.ok(
+            modalRenderMatch[0].includes('data.originalLanguage'),
+            'renderFullTextModalContent must read data.originalLanguage'
+        );
+        assert.ok(
+            mainJsSrc.includes('const newsChanged = Boolean(') && mainJsSrc.includes('this.fetchLatestNews()'),
+            'fetchStatus must refresh news when server lastUpdated or newsCount changes'
+        );
+
+        // 17b. buildCandidateEndpoints must canonicalize ghfast.top & GitHub Contents API URLs into full 3-mirror fallback list
+        const mgr = new GitHubSyncManager();
+        for (const variantUrl of [
+            'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json',
+            'https://ghfast.top/https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json',
+            'https://api.github.com/repos/alanhsun/CoreFeed/contents/latest.json?ref=ag-snapshot'
+        ]) {
+            const cands = mgr.buildCandidateEndpoints(variantUrl);
+            assert.equal(cands.length, 3, `Expected 3 fallback mirrors for ${variantUrl}`);
+            assert.equal(cands[0].url, 'https://api.github.com/repos/alanhsun/CoreFeed/contents/latest.json?ref=ag-snapshot');
+            assert.equal(cands[1].url, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
+            assert.equal(cands[2].url, 'https://ghfast.top/https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
+        }
+
+        // 17c. Test-fixture detection must block known fixture IDs/titles while accepting real compiled articles
+        assert.equal(
+            isSuspectedTestFixtureNews([{ id: 'standalone-1', translatedTitle: '独立自包含精编快照条目一：欧洲央行维持关键利率不变' }]),
+            true
+        );
+        assert.equal(
+            isSuspectedTestFixtureNews([{ id: 'real-2026-1', translatedTitle: '欧盟能源部长会议达成跨境电网升级与储能投资新方案' }]),
+            false
+        );
+
+        // 17d. fetchRemoteSnapshot decodes GitHub Contents API base64 envelope and UI pull-github returns fast without blocking on slow MP3 mirror
+        const innerSnapshot = {
+            version: '2.0',
+            publishedAt: new Date().toISOString(),
+            lastUpdated: new Date().toISOString(),
+            publishedBy: 'resilience-test-client',
+            news: [
+                {
+                    id: 'real-b64-1',
+                    title: 'European Grid Upgrade Approved',
+                    translatedTitle: '欧盟批准跨国输电网络现代化与清洁能源互联方案',
+                    summary: '欧盟委员会正式批准跨国电网现代化方案，旨在提升风光新能源跨区调度韧性并降低工业电价波动。',
+                    url: 'https://euobserver.com/energy/grid-2026',
+                    region: '欧洲',
+                    category: '能源',
+                    keyPoints: ['批准跨境输电走廊建设', '提升可再生能源跨国消纳', '降低成员国工业电价波动'],
+                    originalParagraphs: ['The European Commission approved a cross-border grid upgrade package.'],
+                    translatedParagraphs: ['欧盟委员会正式批准了一项跨国输电网络升级一揽子方案，重点强化成员国间电网互联互通。'],
+                    source: { id: 'euobserver', name: 'EUobserver', language: 'en' }
+                }
+            ],
+            summary: {
+                title: '2026年全球能源要闻深度综述',
+                content: '### 欧洲能源转型\n欧盟批准跨国输电网络升级方案 [NEWS_1]。'
+            },
+            audioBroadcast: {
+                version: '1.0',
+                updatedAt: new Date().toISOString(),
+                defaultTrack: 'news',
+                trackCount: 1,
+                tracks: {
+                    news: {
+                        track: 'news',
+                        title: '晚间要闻双主播精播',
+                        durationSec: 200,
+                        sizeBytes: 2048,
+                        fileName: 'briefing-news.mp3',
+                        chapters: []
+                    }
+                }
+            }
+        };
+
+        let slowAudioTimer = null;
+        const mockServer = http.createServer((req, res) => {
+            const cleanPath = (req.url || '').split('?')[0];
+            if (cleanPath.endsWith('/latest.json')) {
+                const b64 = Buffer.from(JSON.stringify(innerSnapshot), 'utf8').toString('base64');
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ name: 'latest.json', encoding: 'base64', content: b64 }));
+                return;
+            }
+            if (cleanPath.endsWith('/briefing-news.mp3')) {
+                slowAudioTimer = setTimeout(() => {
+                    if (!res.writableEnded) {
+                        res.writeHead(503);
+                        res.end();
+                    }
+                }, 2500);
+                return;
+            }
+            res.writeHead(404);
+            res.end();
+        });
+
+        await new Promise((resolve, reject) => mockServer.listen(0, '127.0.0.1', (e) => (e ? reject(e) : resolve())));
+        const mockPort = mockServer.address().port;
+        const prevSnapEnv = process.env.GITHUB_SNAPSHOT_URL;
+        const prevNoProxy = process.env.NO_PROXY;
+        try {
+            process.env.NO_PROXY = '127.0.0.1,localhost';
+            process.env.GITHUB_SNAPSHOT_URL = `http://127.0.0.1:${mockPort}/ag-snapshot/latest.json`;
+
+            const t0 = Date.now();
+            const uiRes = await fetch(`${baseUrl}/api/agent/pull-github`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'CoreFeed-WebUI'
+                },
+                body: JSON.stringify({ force: true, trigger: 'ui' })
+            });
+            const elapsedMs = Date.now() - t0;
+            assert.equal(uiRes.status, 200);
+            const uiBody = await uiRes.json();
+            assert.equal(uiBody.success, true);
+            assert.equal(uiBody.applied, true);
+            assert.equal(uiBody.displayedCount, 1);
+            assert.ok(elapsedMs < 1500, `Web UI pull-github must return immediately without waiting on slow MP3 mirror (took ${elapsedMs}ms)`);
+        } finally {
+            if (slowAudioTimer) clearTimeout(slowAudioTimer);
+            if (prevSnapEnv === undefined) delete process.env.GITHUB_SNAPSHOT_URL;
+            else process.env.GITHUB_SNAPSHOT_URL = prevSnapEnv;
+            if (prevNoProxy === undefined) delete process.env.NO_PROXY;
+            else process.env.NO_PROXY = prevNoProxy;
+            await new Promise((resolve) => mockServer.close(() => resolve()));
+        }
+    });
 });

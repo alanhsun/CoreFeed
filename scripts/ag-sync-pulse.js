@@ -24,7 +24,12 @@ const { readJsonFile, writeJsonFile } = require('../utils/helpers');
 const stateManager = require('../services/state_manager');
 const { SocialPulseService, getDefaultExternalPulseDir } = require('../services/social_pulse_service');
 const { AudioBroadcastService, normalizeAudioBroadcastBundle } = require('../services/audio_broadcast_service');
-const { publishSnapshotToGitHub, GitHubSyncManager } = require('../utils/github_sync');
+const {
+    publishSnapshotToGitHub,
+    GitHubSyncManager,
+    isLocalNewsPolluted,
+    isSuspectedTestFixtureNews
+} = require('../utils/github_sync');
 
 const httpAgentNoKeepAlive = new http.Agent({ keepAlive: false });
 const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: false });
@@ -144,48 +149,71 @@ async function resolveBaseNewsSnapshot(opts = {}) {
         ? localNewsDoc.news
         : (Array.isArray(localStateDoc?.newsData) && localStateDoc.newsData.length > 0 ? localStateDoc.newsData : []);
 
+    let localCandidate = null;
     if (localNews.length > 0) {
-        const allEnhancedNews = Array.isArray(localStateDoc?.allEnhancedNews) && localStateDoc.allEnhancedNews.length >= localNews.length
-            ? localStateDoc.allEnhancedNews
-            : localNews;
-        const summaryArticle = localSummaryDoc?.article || localStateDoc?.summaryArticle || null;
-        const sourceStats = Array.isArray(localStateDoc?.sourceStats) ? localStateDoc.sourceStats : [];
-        const basePublishedAt =
-            localStateDoc?.lastSnapshotPublishedAt ||
-            localNewsDoc?.lastUpdated ||
-            localStateDoc?.lastUpdated ||
-            new Date().toISOString();
+        const localInvalid = isLocalNewsPolluted(localNews) || isSuspectedTestFixtureNews(localNews);
+        if (localInvalid) {
+            logger.warn('AG-PULSE', '检测到本地 data/news.json 含有测试夹具或未精编数据，将跳过本地基础要闻并优先使用远端快照');
+        } else {
+            const allEnhancedNews = Array.isArray(localStateDoc?.allEnhancedNews) && localStateDoc.allEnhancedNews.length >= localNews.length
+                ? localStateDoc.allEnhancedNews
+                : localNews;
+            const summaryArticle = localSummaryDoc?.article || localStateDoc?.summaryArticle || null;
+            const sourceStats = Array.isArray(localStateDoc?.sourceStats) ? localStateDoc.sourceStats : [];
+            const basePublishedAt =
+                localStateDoc?.lastSnapshotPublishedAt ||
+                localNewsDoc?.lastUpdated ||
+                localStateDoc?.lastUpdated ||
+                new Date().toISOString();
 
-        return {
-            publishedAt: basePublishedAt,
-            lastUpdated: basePublishedAt,
-            publishedBy: localStateDoc?.lastPublishedBy || opts.publishedBy,
-            clientId: localStateDoc?.lastPublishedBy || opts.clientId,
-            sourceCount: sourceStats.length,
-            articleCount: localNews.length,
-            displayedCount: localNews.length,
-            totalPoolCount: allEnhancedNews.length,
-            news: localNews,
-            allEnhancedNews,
-            summary: summaryArticle,
-            summaryArticle,
-            sourceStats
-        };
+            localCandidate = {
+                publishedAt: basePublishedAt,
+                lastUpdated: basePublishedAt,
+                publishedBy: localStateDoc?.lastPublishedBy || opts.publishedBy,
+                clientId: localStateDoc?.lastPublishedBy || opts.clientId,
+                sourceCount: sourceStats.length,
+                articleCount: localNews.length,
+                displayedCount: localNews.length,
+                totalPoolCount: allEnhancedNews.length,
+                news: localNews,
+                allEnhancedNews,
+                summary: summaryArticle,
+                summaryArticle,
+                sourceStats
+            };
+        }
     }
 
+    let remoteCandidate = null;
     if (opts.snapshotUrl || process.env.NODE_ENV !== 'test') {
         try {
             const ghMgr = new GitHubSyncManager();
             const { data } = await ghMgr.fetchRemoteSnapshot(opts.snapshotUrl || null, { useEtag: false, force: true });
-            if (data && Array.isArray(data.news) && data.news.length > 0) {
-                return data;
+            const remoteNews = Array.isArray(data?.news) ? data.news : [];
+            if (remoteNews.length > 0 && !isLocalNewsPolluted(remoteNews) && !isSuspectedTestFixtureNews(remoteNews)) {
+                remoteCandidate = data;
             }
         } catch (err) {
             logger.debug('AG-PULSE', `拉取远端基础要闻快照跳过: ${err.message}`);
         }
     }
 
-    return null;
+    if (localCandidate && remoteCandidate) {
+        const localMs = Date.parse(localCandidate.publishedAt || localCandidate.lastUpdated || '') || 0;
+        const remoteMs = Date.parse(remoteCandidate.publishedAt || remoteCandidate.lastUpdated || '') || 0;
+        const remoteIsNewer = remoteMs > localMs;
+        const localLooksTruncated = localCandidate.news.length <= 2 && remoteCandidate.news.length >= 5;
+        if (remoteIsNewer || localLooksTruncated) {
+            logger.info(
+                'AG-PULSE',
+                `远端快照基础要闻更完整/更新 (remote=${remoteCandidate.news.length}条@${remoteCandidate.publishedAt}, local=${localCandidate.news.length}条@${localCandidate.publishedAt})，优先沿用远端基础要闻`
+            );
+            return remoteCandidate;
+        }
+        return localCandidate;
+    }
+
+    return localCandidate || remoteCandidate || null;
 }
 
 async function runSyncPulse(customOptions = {}) {

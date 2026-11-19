@@ -21,7 +21,12 @@ const config = require('../config');
 const logger = require('../utils/logger');
 const { readJsonFile, writeJsonFile } = require('../utils/helpers');
 const stateManager = require('../services/state_manager');
-const { publishSnapshotToGitHub } = require('../utils/github_sync');
+const { execFileSync } = require('child_process');
+const {
+    publishSnapshotToGitHub,
+    GitHubSyncManager,
+    isSuspectedTestFixtureNews
+} = require('../utils/github_sync');
 const { SocialPulseService, normalizeSocialPulseBundle } = require('../services/social_pulse_service');
 const { AudioBroadcastService, normalizeAudioBroadcastBundle } = require('../services/audio_broadcast_service');
 const {
@@ -456,6 +461,14 @@ async function runPublish(customOptions = {}) {
         'antigravity-client'
     ).trim();
 
+    if (
+        process.env.NODE_ENV !== 'test' &&
+        shouldPushToGithub &&
+        isSuspectedTestFixtureNews(finalNews)
+    ) {
+        throw createValidationError('检测到疑似自动化单元测试夹具条目，已拦截向远端 ag-snapshot 推送以防覆盖线上新闻');
+    }
+
     const socialPulseService = new SocialPulseService(null, stateManager);
     let existingPulse = null;
     if (customOptions.socialPulse) {
@@ -495,6 +508,73 @@ async function runPublish(customOptions = {}) {
     } else {
         existingAudio = await audioBroadcastService.loadLocalBundle();
     }
+
+    // 多客户端协同兜底：若当前发布机缺少本地社媒热议或语音播报，自动从远端 ag-snapshot 继承以免覆盖丢失
+    if (
+        process.env.NODE_ENV !== 'test' &&
+        shouldPushToGithub &&
+        (!existingPulse || !existingAudio)
+    ) {
+        let remoteSnap = null;
+        const repoDir = opts.repoDir || path.resolve(__dirname, '..');
+        const gitBranch = opts.githubBranch || 'ag-snapshot';
+        const gitRemote = opts.githubRemote || 'origin';
+        try {
+            if (!opts.skipGitPush) {
+                execFileSync('git', ['fetch', '--depth=1', gitRemote, `${gitBranch}:refs/remotes/${gitRemote}/${gitBranch}`], {
+                    cwd: repoDir,
+                    stdio: 'ignore',
+                    timeout: 20000
+                });
+            }
+            for (const refSpec of [`refs/remotes/${gitRemote}/${gitBranch}:latest.json`, `refs/heads/${gitBranch}:latest.json`]) {
+                try {
+                    const raw = execFileSync('git', ['show', refSpec], {
+                        cwd: repoDir,
+                        encoding: 'utf8',
+                        maxBuffer: 25 * 1024 * 1024,
+                        stdio: ['ignore', 'pipe', 'ignore']
+                    });
+                    if (raw && raw.trim()) {
+                        remoteSnap = JSON.parse(raw);
+                        break;
+                    }
+                } catch (_) {}
+            }
+        } catch (_) {}
+
+        if (!remoteSnap) {
+            try {
+                const ghMgr = new GitHubSyncManager();
+                const res = await ghMgr.fetchRemoteSnapshot(null, { useEtag: false, force: true });
+                remoteSnap = res?.data || null;
+            } catch (_) {}
+        }
+
+        if (remoteSnap && typeof remoteSnap === 'object') {
+            if (!existingPulse && remoteSnap.socialPulse) {
+                const inheritedPulse = normalizeSocialPulseBundle(remoteSnap.socialPulse, {
+                    updatedAt: remoteSnap.socialPulseUpdatedAt || remoteSnap.socialPulse.updatedAt
+                });
+                if (inheritedPulse && inheritedPulse.issueCount > 0) {
+                    existingPulse = inheritedPulse;
+                    await socialPulseService.saveBundle(existingPulse, { emit: false });
+                    logger.info('AG-PUBLISH', `已从远端 ag-snapshot 继承保留欧美社媒热议 (${existingPulse.issueCount} 期)`);
+                }
+            }
+            if (!existingAudio && remoteSnap.audioBroadcast) {
+                const inheritedAudio = normalizeAudioBroadcastBundle(remoteSnap.audioBroadcast, {
+                    updatedAt: remoteSnap.audioBroadcastUpdatedAt || remoteSnap.audioBroadcast.updatedAt
+                });
+                if (inheritedAudio && inheritedAudio.trackCount > 0) {
+                    existingAudio = inheritedAudio;
+                    await audioBroadcastService.saveBundle(existingAudio, { emit: false });
+                    logger.info('AG-PUBLISH', `已从远端 ag-snapshot 继承保留双主播语音播报 (${Object.keys(existingAudio.tracks).join(', ')})`);
+                }
+            }
+        }
+    }
+
     if (existingAudio) {
         stateManager.updateAudioBroadcast(existingAudio, false);
     }
