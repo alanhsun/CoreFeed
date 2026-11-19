@@ -491,14 +491,6 @@ async function applySnapshotToRouter(
             if (config.storage?.audioBroadcastFile) {
                 await writeJsonFile(config.storage.audioBroadcastFile, appliedAudio);
             }
-            if (syncAudioFiles) {
-                const audioSvc = audioBroadcastService || new AudioBroadcastService(io, stateManager);
-                try {
-                    await audioSvc.syncRemoteAudioFiles(appliedAudio, { snapshotUrl });
-                } catch (audioErr) {
-                    logger.warn('AUDIO-SYNC', `快照音频文件同步暂跳过: ${audioErr.message}`);
-                }
-            }
             if (io) {
                 io.emit('audio-updated', {
                     success: true,
@@ -508,9 +500,19 @@ async function applySnapshotToRouter(
         }
     }
 
-    // 3. 立即将内存状态持久化至 data/state.json，防止 5 分钟定时器覆盖
+    // 3. 立即将内存状态持久化至 data/state.json，防止 5 分钟定时器覆盖（且不等待大体积 MP3 缓存完成）
     if (stateManager) {
         await stateManager.saveToFile();
+    }
+
+    // 3b. 同步缓存远端 MP3 至本地 data/audio/，确保本机 /api/audio/:track 播放拖拽秒开
+    if (appliedAudio && appliedAudio.trackCount > 0 && syncAudioFiles) {
+        const audioSvc = audioBroadcastService || new AudioBroadcastService(io, stateManager);
+        try {
+            await audioSvc.syncRemoteAudioFiles(appliedAudio, { snapshotUrl });
+        } catch (audioErr) {
+            logger.warn('AUDIO-SYNC', `快照音频文件同步暂跳过: ${audioErr.message}`);
+        }
     }
 
     if (newsAgentService && typeof newsAgentService.emitAgentEvent === 'function') {

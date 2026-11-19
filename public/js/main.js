@@ -1193,6 +1193,19 @@ class CoreFeedApp {
             if (data.schedule) {
                 this.schedule = data.schedule;
             }
+            if (data.hasAudioBroadcast) {
+                const curAudioTs = this.audioBroadcast?.updatedAt || null;
+                const curTrackCount = this.audioBroadcast?.trackCount || 0;
+                if (!this.audioBroadcast || curTrackCount !== (data.audioTrackCount || 0) || (data.audioUpdatedAt && data.audioUpdatedAt !== curAudioTs)) {
+                    this.fetchLatestAudio();
+                }
+            }
+            if (data.hasSocialPulse) {
+                const curPulseTs = this.socialPulse?.updatedAt || null;
+                if (!this.socialPulse || (data.socialPulseUpdatedAt && data.socialPulseUpdatedAt !== curPulseTs)) {
+                    this.fetchLatestPulse();
+                }
+            }
             this.renderStatusBar();
             this.renderModalSyncStatus();
         } catch (_) {}
@@ -2020,6 +2033,7 @@ class CoreFeedApp {
             if (data && data.success && data.audioBroadcast) {
                 this.audioBroadcast = data.audioBroadcast;
                 this.renderBroadcastPlayer({ preservePlayback: true });
+                this.renderSocialPulse();
             }
         } catch (_) {}
     }

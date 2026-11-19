@@ -40,7 +40,7 @@ function computeFileSha256(filePath) {
 }
 
 function resolveSnapshotRawDirUrl(customSnapshotUrl = null) {
-    const snapUrl = String(
+    let snapUrl = String(
         customSnapshotUrl ||
         process.env.GITHUB_SNAPSHOT_URL ||
         config.githubSync?.snapshotUrl ||
@@ -48,6 +48,28 @@ function resolveSnapshotRawDirUrl(customSnapshotUrl = null) {
         'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
     ).trim();
     if (!snapUrl) return '';
+
+    // 兼容 ghfast.top 等前缀代理，先还原底层 GitHub raw URL 以便后续统一构造多镜像候选
+    const proxyUnwrap = snapUrl.match(/^https:\/\/ghfast\.top\/(https:\/\/.+)$/i);
+    if (proxyUnwrap) {
+        snapUrl = proxyUnwrap[1];
+    }
+
+    // 兼容 GitHub Contents API (https://api.github.com/repos/<owner>/<repo>/contents/<path>?ref=<branch>)
+    // 统一映射回 canonical raw.githubusercontent.com 目录，防止丢失 ?ref= 分支导致 404
+    const apiMatch = snapUrl.match(
+        /^https:\/\/api\.github\.com\/repos\/([^/?#]+)\/([^/?#]+)\/contents\/([^?#]*)(?:\?([^#]*))?$/i
+    );
+    if (apiMatch) {
+        const [, owner, repo, relPath, qs = ''] = apiMatch;
+        const params = new URLSearchParams(qs);
+        const branch = (params.get('ref') || 'ag-snapshot').trim();
+        const dirPart = relPath.includes('/') ? relPath.replace(/\/[^/]+$/, '') : '';
+        return dirPart
+            ? `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${dirPart}`
+            : `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}`;
+    }
+
     return snapUrl.replace(/\/[^/?#]+(?:\?.*)?$/, '');
 }
 
@@ -61,11 +83,16 @@ function buildAudioMirrorCandidates(rawFileUrl) {
     );
     if (ghRawMatch) {
         const [, owner, repo, branch, filePath] = ghRawMatch;
-        candidates.push({ url: cleanUrl, headers: {} });
-        candidates.push({ url: `https://ghfast.top/${cleanUrl}`, headers: {} });
+        const decodedBranch = decodeURIComponent(branch);
         candidates.push({
-            url: `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${encodeURIComponent(branch)}`,
+            url: `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${encodeURIComponent(decodedBranch)}`,
             headers: { Accept: 'application/vnd.github.v3.raw' }
+        });
+        candidates.push({ url: `https://ghfast.top/${cleanUrl}`, headers: {} });
+        candidates.push({ url: cleanUrl, headers: {} });
+        candidates.push({
+            url: `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${encodeURIComponent(decodedBranch)}/${filePath}`,
+            headers: {}
         });
     } else {
         candidates.push({ url: cleanUrl, headers: {} });
@@ -420,11 +447,12 @@ class AudioBroadcastService {
 
     async syncRemoteAudioFiles(bundle, options = {}) {
         const tracks = bundle?.tracks || {};
+        const keys = Object.keys(tracks);
         const synced = {};
-        for (const key of Object.keys(tracks)) {
+        await Promise.all(keys.map(async (key) => {
             const p = await this.ensureLocalAudioFile(key, { ...options, bundle });
             synced[key] = Boolean(p && fs.existsSync(p));
-        }
+        }));
         return synced;
     }
 }

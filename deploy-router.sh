@@ -214,12 +214,28 @@ if [ -n "${LOCAL_SRC_DIR:-}" ] && [ -d "${LOCAL_SRC_DIR}" ]; then
   cp -f "${LOCAL_SRC_DIR}/.dockerignore" "${REMOTE_DIR}/.dockerignore" 2>/dev/null || true
 else
   rm -rf "${TMP_DIR}/corefeed.tar.gz" "${TMP_DIR}/CoreFeed-main"
-  if command -v wget >/dev/null 2>&1; then
-    wget -qO "${TMP_DIR}/corefeed.tar.gz" "${TARBALL_URL}"
-  elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL "${TARBALL_URL}" -o "${TMP_DIR}/corefeed.tar.gz"
+  FALLBACK_TARBALL_URL="https://ghfast.top/${TARBALL_URL}"
+  DOWNLOAD_OK="0"
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsSL --connect-timeout 15 --max-time 60 "${TARBALL_URL}" -o "${TMP_DIR}/corefeed.tar.gz"; then
+      DOWNLOAD_OK="1"
+    elif curl -fsSL --connect-timeout 15 --max-time 60 "${FALLBACK_TARBALL_URL}" -o "${TMP_DIR}/corefeed.tar.gz"; then
+      echo "⚠️ GitHub 直连失败，已自动切换镜像下载源码"
+      DOWNLOAD_OK="1"
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    if wget -q -T 60 -O "${TMP_DIR}/corefeed.tar.gz" "${TARBALL_URL}"; then
+      DOWNLOAD_OK="1"
+    elif wget -q -T 60 -O "${TMP_DIR}/corefeed.tar.gz" "${FALLBACK_TARBALL_URL}"; then
+      echo "⚠️ GitHub 直连失败，已自动切换镜像下载源码"
+      DOWNLOAD_OK="1"
+    fi
   else
     echo "❌ 错误: 未找到 wget 或 curl 命令"
+    exit 1
+  fi
+  if [ "${DOWNLOAD_OK}" != "1" ] || [ ! -s "${TMP_DIR}/corefeed.tar.gz" ]; then
+    echo "❌ 错误: 无法下载源码压缩包 (${TARBALL_URL})"
     exit 1
   fi
 

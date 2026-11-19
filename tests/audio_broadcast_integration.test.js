@@ -19,7 +19,8 @@ const { server, io, services } = require('../server');
 const {
     AudioBroadcastService,
     normalizeAudioBroadcastBundle,
-    computeBufferSha256
+    computeBufferSha256,
+    resolveSnapshotRawDirUrl
 } = require('../services/audio_broadcast_service');
 const { runPublish } = require('../scripts/ag-publish');
 const { runSyncPulse } = require('../scripts/ag-sync-pulse');
@@ -436,6 +437,16 @@ describe('CoreFeed x Qwen3-TTS Dual-Anchor Audio Broadcast Suite', () => {
             } finally {
                 await new Promise((r) => mockSnapshotHttp.close(() => r()));
             }
+
+            // Verify resolveSnapshotRawDirUrl canonicalizes GitHub Contents API & ghfast.top mirror URLs
+            assert.equal(
+                resolveSnapshotRawDirUrl('https://api.github.com/repos/alanhsun/CoreFeed/contents/latest.json?ref=ag-snapshot'),
+                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot'
+            );
+            assert.equal(
+                resolveSnapshotRawDirUrl('https://ghfast.top/https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'),
+                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot'
+            );
         } finally {
             fs.rmSync(tmpRoot, { recursive: true, force: true });
         }
