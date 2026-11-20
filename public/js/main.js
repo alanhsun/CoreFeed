@@ -44,6 +44,7 @@ class CoreFeedApp {
         this.initTheme();
         this.applyReaderFontSize();
         this.initKeyboardShortcuts();
+        this.initDelegatedInteractions();
         this.initTablistEnhancements();
         this.initBroadcastPlayer();
         this.initSocket();
@@ -91,6 +92,60 @@ class CoreFeedApp {
         });
     }
 
+    initDelegatedInteractions() {
+        document.addEventListener('click', (event) => {
+            const target = event.target;
+            if (!target || typeof target.closest !== 'function') return;
+
+            const regionBtn = target.closest('[data-filter-region]');
+            if (regionBtn) {
+                this.setRegionFilter(regionBtn.dataset.filterRegion || '全部');
+                return;
+            }
+            const catBtn = target.closest('[data-filter-category]');
+            if (catBtn) {
+                this.setCategoryFilter(catBtn.dataset.filterCategory || '全部');
+                return;
+            }
+            const pulseRegionBtn = target.closest('[data-pulse-region]');
+            if (pulseRegionBtn) {
+                this.setPulseRegionFilter(pulseRegionBtn.dataset.pulseRegion || '全部');
+                return;
+            }
+            const pulseLangBtn = target.closest('[data-pulse-lang]');
+            if (pulseLangBtn) {
+                this.setPulseLangFilter(pulseLangBtn.dataset.pulseLang || '全部');
+                return;
+            }
+            const pulsePlatBtn = target.closest('[data-pulse-platform]');
+            if (pulsePlatBtn) {
+                this.setPulsePlatformFilter(pulsePlatBtn.dataset.pulsePlatform || '全部');
+                return;
+            }
+            const pulseCatBtn = target.closest('[data-pulse-category]');
+            if (pulseCatBtn) {
+                this.setPulseCategoryFilter(pulseCatBtn.dataset.pulseCategory || '全部');
+                return;
+            }
+            const cardTrigger = target.closest('.card-body-trigger[data-card-url]');
+            if (cardTrigger) {
+                this.handleCardBodyClick(event, cardTrigger.dataset.cardUrl || '', true);
+            }
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            const target = event.target;
+            if (!target || typeof target.closest !== 'function') return;
+            if (target.closest('a, button, input, select, textarea')) return;
+            const cardTrigger = target.closest('.card-body-trigger[data-card-url]');
+            if (cardTrigger) {
+                event.preventDefault();
+                this.handleCardBodyClick(event, cardTrigger.dataset.cardUrl || '', true);
+            }
+        });
+    }
+
     toast(message, type = 'info') {
         const container = document.getElementById('toast') || document.getElementById('toastContainer');
         if (!container) return;
@@ -124,6 +179,70 @@ class CoreFeedApp {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    safeHttpUrl(rawUrl, fallback = '') {
+        if (typeof rawUrl !== 'string') return fallback;
+        const trimmed = rawUrl.trim();
+        if (!trimmed) return fallback;
+        try {
+            const parsed = new URL(trimmed);
+            return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? trimmed : fallback;
+        } catch (_) {
+            return fallback;
+        }
+    }
+
+    safeAssetUrl(rawUrl, fallback = '') {
+        if (typeof rawUrl !== 'string') return fallback;
+        const trimmed = rawUrl.trim();
+        if (!trimmed) return fallback;
+        if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+            return trimmed;
+        }
+        return this.safeHttpUrl(trimmed, fallback);
+    }
+
+    sanitizeSummaryHtml(rawHtml = '') {
+        const tpl = document.createElement('template');
+        tpl.innerHTML = String(rawHtml || '');
+        const ALLOWED_TAGS = new Set(['H3', 'H4', 'P', 'STRONG', 'EM', 'B', 'I', 'BR', 'A', 'SPAN', 'UL', 'OL', 'LI', 'DIV']);
+        const ALLOWED_ATTRS = new Set(['class', 'title', 'data-news-index', 'target', 'rel', 'href']);
+
+        const cleanNode = (node) => {
+            const children = Array.from(node.childNodes || []);
+            for (const child of children) {
+                if (child.nodeType === Node.ELEMENT_NODE) {
+                    const tag = child.tagName.toUpperCase();
+                    if (!ALLOWED_TAGS.has(tag)) {
+                        child.remove();
+                        continue;
+                    }
+                    for (const attr of Array.from(child.attributes)) {
+                        const name = attr.name.toLowerCase();
+                        if (!ALLOWED_ATTRS.has(name)) {
+                            child.removeAttribute(attr.name);
+                            continue;
+                        }
+                        if (name === 'href') {
+                            const safe = this.safeHttpUrl(attr.value, '');
+                            if (!safe) {
+                                child.removeAttribute('href');
+                            } else {
+                                child.setAttribute('href', safe);
+                                child.setAttribute('rel', 'noopener noreferrer');
+                            }
+                        }
+                    }
+                    cleanNode(child);
+                } else if (child.nodeType !== Node.TEXT_NODE) {
+                    child.remove();
+                }
+            }
+        };
+
+        cleanNode(tpl.content);
+        return tpl.innerHTML;
     }
 
     // ==================== 2. WebSocket 实时渐进式同步 ====================
@@ -352,14 +471,14 @@ class CoreFeedApp {
         regionBar.innerHTML = `<span class="filter-row-label">地区</span>` +
             regions.map(r => {
                 const active = this.selectedRegion === r;
-                return `<button type="button" onclick="app.setRegionFilter('${this.escapeHtml(r)}')" class="btn-chip ${active ? 'active' : ''}"><span>${this.escapeHtml(r)}</span><span class="chip-count">(${regionCounts[r]})</span></button>`;
+                return `<button type="button" data-filter-region="${this.escapeHtml(r)}" class="btn-chip ${active ? 'active' : ''}"><span>${this.escapeHtml(r)}</span><span class="chip-count">(${regionCounts[r]})</span></button>`;
             }).join('');
 
         const categories = Object.keys(categoryCounts);
         categoryBar.innerHTML = `<span class="filter-row-label">领域</span>` +
             categories.map(c => {
                 const active = this.selectedCategory === c;
-                return `<button type="button" onclick="app.setCategoryFilter('${this.escapeHtml(c)}')" class="btn-chip ${active ? 'active' : ''}"><span>${this.escapeHtml(c)}</span><span class="chip-count">(${categoryCounts[c]})</span></button>`;
+                return `<button type="button" data-filter-category="${this.escapeHtml(c)}" class="btn-chip ${active ? 'active' : ''}"><span>${this.escapeHtml(c)}</span><span class="chip-count">(${categoryCounts[c]})</span></button>`;
             }).join('');
 
         if (sourceSelect) {
@@ -571,7 +690,8 @@ class CoreFeedApp {
         const region = item.region || '国际';
         const category = item.category || '国际';
         const timeStr = item.publishedAt ? this.formatRelativeTime(item.publishedAt) : '';
-        const imageUrl = item.urlToImage || '';
+        const rawImageUrl = item.urlToImage || '';
+        const imageUrl = this.safeAssetUrl(rawImageUrl, '');
 
         const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
         const hasMultiSources = relatedSources.length > 0;
@@ -579,8 +699,9 @@ class CoreFeedApp {
         const isCompiling = (this.collectionPhase === 'collected' || this.collectionPhase === 'compiling') && !item.aiCompiled;
 
         const relatedLinksHtml = relatedSources.map(r => {
-            if (r.url) {
-                return `<a href="${this.escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="${this.escapeHtml(r.title || r.name)}">${this.escapeHtml(r.name)}</a>`;
+            const safeRelUrl = this.safeHttpUrl(r.url, '');
+            if (safeRelUrl) {
+                return `<a href="${this.escapeHtml(safeRelUrl)}" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="${this.escapeHtml(r.title || r.name)}">${this.escapeHtml(r.name)}</a>`;
             }
             return `<span>${this.escapeHtml(r.name)}</span>`;
         }).join('、');
@@ -588,6 +709,7 @@ class CoreFeedApp {
         const metaBadgeText = category && category !== region ? `${region} · ${category}` : region;
         const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
         const displayImgSrc = isRemoteHttp ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}` : imageUrl;
+        const safeItemUrl = this.safeHttpUrl(item.url, '#');
         const active = slideIdx === 0;
 
         return `
@@ -621,8 +743,7 @@ class CoreFeedApp {
                          role="button"
                          tabindex="0"
                          title="点击查看原文全文中文翻译"
-                         onclick="app.handleCardBodyClick(event, '${encodeURIComponent(item.url || '')}')"
-                         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();app.handleCardBodyClick(event, '${encodeURIComponent(item.url || '')}');}">
+                         data-card-url="${this.escapeHtml(item.url || '')}">
                         <div class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
                             ${imageUrl ? `
                                 <img src="${this.escapeHtml(displayImgSrc)}"
@@ -684,7 +805,7 @@ class CoreFeedApp {
                         <span class="card-meta-sep">·</span>
                         <span class="card-translate-hint">点击卡片看全文翻译</span>
                     </div>
-                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
+                    <a href="${this.escapeHtml(safeItemUrl)}" target="_blank" rel="noopener noreferrer"
                         class="btn-source-link">
                         <span>原文</span>
                         <span aria-hidden="true">↗</span>
@@ -704,7 +825,8 @@ class CoreFeedApp {
         const region = item.region || '国际';
         const category = item.category || '国际';
         const timeStr = item.publishedAt ? this.formatRelativeTime(item.publishedAt) : '';
-        const imageUrl = item.urlToImage || '';
+        const rawImageUrl = item.urlToImage || '';
+        const imageUrl = this.safeAssetUrl(rawImageUrl, '');
 
         const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
         const hasMultiSources = relatedSources.length > 0;
@@ -712,8 +834,9 @@ class CoreFeedApp {
         const isCompiling = (this.collectionPhase === 'collected' || this.collectionPhase === 'compiling') && !item.aiCompiled;
 
         const relatedLinksHtml = relatedSources.map(r => {
-            if (r.url) {
-                return `<a href="${this.escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="${this.escapeHtml(r.title || r.name)}">${this.escapeHtml(r.name)}</a>`;
+            const safeRelUrl = this.safeHttpUrl(r.url, '');
+            if (safeRelUrl) {
+                return `<a href="${this.escapeHtml(safeRelUrl)}" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="${this.escapeHtml(r.title || r.name)}">${this.escapeHtml(r.name)}</a>`;
             }
             return `<span>${this.escapeHtml(r.name)}</span>`;
         }).join('、');
@@ -721,6 +844,7 @@ class CoreFeedApp {
         const metaBadgeText = category && category !== region ? `${region} · ${category}` : region;
         const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
         const displayImgSrc = isRemoteHttp ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}` : imageUrl;
+        const safeItemUrl = this.safeHttpUrl(item.url, '#');
 
         return `
             <article class="news-card news-card--compact bento-span-4">
@@ -738,8 +862,7 @@ class CoreFeedApp {
                          role="button"
                          tabindex="0"
                          title="点击查看原文全文中文翻译"
-                         onclick="app.handleCardBodyClick(event, '${encodeURIComponent(item.url || '')}')"
-                         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();app.handleCardBodyClick(event, '${encodeURIComponent(item.url || '')}');}">
+                         data-card-url="${this.escapeHtml(item.url || '')}">
                         <div class="card-cover block ${imageUrl ? '' : 'is-fallback'}" data-cat="${this.escapeHtml(category)}">
                             ${imageUrl ? `
                                 <img src="${this.escapeHtml(displayImgSrc)}"
@@ -799,7 +922,7 @@ class CoreFeedApp {
                     <div class="card-footer-meta">
                         <span class="card-timestamp">${this.escapeHtml(timeStr)}</span>
                     </div>
-                    <a href="${this.escapeHtml(item.url || '#')}" target="_blank" rel="noopener noreferrer"
+                    <a href="${this.escapeHtml(safeItemUrl)}" target="_blank" rel="noopener noreferrer"
                         class="btn-source-link">
                         <span>原文</span>
                         <span aria-hidden="true">↗</span>
@@ -809,7 +932,7 @@ class CoreFeedApp {
         `;
     }
 
-    handleCardBodyClick(event, encodedUrl) {
+    handleCardBodyClick(event, rawUrl, isDecoded = false) {
         if (event && event.target && typeof event.target.closest === 'function') {
             const interactiveEl = event.target.closest('a, button');
             if (interactiveEl) {
@@ -820,10 +943,14 @@ class CoreFeedApp {
             event.preventDefault();
         }
         let url = '';
-        try {
-            url = decodeURIComponent(encodedUrl || '');
-        } catch (_) {
-            url = encodedUrl || '';
+        if (isDecoded) {
+            url = String(rawUrl || '');
+        } else {
+            try {
+                url = decodeURIComponent(rawUrl || '');
+            } catch (_) {
+                url = String(rawUrl || '');
+            }
         }
         if (!url) return;
         this.openFullTextModal(url);
@@ -988,7 +1115,7 @@ class CoreFeedApp {
             badgeEl.textContent = `${sourceName} · ${taxonomy}`;
         }
         if (linkEl) {
-            linkEl.href = url || '#';
+            linkEl.href = this.safeHttpUrl(url, '#');
         }
         if (bodyEl) {
             bodyEl.scrollTop = 0;
@@ -1427,7 +1554,7 @@ class CoreFeedApp {
             metaEl.textContent = `生成时间：${new Date(article.generatedAt || Date.now()).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} / 涵盖 ${(article.regions || []).join('、')}（${article.wordCount || 0} 字）`;
         }
         if (bodyEl) {
-            bodyEl.innerHTML = article.htmlContent || '';
+            bodyEl.innerHTML = this.sanitizeSummaryHtml(article.htmlContent || '');
         }
     }
 
@@ -1687,14 +1814,14 @@ class CoreFeedApp {
                 <div class="flex flex-wrap items-center gap-2">
                     <span class="filter-row-label">区域</span>
                     ${regionOptions.map(opt => `
-                        <button type="button" onclick="app.setPulseRegionFilter('${this.escapeHtml(opt.key)}')" class="btn-chip ${this.selectedPulseRegion === opt.key ? 'active' : ''}">
+                        <button type="button" data-pulse-region="${this.escapeHtml(opt.key)}" class="btn-chip ${this.selectedPulseRegion === opt.key ? 'active' : ''}">
                             <span>${this.escapeHtml(opt.label)}</span><span class="chip-count">(${opt.count})</span>
                         </button>
                     `).join('')}
                     <span class="filter-row-label" style="margin-left: 8px;">语种</span>
-                    <button type="button" onclick="app.setPulseLangFilter('全部')" class="btn-chip ${this.selectedPulseLang === '全部' ? 'active' : ''}"><span>全部语种</span></button>
+                    <button type="button" data-pulse-lang="全部" class="btn-chip ${this.selectedPulseLang === '全部' ? 'active' : ''}"><span>全部语种</span></button>
                     ${allLangs.map(lc => `
-                        <button type="button" onclick="app.setPulseLangFilter('${this.escapeHtml(lc)}')" class="btn-chip ${this.selectedPulseLang === lc ? 'active' : ''}">
+                        <button type="button" data-pulse-lang="${this.escapeHtml(lc)}" class="btn-chip ${this.selectedPulseLang === lc ? 'active' : ''}">
                             <span>${this.escapeHtml(this.formatPulseLangLabel(lc))}</span>
                         </button>
                     `).join('')}
@@ -1702,14 +1829,14 @@ class CoreFeedApp {
                 <div class="flex flex-wrap items-center gap-2 pt-2.5" style="border-top: 1px solid var(--border-subtle);">
                     <span class="filter-row-label">平台</span>
                     ${['全部', 'X', 'Threads', 'Reddit'].map(plat => `
-                        <button type="button" onclick="app.setPulsePlatformFilter('${plat}')" class="btn-chip ${this.selectedPulsePlatform === plat ? 'active' : ''}">
+                        <button type="button" data-pulse-platform="${this.escapeHtml(plat)}" class="btn-chip ${this.selectedPulsePlatform === plat ? 'active' : ''}">
                             <span>${plat === '全部' ? '全部平台' : plat}</span>
                         </button>
                     `).join('')}
                     <span class="filter-row-label" style="margin-left: 8px;">领域</span>
-                    <button type="button" onclick="app.setPulseCategoryFilter('全部')" class="btn-chip ${this.selectedPulseCategory === '全部' ? 'active' : ''}"><span>全部领域</span></button>
+                    <button type="button" data-pulse-category="全部" class="btn-chip ${this.selectedPulseCategory === '全部' ? 'active' : ''}"><span>全部领域</span></button>
                     ${allCategories.map(cat => `
-                        <button type="button" onclick="app.setPulseCategoryFilter('${this.escapeHtml(cat)}')" class="btn-chip ${this.selectedPulseCategory === cat ? 'active' : ''}">
+                        <button type="button" data-pulse-category="${this.escapeHtml(cat)}" class="btn-chip ${this.selectedPulseCategory === cat ? 'active' : ''}">
                             <span>${this.escapeHtml(cat)}</span>
                         </button>
                     `).join('')}
@@ -1780,6 +1907,7 @@ class CoreFeedApp {
             <div class="pulse-quotes-stack">
                 ${quotes.map(q => {
                     const qLang = String(q.language || 'en').toLowerCase();
+                    const safeSourceUrl = this.safeHttpUrl(q.source_url, '');
                     return `
                         <div class="pulse-quote-card">
                             <div class="pulse-quote-meta">
@@ -1789,8 +1917,8 @@ class CoreFeedApp {
                                     <span class="pulse-plat-pill">${this.escapeHtml(qLang.toUpperCase())}</span>
                                     ${q.metrics ? `<span>· ${this.escapeHtml(q.metrics)}</span>` : ''}
                                 </span>
-                                ${q.source_url ? `
-                                    <a href="${this.escapeHtml(q.source_url)}" target="_blank" rel="noopener noreferrer" class="btn-source-link">
+                                ${safeSourceUrl ? `
+                                    <a href="${this.escapeHtml(safeSourceUrl)}" target="_blank" rel="noopener noreferrer" class="btn-source-link">
                                         <span>原帖</span><span aria-hidden="true">↗</span>
                                     </a>
                                 ` : ''}
@@ -2141,7 +2269,7 @@ class CoreFeedApp {
         if (subEl) subEl.textContent = trackMeta.subtitle || '';
         if (totEl) totEl.textContent = this.formatAudioClock(trackMeta.durationSec);
         if (dlLink) {
-            dlLink.href = trackMeta.audioUrl || '#';
+            dlLink.href = this.safeAssetUrl(trackMeta.audioUrl, '#');
             dlLink.setAttribute('download', trackMeta.fileName || `briefing-${trackMeta.track}.mp3`);
         }
 

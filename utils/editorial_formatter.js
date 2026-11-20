@@ -103,12 +103,15 @@ function mergeClusterArticles(primaryArticle, companionArticles = []) {
     };
 }
 
+const { stripHtml, isSafeHttpUrl } = require('./helpers');
+
 function escapeHtmlBasic(str = '') {
     return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 /**
@@ -128,11 +131,14 @@ function convertSummaryToRichHtml(text, newsData = []) {
                 .map((num) => {
                     const article = newsData[num - 1];
                     if (!article || !article.url) return '';
-                    const targetUrl = escapeHtmlBasic(article.url);
                     const srcName = escapeHtmlBasic(
                         article.source?.name ? article.source.name.split('(')[0].trim() : '原文'
                     );
                     const sourceTitle = escapeHtmlBasic(article.translatedTitle || article.title || '');
+                    if (!isSafeHttpUrl(article.url)) {
+                        return ` <span class="news-ref-link" data-news-index="${num - 1}" title="${sourceTitle}">[${srcName}]</span>`;
+                    }
+                    const targetUrl = escapeHtmlBasic(article.url.trim());
                     return ` <a href="${targetUrl}" target="_blank" rel="noopener noreferrer" class="news-ref-link" data-news-index="${num - 1}" title="${sourceTitle}">[${srcName}]</a>`;
                 })
                 .join('');
@@ -166,6 +172,20 @@ function convertSummaryToRichHtml(text, newsData = []) {
     }
 
     return htmlBlocks.join('\n');
+}
+
+/**
+ * 始终在本地服务端从安全 Markdown / 纯文本重新生成综述 HTML，绝不信任外部快照自带的原始 htmlContent
+ */
+function renderSafeSummaryHtml(summaryArticle, newsData = []) {
+    if (!summaryArticle || typeof summaryArticle !== 'object') return '';
+    const rawBody = String(summaryArticle.content || summaryArticle.markdown || '').trim();
+    if (rawBody) {
+        const normalizedBody = rawBody.split('\n').map(l => l.trim()).filter(Boolean).join('\n\n');
+        return convertSummaryToRichHtml(normalizedBody, newsData);
+    }
+    const fallbackText = stripHtml(String(summaryArticle.htmlContent || ''));
+    return fallbackText ? convertSummaryToRichHtml(fallbackText, newsData) : '';
 }
 
 /**
@@ -220,5 +240,6 @@ module.exports = {
     splitTextIntoParagraphs,
     mergeClusterArticles,
     convertSummaryToRichHtml,
+    renderSafeSummaryHtml,
     createSummaryArticleObject
 };

@@ -24,6 +24,9 @@ const {
     setupGlobalErrorHandlers,
     createRateLimiter
 } = require('./middleware/error_handler');
+const { isOriginAllowed, getAllowedCorsOrigins } = require('./middleware/auth');
+const { serializeForScript, sanitizeHttpUrl } = require('./utils/helpers');
+const { renderSafeSummaryHtml } = require('./utils/editorial_formatter');
 
 const NewsService = require('./services/news_service');
 const NewsAgentService = require('./services/news_agent_service');
@@ -38,7 +41,25 @@ NetworkConfig.initialize();
 setupGlobalErrorHandlers();
 
 const app = express();
-app.use(cors());
+app.disable('x-powered-by');
+
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    next();
+});
+
+app.use(cors((req, callback) => {
+    const origin = req.header('Origin');
+    if (!origin) {
+        return callback(null, { origin: false });
+    }
+    if (isOriginAllowed(origin, req.header('Host'))) {
+        return callback(null, { origin: true, methods: ['GET', 'POST', 'OPTIONS'] });
+    }
+    return callback(null, { origin: false });
+}));
 
 if (!fs.existsSync('./logs')) {
     fs.mkdirSync('./logs', { recursive: true });
@@ -51,16 +72,35 @@ const io = socketIo(server, {
     pingInterval: config.socketio.pingInterval,
     transports: ['websocket', 'polling'],
     allowEIO3: true,
+    allowRequest: (req, callback) => {
+        const origin = req.headers?.origin;
+        if (!origin) {
+            return callback(null, true);
+        }
+        if (isOriginAllowed(origin, req.headers?.host)) {
+            return callback(null, true);
+        }
+        return callback('Cross-Origin Socket.IO connection rejected', false);
+    },
     cors: {
-        origin: '*',
+        origin: (origin, callback) => {
+            if (!origin) return callback(null, true);
+            const allowedList = getAllowedCorsOrigins();
+            const norm = String(origin).trim().replace(/\/+$/, '').toLowerCase();
+            return callback(null, allowedList.includes(norm));
+        },
         methods: ['GET', 'POST']
     },
     connectTimeout: config.socketio.connectTimeout,
     maxHttpBufferSize: config.socketio.maxHttpBufferSize
 });
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+const publishJsonParser = express.json({ limit: '25mb' });
+app.use('/api/agent/publish', publishJsonParser);
+app.use('/api/agent/publish-pulse', publishJsonParser);
+app.use('/api/agent/publish-audio', publishJsonParser);
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 app.use((req, res, next) => {
     req.id = require('crypto').randomBytes(6).toString('hex');
@@ -130,9 +170,14 @@ stateManager.on('newsData-changed', ({ value }) => {
 
 stateManager.on('summaryArticle-changed', ({ value }) => {
     if (value) {
+        const newsList = stateManager.get('newsData') || [];
+        const safeArticle = {
+            ...value,
+            htmlContent: renderSafeSummaryHtml(value, newsList)
+        };
         io.emit('summary-completed', {
             success: true,
-            article: value
+            article: safeArticle
         });
     }
 });
@@ -190,7 +235,7 @@ app.use('/api', apiRoutes);
 app.get('/', (req, res) => {
     const newsData = stateManager.get('newsData') || [];
     const allEnhanced = stateManager.get('allEnhancedNews') || newsData;
-    const summaryArticle = stateManager.get('summaryArticle') || null;
+    const rawSummaryArticle = stateManager.get('summaryArticle') || null;
     const socialPulse = stateManager.get('socialPulse') || null;
     const audioBroadcast = stateManager.get('audioBroadcast') || null;
     const lastUpdated = stateManager.get('lastUpdated');
@@ -208,6 +253,12 @@ app.get('/', (req, res) => {
         clientId;
 
     const displayNews = newsData.slice(0, config.agent.maxCuratedArticles || 30);
+    const summaryArticle = rawSummaryArticle
+        ? {
+            ...rawSummaryArticle,
+            htmlContent: renderSafeSummaryHtml(rawSummaryArticle, displayNews)
+        }
+        : null;
 
     res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.render('index', {
@@ -222,6 +273,8 @@ app.get('/', (req, res) => {
         clientId,
         githubSync: githubSyncStatus,
         schedule: scheduleStatus,
+        serializeForScript,
+        safeHttpUrl: sanitizeHttpUrl,
         config: {
             siteName: '聚核 CoreFeed · 全球要闻深度聚合',
             updateTimes: (config.news.updateTimes && config.news.updateTimes.length > 0)

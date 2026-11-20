@@ -10,7 +10,32 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run shell and Python syntax checks
+        run: |
+          sh -n deploy-router.sh
+          sh -n integrations/hermes-skill/install.sh
+          python3 -m py_compile integrations/hermes-skill/corefeed-news/scripts/corefeed_cli.py
+
+      - name: Run automated tests
+        run: npm test
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -25,6 +50,11 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Smoke-test local Docker build (verify runtime files including SKILL.md)
+        run: |
+          docker build -t corefeed:ci-smoke .
+          docker run --rm corefeed:ci-smoke test -f /app/integrations/hermes-skill/corefeed-news/SKILL.md
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3

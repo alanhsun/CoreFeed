@@ -240,6 +240,7 @@ class AudioBroadcastService {
         this.io = io;
         this.stateManager = stateManager;
         this._inflightDownloads = new Map();
+        this._shaCache = new Map();
     }
 
     getMetadataPath() {
@@ -304,11 +305,12 @@ class AudioBroadcastService {
             fs.renameSync(tmpPath, audioPath);
             finalSha = computeBufferSha256(audioBuffer);
             finalSize = audioBuffer.length;
+            this._recordFileSha(audioPath, finalSha);
         } else if (fs.existsSync(audioPath)) {
             const stat = fs.statSync(audioPath);
             finalSize = stat.size;
             if (!finalSha) {
-                finalSha = computeFileSha256(audioPath) || '';
+                finalSha = this.getCachedFileSha256(audioPath, stat) || '';
             }
         }
 
@@ -329,6 +331,42 @@ class AudioBroadcastService {
         return await this.saveBundle(mergedRaw, options);
     }
 
+    _recordFileSha(localFilePath, sha256) {
+        if (!localFilePath || !sha256) return;
+        try {
+            const absPath = path.resolve(localFilePath);
+            const stat = fs.statSync(absPath);
+            this._shaCache.set(absPath, {
+                mtimeMs: stat.mtimeMs,
+                size: stat.size,
+                sha256: String(sha256).toLowerCase()
+            });
+        } catch (_) {}
+    }
+
+    getCachedFileSha256(localFilePath, existingStat = null) {
+        if (!localFilePath) return null;
+        try {
+            const absPath = path.resolve(localFilePath);
+            const stat = existingStat || fs.statSync(absPath);
+            const cached = this._shaCache.get(absPath);
+            if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+                return cached.sha256;
+            }
+            const sha256 = computeFileSha256(absPath);
+            if (sha256) {
+                this._shaCache.set(absPath, {
+                    mtimeMs: stat.mtimeMs,
+                    size: stat.size,
+                    sha256
+                });
+            }
+            return sha256;
+        } catch (_) {
+            return null;
+        }
+    }
+
     isLocalAudioFresh(trackMeta, localFilePath) {
         if (!trackMeta || !localFilePath || !fs.existsSync(localFilePath)) {
             return false;
@@ -337,7 +375,7 @@ class AudioBroadcastService {
             const stat = fs.statSync(localFilePath);
             if (stat.size < 128) return false;
             if (trackMeta.sha256) {
-                const diskSha = computeFileSha256(localFilePath);
+                const diskSha = this.getCachedFileSha256(localFilePath, stat);
                 return diskSha === trackMeta.sha256.toLowerCase();
             }
             if (trackMeta.sizeBytes > 0) {
@@ -413,8 +451,8 @@ class AudioBroadcastService {
                     if (!buf || buf.length < 128) {
                         throw new Error(`远端音频返回字节过小 (${buf ? buf.length : 0}B)`);
                     }
+                    const actualSha = computeBufferSha256(buf);
                     if (trackMeta.sha256) {
-                        const actualSha = computeBufferSha256(buf);
                         if (actualSha !== trackMeta.sha256.toLowerCase()) {
                             throw new Error(`远端音频 SHA-256 不匹配 (expected=${trackMeta.sha256.slice(0, 8)}, got=${actualSha.slice(0, 8)})`);
                         }
@@ -424,6 +462,7 @@ class AudioBroadcastService {
                     const tmpPath = `${localPath}.tmp.${process.pid}.${Date.now()}`;
                     fs.writeFileSync(tmpPath, buf);
                     fs.renameSync(tmpPath, localPath);
+                    this._recordFileSha(localPath, actualSha);
                     logger.info('AUDIO-SYNC', `已同步缓存播报音频 ${cleanKey} (${Math.round(buf.length / 1024)} KiB)`);
                     return localPath;
                 } catch (err) {

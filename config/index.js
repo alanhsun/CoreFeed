@@ -239,10 +239,48 @@ function parseBoolInput(val) {
     return str === 'true' || str === '1' || str === 'yes';
 }
 
+const ALLOWED_DYNAMIC_SETTING_KEYS = new Set([
+    'GITHUB_SYNC_ENABLED',
+    'GITHUB_PUSH_ENABLED',
+    'AG_GITHUB_SYNC',
+    'GITHUB_SYNC_INTERVAL_MINUTES',
+    'GITHUB_COOLDOWN_MINUTES',
+    'CLIENT_ID',
+    'AG_CLIENT_ID',
+    'GITHUB_SNAPSHOT_URL',
+    'AG_GITHUB_BRANCH',
+    'AUTO_UPDATE_ENABLED',
+    'UPDATE_TIMES',
+    'SCHEDULE_TIMEZONE',
+    'timezone',
+    'scheduleTimes',
+    'JINA_READER_ENABLED',
+    'AGENT_MAX_CURATED_ARTICLES',
+    'AGENT_FRESHNESS_HOURS',
+    'MAX_ARTICLES_PER_SOURCE',
+    'DISABLED_SOURCES',
+    'RSS_SOURCES'
+]);
+
+function isValidHttpSnapshotUrl(rawUrl) {
+    try {
+        const parsed = new URL(String(rawUrl || '').trim());
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
 /**
- * 动态保存设置到 data/settings.json 并刷新内存配置
+ * 动态保存设置到 data/settings.json 并刷新内存配置（严格白名单，禁止改写 PUBLISH_SECRET / *_PROXY / NODE_ENV 等敏感环境变量）
  */
 config.saveDynamicSettings = function (updates = {}) {
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+        const badReq = new Error('无效的配置对象');
+        badReq.statusCode = 400;
+        throw badReq;
+    }
+
     const current = loadSavedSettings();
     const raw = { ...updates };
     const normalizedUpdates = {};
@@ -297,9 +335,20 @@ config.saveDynamicSettings = function (updates = {}) {
         'updateTimes'
     ]);
 
+    const disallowedKeys = [];
     for (const [k, v] of Object.entries(raw)) {
         if (aliasKeys.has(k) || v === undefined || v === null) continue;
+        if (!ALLOWED_DYNAMIC_SETTING_KEYS.has(k)) {
+            disallowedKeys.push(k);
+            continue;
+        }
         normalizedUpdates[k] = v;
+    }
+
+    if (disallowedKeys.length > 0) {
+        const forbiddenErr = new Error(`不允许通过动态配置修改受保护或未知的配置项: ${disallowedKeys.join(', ')}`);
+        forbiddenErr.statusCode = 400;
+        throw forbiddenErr;
     }
 
     // 2. 规范化方案 2B 与定时调度参数
@@ -336,6 +385,11 @@ config.saveDynamicSettings = function (updates = {}) {
     if (normalizedUpdates.GITHUB_SNAPSHOT_URL !== undefined) {
         const snapUrl = String(normalizedUpdates.GITHUB_SNAPSHOT_URL).trim();
         if (snapUrl) {
+            if (!isValidHttpSnapshotUrl(snapUrl)) {
+                const urlErr = new Error('GITHUB_SNAPSHOT_URL 必须为有效的 http(s) URL');
+                urlErr.statusCode = 400;
+                throw urlErr;
+            }
             normalizedUpdates.GITHUB_SNAPSHOT_URL = snapUrl;
         } else {
             delete normalizedUpdates.GITHUB_SNAPSHOT_URL;
@@ -360,11 +414,20 @@ config.saveDynamicSettings = function (updates = {}) {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(SETTINGS_FILE_PATH, JSON.stringify(merged, null, 2), 'utf8');
+    const tmpSettingsPath = `${SETTINGS_FILE_PATH}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpSettingsPath, JSON.stringify(merged, null, 2), 'utf8');
+    fs.renameSync(tmpSettingsPath, SETTINGS_FILE_PATH);
 
-    // 同时同步更新 process.env 以便子模块立即读取
+    // 仅将白名单键同步至 process.env 以便子模块立即读取
     for (const [k, v] of Object.entries(normalizedUpdates)) {
-        if (v !== undefined && v !== null && v !== '') {
+        if (
+            ALLOWED_DYNAMIC_SETTING_KEYS.has(k) &&
+            k !== 'scheduleTimes' &&
+            k !== 'timezone' &&
+            v !== undefined &&
+            v !== null &&
+            v !== ''
+        ) {
             process.env[k] = Array.isArray(v) ? v.join(',') : String(v);
         }
     }
@@ -373,6 +436,8 @@ config.saveDynamicSettings = function (updates = {}) {
     Object.assign(config, refreshed);
     return config;
 };
+
+config.ALLOWED_DYNAMIC_SETTING_KEYS = ALLOWED_DYNAMIC_SETTING_KEYS;
 
 /**
  * 重新加载配置
@@ -393,7 +458,15 @@ config.reload = function () {
     }
     const saved = loadSavedSettings();
     for (const [k, v] of Object.entries(saved)) {
-        if (v !== undefined && v !== null && v !== '' && k !== 'updatedAt' && k !== 'scheduleTimes') {
+        if (
+            ALLOWED_DYNAMIC_SETTING_KEYS.has(k) &&
+            v !== undefined &&
+            v !== null &&
+            v !== '' &&
+            k !== 'updatedAt' &&
+            k !== 'scheduleTimes' &&
+            k !== 'timezone'
+        ) {
             process.env[k] = Array.isArray(v) ? v.join(',') : String(v);
         }
     }

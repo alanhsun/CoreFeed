@@ -36,6 +36,7 @@ const {
     splitTextIntoParagraphs,
     mergeClusterArticles,
     convertSummaryToRichHtml,
+    renderSafeSummaryHtml,
     createSummaryArticleObject
 } = require('../utils/editorial_formatter');
 
@@ -419,9 +420,7 @@ async function runPublish(customOptions = {}) {
     let summaryArticle = null;
     if (rawSummaryObj) {
         const content = String(rawSummaryObj.content || rawSummaryObj.markdown || rawSummaryMd || '').trim();
-        const htmlContent = rawSummaryObj.htmlContent && !content.includes('[NEWS_')
-            ? rawSummaryObj.htmlContent
-            : (content ? convertSummaryToRichHtml(content, finalNews) : (rawSummaryObj.htmlContent || ''));
+        const htmlContent = renderSafeSummaryHtml({ ...rawSummaryObj, content }, finalNews);
         summaryArticle = {
             title: rawSummaryObj.title || `${currentDate} 全球要闻深度综述`,
             content,

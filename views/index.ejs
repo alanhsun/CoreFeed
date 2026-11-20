@@ -262,7 +262,7 @@
                         </div>
                         <span role="separator" aria-orientation="vertical" class="broadcast-toolbar-sep"></span>
                         <a id="linkBroadcastDownload"
-                           href="<%= ssrActiveAudioTrack ? ssrActiveAudioTrack.audioUrl : '#' %>"
+                           href="<%= (ssrActiveAudioTrack && typeof ssrActiveAudioTrack.audioUrl === 'string' && ((ssrActiveAudioTrack.audioUrl.startsWith('/') && !ssrActiveAudioTrack.audioUrl.startsWith('//')) || safeHttpUrl(ssrActiveAudioTrack.audioUrl))) ? ssrActiveAudioTrack.audioUrl : '#' %>"
                            download="<%= ssrActiveAudioTrack ? ssrActiveAudioTrack.fileName : 'corefeed-briefing.mp3' %>"
                            class="broadcast-ctrl-btn"
                            aria-label="下载本期 MP3 播音文件"
@@ -403,9 +403,11 @@
                                         const category = item.category || '国际';
                                         const metaBadgeText = category && category !== region ? (region + ' · ' + category) : region;
                                         const timeStr = item.publishedAt ? formatRelativeTimeSSR(item.publishedAt) : '';
-                                        const imageUrl = item.urlToImage || '';
-                                        const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
+                                        const rawImageUrl = item.urlToImage || '';
+                                        const isRemoteHttp = /^https?:\/\//i.test(rawImageUrl);
+                                        const imageUrl = isRemoteHttp || (rawImageUrl.startsWith('/') && !rawImageUrl.startsWith('//')) ? rawImageUrl : '';
                                         const displayImgSrc = isRemoteHttp ? ('/api/image-proxy?url=' + encodeURIComponent(imageUrl)) : imageUrl;
+                                        const safeItemUrl = safeHttpUrl(item.url, '#');
                                         const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
                                         const hasMultiSources = relatedSources.length > 0;
                                         const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
@@ -440,8 +442,7 @@
                                                  role="button"
                                                  tabindex="0"
                                                  title="点击查看原文全文中文翻译"
-                                                 onclick="app.handleCardBodyClick(event, '<%= encodeURIComponent(item.url || '') %>')"
-                                                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();app.handleCardBodyClick(event, '<%= encodeURIComponent(item.url || '') %>');}">
+                                                 data-card-url="<%= item.url || '' %>">
                                                 <div class="card-cover block <%= imageUrl ? '' : 'is-fallback' %>" data-cat="<%= category %>">
                                                     <% if (imageUrl) { %>
                                                         <img src="<%= displayImgSrc %>"
@@ -470,7 +471,7 @@
                                                         <div class="kami-callout flex flex-col gap-0.5">
                                                             <div class="kami-callout-title"><%= relatedSources.length + 1 %> 家权威外媒交叉印证</div>
                                                             <div class="truncate text-xs" style="color: var(--text-body);">
-                                                                同题报道：<% relatedSources.forEach(function(r, rIdx) { %><% if (rIdx > 0) { %>、<% } %><% if (r.url) { %><a href="<%= r.url %>" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="<%= r.title || r.name %>"><%= r.name %></a><% } else { %><span><%= r.name %></span><% } %><% }); %>
+                                                                同题报道：<% relatedSources.forEach(function(r, rIdx) { const safeRelUrl = safeHttpUrl(r.url); %><% if (rIdx > 0) { %>、<% } %><% if (safeRelUrl) { %><a href="<%= safeRelUrl %>" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="<%= r.title || r.name %>"><%= r.name %></a><% } else { %><span><%= r.name %></span><% } %><% }); %>
                                                             </div>
                                                         </div>
                                                     <% } %>
@@ -503,7 +504,7 @@
                                                 <span class="card-meta-sep">·</span>
                                                 <span class="card-translate-hint">点击卡片看全文翻译</span>
                                             </div>
-                                            <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
+                                            <a href="<%= safeItemUrl %>" target="_blank" rel="noopener noreferrer"
                                                 class="btn-source-link">
                                                 <span>原文</span>
                                                 <span aria-hidden="true">↗</span>
@@ -549,9 +550,11 @@
                                 const category = item.category || '国际';
                                 const metaBadgeText = category && category !== region ? (region + ' · ' + category) : region;
                                 const timeStr = item.publishedAt ? formatRelativeTimeSSR(item.publishedAt) : '';
-                                const imageUrl = item.urlToImage || '';
-                                const isRemoteHttp = /^https?:\/\//i.test(imageUrl);
+                                const rawImageUrl = item.urlToImage || '';
+                                const isRemoteHttp = /^https?:\/\//i.test(rawImageUrl);
+                                const imageUrl = isRemoteHttp || (rawImageUrl.startsWith('/') && !rawImageUrl.startsWith('//')) ? rawImageUrl : '';
                                 const displayImgSrc = isRemoteHttp ? ('/api/image-proxy?url=' + encodeURIComponent(imageUrl)) : imageUrl;
+                                const safeItemUrl = safeHttpUrl(item.url, '#');
                                 const relatedSources = Array.isArray(item.relatedSources) ? item.relatedSources : [];
                                 const hasMultiSources = relatedSources.length > 0;
                                 const keyPoints = Array.isArray(item.keyPoints) ? item.keyPoints : [];
@@ -571,8 +574,7 @@
                                          role="button"
                                          tabindex="0"
                                          title="点击查看原文全文中文翻译"
-                                         onclick="app.handleCardBodyClick(event, '<%= encodeURIComponent(item.url || '') %>')"
-                                         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();app.handleCardBodyClick(event, '<%= encodeURIComponent(item.url || '') %>');}">
+                                         data-card-url="<%= item.url || '' %>">
                                         <div class="card-cover block <%= imageUrl ? '' : 'is-fallback' %>" data-cat="<%= category %>">
                                             <% if (imageUrl) { %>
                                                 <img src="<%= displayImgSrc %>"
@@ -601,7 +603,7 @@
                                                 <div class="kami-callout flex flex-col gap-0.5">
                                                     <div class="kami-callout-title"><%= relatedSources.length + 1 %> 家权威外媒交叉印证</div>
                                                     <div class="truncate text-xs" style="color: var(--text-body);">
-                                                        同题报道：<% relatedSources.forEach(function(r, rIdx) { %><% if (rIdx > 0) { %>、<% } %><% if (r.url) { %><a href="<%= r.url %>" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="<%= r.title || r.name %>"><%= r.name %></a><% } else { %><span><%= r.name %></span><% } %><% }); %>
+                                                        同题报道：<% relatedSources.forEach(function(r, rIdx) { const safeRelUrl = safeHttpUrl(r.url); %><% if (rIdx > 0) { %>、<% } %><% if (safeRelUrl) { %><a href="<%= safeRelUrl %>" target="_blank" rel="noopener noreferrer" class="hover:underline font-medium" title="<%= r.title || r.name %>"><%= r.name %></a><% } else { %><span><%= r.name %></span><% } %><% }); %>
                                                     </div>
                                                 </div>
                                             <% } %>
@@ -632,7 +634,7 @@
                                     <div class="card-footer-meta">
                                         <span class="card-timestamp"><%= timeStr %></span>
                                     </div>
-                                    <a href="<%= item.url || '#' %>" target="_blank" rel="noopener noreferrer"
+                                    <a href="<%= safeItemUrl %>" target="_blank" rel="noopener noreferrer"
                                         class="btn-source-link">
                                         <span>原文</span>
                                         <span aria-hidden="true">↗</span>
@@ -807,17 +809,17 @@
 
     <script>
         window.__INITIAL_STATE__ = {
-            news: <%- JSON.stringify(news || []) %>,
-            totalNews: <%= totalNews || 0 %>,
-            displayedNews: <%= displayedNews || 0 %>,
-            lastUpdated: <%- JSON.stringify(lastUpdated || null) %>,
-            lastPublishedBy: <%- JSON.stringify((typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || null) %>,
-            clientId: <%- JSON.stringify((typeof clientId !== 'undefined' && clientId) || null) %>,
-            githubSync: <%- JSON.stringify((typeof githubSync !== 'undefined' && githubSync) || null).replace(/</g, '\\u003c') %>,
-            schedule: <%- JSON.stringify((typeof schedule !== 'undefined' && schedule) || null).replace(/</g, '\\u003c') %>,
-            summaryArticle: <%- JSON.stringify(summaryArticle || null).replace(/</g, '\\u003c') %>,
-            socialPulse: <%- JSON.stringify((typeof socialPulse !== 'undefined' && socialPulse) || null).replace(/</g, '\\u003c') %>,
-            audioBroadcast: <%- JSON.stringify((typeof audioBroadcast !== 'undefined' && audioBroadcast) || null).replace(/</g, '\\u003c') %>
+            news: <%- serializeForScript(news || []) %>,
+            totalNews: <%= Number(totalNews) || 0 %>,
+            displayedNews: <%= Number(displayedNews) || 0 %>,
+            lastUpdated: <%- serializeForScript(lastUpdated || null) %>,
+            lastPublishedBy: <%- serializeForScript((typeof lastPublishedBy !== 'undefined' && lastPublishedBy) || null) %>,
+            clientId: <%- serializeForScript((typeof clientId !== 'undefined' && clientId) || null) %>,
+            githubSync: <%- serializeForScript((typeof githubSync !== 'undefined' && githubSync) || null) %>,
+            schedule: <%- serializeForScript((typeof schedule !== 'undefined' && schedule) || null) %>,
+            summaryArticle: <%- serializeForScript(summaryArticle || null) %>,
+            socialPulse: <%- serializeForScript((typeof socialPulse !== 'undefined' && socialPulse) || null) %>,
+            audioBroadcast: <%- serializeForScript((typeof audioBroadcast !== 'undefined' && audioBroadcast) || null) %>
         };
     </script>
     <script src="/socket.io/socket.io.js"></script>

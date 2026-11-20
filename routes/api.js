@@ -10,22 +10,25 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
-const https = require('https');
 const config = require('../config');
-const { readJsonFile, writeJsonFile, isValidUrl, SimpleCache } = require('../utils/helpers');
+const { readJsonFile, writeJsonFile } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const { applySnapshotToRouter } = require('../utils/github_sync');
 const { buildAiBriefing } = require('../utils/briefing_formatter');
+const { renderSafeSummaryHtml } = require('../utils/editorial_formatter');
+const asyncHandler = require('../utils/async_handler');
+const {
+    verifyPublishSecret,
+    checkSameOrigin,
+    sameOriginOnly,
+    requirePublishSecret
+} = require('../middleware/auth');
+const { createImageProxyHandler } = require('./image_proxy');
 const { SocialPulseService, normalizeSocialPulseBundle } = require('../services/social_pulse_service');
 const {
     VALID_TRACK_KEYS,
-    AudioBroadcastService,
-    normalizeAudioBroadcastBundle
+    AudioBroadcastService
 } = require('../services/audio_broadcast_service');
-
-const proxyHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
-const imageProxyCache = new SimpleCache(150, 2 * 60 * 60 * 1000);
 
 /**
  * 初始化 API 路由
@@ -35,32 +38,6 @@ function initializeApiRoutes(services, io, stateManager) {
     const { newsService, scheduleManager, newsAgentService, githubSyncManager, socialPulseService, audioBroadcastService } = services;
     const pulseService = socialPulseService || new SocialPulseService(io, stateManager);
     const audioService = audioBroadcastService || new AudioBroadcastService(io, stateManager);
-
-    const verifyPublishSecret = (req) => {
-        const expectedSecret = String(
-            process.env.PUBLISH_SECRET !== undefined
-                ? process.env.PUBLISH_SECRET
-                : (process.env.PUBLISH_API_KEY !== undefined
-                    ? process.env.PUBLISH_API_KEY
-                    : (config.agent?.publishSecret || ''))
-        ).trim();
-
-        if (!expectedSecret) {
-            return { authorized: true };
-        }
-
-        const authHeader = String(req.get('Authorization') || req.headers?.authorization || '').trim();
-        const bearerToken = authHeader.replace(/^Bearer\s+/i, '').trim();
-        const publishSecretHeader = String(req.get('x-publish-secret') || req.headers?.['x-publish-secret'] || '').trim();
-        const apiKeyHeader = String(req.get('x-api-key') || req.headers?.['x-api-key'] || '').trim();
-        const bodySecret = String(req.body?.secret || '').trim();
-        const providedToken = bearerToken || publishSecretHeader || apiKeyHeader || bodySecret;
-
-        if (!providedToken || providedToken !== expectedSecret) {
-            return { authorized: false };
-        }
-        return { authorized: true };
-    };
 
     // 启动时加载持久化的今日综述与欧美社媒热议数据
     (async () => {
@@ -97,85 +74,7 @@ function initializeApiRoutes(services, io, stateManager) {
     })();
 
     // ==================== 0. 外媒新闻题图防盗链与跨境加速代理 ====================
-    router.get('/image-proxy', async (req, res) => {
-        const rawUrl = (req.query.url || '').trim();
-        if (!rawUrl || !isValidUrl(rawUrl)) {
-            return res.status(400).end();
-        }
-
-        let parsed;
-        try {
-            parsed = new URL(rawUrl);
-            if (!['http:', 'https:'].includes(parsed.protocol)) {
-                return res.status(400).end();
-            }
-            const host = parsed.hostname.toLowerCase();
-            if (
-                host === 'localhost' ||
-                host.startsWith('127.') ||
-                host.startsWith('10.') ||
-                host.startsWith('192.168.') ||
-                host === '0.0.0.0' ||
-                host.endsWith('.local')
-            ) {
-                return res.status(403).end();
-            }
-        } catch (_) {
-            return res.status(400).end();
-        }
-
-        const cached = imageProxyCache.get(rawUrl);
-        if (cached && cached.buffer) {
-            res.setHeader('Content-Type', cached.contentType || 'image/jpeg');
-            res.setHeader('Cache-Control', 'public, max-age=86400');
-            return res.send(cached.buffer);
-        }
-
-        const fetchImageBuffer = async (withReferer = true) => {
-            const headers = {
-                'User-Agent': config.webScraping.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9'
-            };
-            if (withReferer) {
-                headers['Referer'] = `${parsed.origin}/`;
-            }
-            return await axios.get(rawUrl, {
-                responseType: 'arraybuffer',
-                timeout: 8000,
-                maxRedirects: 5,
-                maxContentLength: 8 * 1024 * 1024,
-                httpsAgent: proxyHttpsAgent,
-                headers
-            });
-        };
-
-        try {
-            let upstream;
-            try {
-                upstream = await fetchImageBuffer(true);
-            } catch (firstErr) {
-                upstream = await fetchImageBuffer(false);
-            }
-
-            const contentType = String(upstream.headers['content-type'] || 'image/jpeg').toLowerCase();
-            if (contentType.includes('text/html')) {
-                return res.status(404).end();
-            }
-
-            const buffer = Buffer.from(upstream.data);
-            if (!buffer || buffer.length < 120) {
-                return res.status(404).end();
-            }
-
-            imageProxyCache.set(rawUrl, { buffer, contentType });
-            res.setHeader('Content-Type', contentType);
-            res.setHeader('Cache-Control', 'public, max-age=86400');
-            return res.send(buffer);
-        } catch (err) {
-            return res.status(502).end();
-        }
-    });
+    router.get('/image-proxy', createImageProxyHandler());
 
     // ==================== 1. GitHub 快照同步与外部精编发布接口 ====================
 
@@ -192,12 +91,22 @@ function initializeApiRoutes(services, io, stateManager) {
     /**
      * 从 GitHub 快照分支 (默认 ag-snapshot/latest.json) 拉取最新精编新闻并应用至软路由
      */
-    router.post('/agent/pull-github', async (req, res) => {
+    router.post('/agent/pull-github', asyncHandler(async (req, res) => {
         try {
-            const isWebUiDefaultPull =
-                !req.body?.snapshotUrl &&
-                (req.get('x-requested-with') === 'CoreFeed-WebUI' || req.body?.trigger === 'ui');
-            const auth = isWebUiDefaultPull ? { authorized: true } : verifyPublishSecret(req);
+            const secretAuth = verifyPublishSecret(req);
+            const sameOrigin = checkSameOrigin(req);
+            const hasExplicitSnapshotUrl = Boolean(req.body?.snapshotUrl);
+            const isWebUiHeader = req.get('x-requested-with') === 'CoreFeed-WebUI';
+            const isWebUiDefaultPull = !hasExplicitSnapshotUrl && isWebUiHeader && sameOrigin.ok;
+
+            if (!sameOrigin.ok && !(secretAuth.configured && secretAuth.authorized)) {
+                return res.status(403).json({
+                    success: false,
+                    message: '跨站请求被拒绝 (Cross-Origin CSRF Blocked)'
+                });
+            }
+
+            const auth = isWebUiDefaultPull ? { authorized: true } : secretAuth;
             if (!auth.authorized) {
                 return res.status(401).json({
                     success: false,
@@ -232,21 +141,13 @@ function initializeApiRoutes(services, io, stateManager) {
                 message: '从 GitHub 同步快照失败: ' + error.message
             });
         }
-    });
+    }));
 
     /**
      * 接收由外部 Agent (如 Antigravity 客户端) 采集、聚类并精编完成的全球新闻与综述数据包
      */
-    router.post('/agent/publish', async (req, res) => {
+    router.post('/agent/publish', requirePublishSecret, asyncHandler(async (req, res) => {
         try {
-            const auth = verifyPublishSecret(req);
-            if (!auth.authorized) {
-                return res.status(401).json({
-                    success: false,
-                    message: '未授权的发布请求 (Invalid PUBLISH_SECRET)'
-                });
-            }
-
             const applied = await applySnapshotToRouter(req.body || {}, {
                 stateManager,
                 newsAgentService,
@@ -274,21 +175,13 @@ function initializeApiRoutes(services, io, stateManager) {
                 message: '发布失败: ' + error.message
             });
         }
-    });
+    }));
 
     /**
      * 接收由外部 Agent 单独同步的欧美社媒热议 (Western Social Pulse) 精编数据包
      */
-    router.post('/agent/publish-pulse', async (req, res) => {
+    router.post('/agent/publish-pulse', requirePublishSecret, asyncHandler(async (req, res) => {
         try {
-            const auth = verifyPublishSecret(req);
-            if (!auth.authorized) {
-                return res.status(401).json({
-                    success: false,
-                    message: '未授权的发布请求 (Invalid PUBLISH_SECRET)'
-                });
-            }
-
             const rawInput = req.body?.socialPulse || req.body;
             const normalized = normalizeSocialPulseBundle(rawInput);
             if (!normalized) {
@@ -322,21 +215,13 @@ function initializeApiRoutes(services, io, stateManager) {
                 message: '同步社媒热议失败: ' + error.message
             });
         }
-    });
+    }));
 
     /**
      * 接收由外部 Agent 实时热推的双主播语音播报元数据与二进制音频 (POST /api/agent/publish-audio)
      */
-    router.post('/agent/publish-audio', async (req, res) => {
+    router.post('/agent/publish-audio', requirePublishSecret, asyncHandler(async (req, res) => {
         try {
-            const auth = verifyPublishSecret(req);
-            if (!auth.authorized) {
-                return res.status(401).json({
-                    success: false,
-                    message: '未授权的发布请求 (Invalid PUBLISH_SECRET)'
-                });
-            }
-
             const body = req.body || {};
             let updatedBundle = null;
 
@@ -360,7 +245,10 @@ function initializeApiRoutes(services, io, stateManager) {
                         const targetPath = audioService.getTrackAudioPath(cleanKey);
                         if (targetPath) {
                             fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-                            fs.writeFileSync(targetPath, Buffer.from(b64.trim(), 'base64'));
+                            const buf = Buffer.from(b64.trim(), 'base64');
+                            const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
+                            fs.writeFileSync(tmpPath, buf);
+                            fs.renameSync(tmpPath, targetPath);
                         }
                     }
                 }
@@ -390,7 +278,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 message: '同步语音播报失败: ' + error.message
             });
         }
-    });
+    }));
 
     // ==================== 2. 新闻流查询、过滤、分页与今日综述接口 ====================
 
@@ -400,10 +288,10 @@ function initializeApiRoutes(services, io, stateManager) {
         const lastUpdated = stateManager.get('lastUpdated') || newsService.getLastUpdated();
         const collectionPhase = stateManager.get('collectionPhase') || 'idle';
 
-        const region = req.query.region;
-        const category = req.query.category;
-        const source = req.query.source;
-        const keyword = (req.query.q || '').trim().toLowerCase();
+        const region = typeof req.query.region === 'string' ? req.query.region : '';
+        const category = typeof req.query.category === 'string' ? req.query.category : '';
+        const source = typeof req.query.source === 'string' ? req.query.source : '';
+        const keyword = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
 
         let filtered = [...newsData];
         if (region && region !== 'all' && region !== '全部') {
@@ -440,28 +328,24 @@ function initializeApiRoutes(services, io, stateManager) {
     });
 
     router.get('/news/more', (req, res) => {
-        const offset = parseInt(req.query.offset, 10) || 30;
-        const limit = parseInt(req.query.limit, 10) || 15;
+        const rawOffset = parseInt(req.query.offset, 10);
+        const rawLimit = parseInt(req.query.limit, 10);
+        const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 30;
+        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 50) : 15;
         const allEnhanced = stateManager.get('allEnhancedNews') || stateManager.get('newsData') || [];
 
         const moreNews = allEnhanced.slice(offset, offset + limit);
-        const currentDisplayed = stateManager.get('newsData') || [];
-
-        if (moreNews.length > 0) {
-            const merged = [...currentDisplayed, ...moreNews];
-            stateManager.set('newsData', merged);
-        }
 
         res.json({
             success: true,
             news: moreNews,
-            hasMore: offset + limit < allEnhanced.length,
+            hasMore: offset + moreNews.length < allEnhanced.length,
             total: allEnhanced.length,
             nextOffset: offset + moreNews.length
         });
     });
 
-    router.get('/summary', async (req, res) => {
+    router.get('/summary', asyncHandler(async (req, res) => {
         let article = stateManager.get('summaryArticle');
         if (!article) {
             const loaded = await readJsonFile(config.storage.summaryFile);
@@ -470,16 +354,23 @@ function initializeApiRoutes(services, io, stateManager) {
                 stateManager.set('summaryArticle', article, false);
             }
         }
+        const newsList = stateManager.get('newsData') || newsService.getNewsData() || [];
+        const safeArticle = article
+            ? {
+                ...article,
+                htmlContent: renderSafeSummaryHtml(article, newsList)
+            }
+            : null;
         res.json({
             success: true,
-            article: article || null
+            article: safeArticle
         });
-    });
+    }));
 
     /**
      * 获取欧美社媒热议数据包（支持可选 ?key=daily:YYYY-MM-DD 查询指定期次）
      */
-    router.get('/pulse', async (req, res) => {
+    router.get('/pulse', asyncHandler(async (req, res) => {
         let pulse = stateManager.get('socialPulse');
         if (!pulse && config.storage?.socialPulseFile) {
             const loaded = await readJsonFile(config.storage.socialPulseFile, null);
@@ -488,7 +379,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 stateManager.set('socialPulse', pulse, false);
             }
         }
-        const requestedKey = String(req.query.key || '').trim();
+        const requestedKey = typeof req.query.key === 'string' ? req.query.key.trim() : '';
         let selectedIssue = null;
         if (pulse && Array.isArray(pulse.issues) && pulse.issues.length > 0) {
             selectedIssue = (requestedKey && pulse.issues.find(it => it.key === requestedKey)) ||
@@ -501,12 +392,12 @@ function initializeApiRoutes(services, io, stateManager) {
             socialPulse: pulse || null,
             selectedIssue
         });
-    });
+    }));
 
     /**
      * 获取双主播语音播报元数据与章节清单 (GET /api/audio)
      */
-    router.get('/audio', async (req, res) => {
+    router.get('/audio', asyncHandler(async (req, res) => {
         let bundle = stateManager.get('audioBroadcast');
         if (!bundle) {
             bundle = await audioService.loadLocalBundle();
@@ -520,13 +411,13 @@ function initializeApiRoutes(services, io, stateManager) {
             available: Boolean(bundle && bundle.trackCount > 0),
             audioBroadcast: bundle || null
         });
-    });
+    }));
 
     /**
      * 流式提供双主播播报 MP3 音频，原生支持 HTTP Range (206 Partial Content) 进度条拖拽
      * 支持 /api/audio/news(.mp3) 与 /api/audio/pulse(.mp3)
      */
-    router.get('/audio/:track', async (req, res, next) => {
+    router.get('/audio/:track', asyncHandler(async (req, res, next) => {
         try {
             const rawParam = String(req.params.track || '').trim().toLowerCase();
             const cleanKey = rawParam.replace(/\.mp3$/i, '');
@@ -574,7 +465,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 });
             }
         }
-    });
+    }));
 
     // ==================== 3. 系统状态、动态配置与定时调度接口 ====================
 
@@ -671,7 +562,7 @@ function initializeApiRoutes(services, io, stateManager) {
         });
     });
 
-    router.post('/config', (req, res) => {
+    router.post('/config', sameOriginOnly, (req, res) => {
         try {
             const updates = req.body || {};
             config.saveDynamicSettings(updates);
@@ -696,7 +587,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 config: buildConfigPayload()
             });
         } catch (error) {
-            res.status(500).json({
+            res.status(error.statusCode || 500).json({
                 success: false,
                 message: '保存配置失败: ' + error.message
             });
@@ -723,7 +614,7 @@ function initializeApiRoutes(services, io, stateManager) {
     router.get('/schedule/config', handleScheduleStatus);
     router.get('/schedule/status', handleScheduleStatus);
 
-    router.post('/schedule/config', (req, res) => {
+    router.post('/schedule/config', sameOriginOnly, (req, res) => {
         try {
             const body = req.body || {};
             const rawTimes = body.updateTimes !== undefined ? body.updateTimes : body.scheduleTimes;
@@ -756,7 +647,7 @@ function initializeApiRoutes(services, io, stateManager) {
                 schedule: status
             });
         } catch (error) {
-            res.status(500).json({
+            res.status(error.statusCode || 500).json({
                 success: false,
                 message: '更新定时配置失败: ' + error.message
             });
@@ -804,7 +695,7 @@ function initializeApiRoutes(services, io, stateManager) {
                     available: true,
                     title: currentSummary.title,
                     generatedAt: currentSummary.generatedAt,
-                    content: currentSummary.htmlContent,
+                    content: renderSafeSummaryHtml(currentSummary, currentNewsData),
                     wordCount: currentSummary.wordCount,
                     regions: currentSummary.regions
                 } : { available: false },
@@ -907,9 +798,9 @@ function initializeApiRoutes(services, io, stateManager) {
         }
     };
 
-    router.get('/ai/briefing', (req, res) => handleAiBriefing(req, res));
-    router.get('/ai/briefing.md', (req, res) => handleAiBriefing(req, res, { format: 'markdown' }));
-    router.get('/ai/article/:ref', (req, res) => {
+    router.get('/ai/briefing', asyncHandler((req, res) => handleAiBriefing(req, res)));
+    router.get('/ai/briefing.md', asyncHandler((req, res) => handleAiBriefing(req, res, { format: 'markdown' })));
+    router.get('/ai/article/:ref', asyncHandler((req, res) => {
         const ref = String(req.params.ref || '').trim();
         const isOneBasedIdx = /^\d+$/.test(ref);
         return handleAiBriefing(req, res, {
@@ -917,7 +808,7 @@ function initializeApiRoutes(services, io, stateManager) {
             detail: 'full',
             ...(isOneBasedIdx ? { index: ref } : { id: ref })
         });
-    });
+    }));
 
     const HERMES_SKILL_FILES = {
         'install.sh': path.join(__dirname, '..', 'integrations', 'hermes-skill', 'install.sh'),

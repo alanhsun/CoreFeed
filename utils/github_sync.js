@@ -25,6 +25,7 @@ const {
     normalizeRegion,
     normalizeCategory,
     convertSummaryToRichHtml,
+    renderSafeSummaryHtml,
     createSummaryArticleObject
 } = require('./editorial_formatter');
 const { buildSnapshotBriefingFiles } = require('./briefing_formatter');
@@ -455,11 +456,8 @@ async function applySnapshotToRouter(
         const normalizedBody = rawBody
             ? rawBody.split('\n').map(l => l.trim()).filter(Boolean).join('\n\n')
             : '';
-        const needsCitationRender = normalizedBody.includes('[NEWS_') &&
-            (!summaryArticle.htmlContent || !String(summaryArticle.htmlContent).includes('news-ref-link'));
-        const htmlContent = (!needsCitationRender && summaryArticle.htmlContent)
-            ? summaryArticle.htmlContent
-            : (normalizedBody ? convertSummaryToRichHtml(normalizedBody, normalizedNews) : (summaryArticle.htmlContent || ''));
+        // 绝不信任快照自带的原始 htmlContent，一律通过 renderSafeSummaryHtml 在服务端重新生成安全 HTML
+        const htmlContent = renderSafeSummaryHtml(summaryArticle, normalizedNews);
 
         if (htmlContent || normalizedBody) {
             const plainForSummary = normalizedBody.replace(/\[NEWS_\d+\]/g, '').replace(/#+\s*/g, '');
@@ -670,6 +668,7 @@ class GitHubSyncManager {
         this.io = io;
         this.stateManager = stateManager;
         this.isSyncing = false;
+        this._inflightPull = null;
         this.lastSyncCheckAt = null;
         this.lastSyncedAt = null;
         this.lastSyncedPublishedAt = null;
@@ -854,156 +853,177 @@ class GitHubSyncManager {
             awaitAudioSync = true
         } = options;
 
-        if (this.isSyncing && !force) {
-            return {
-                success: true,
-                updated: false,
-                applied: false,
-                skipped: true,
-                reason: 'sync-in-progress',
-                trigger
-            };
-        }
-
-        this.isSyncing = true;
-        this.lastSyncCheckAt = new Date().toISOString();
-
-        try {
-            const currentNewsBefore = this.stateManager ? (this.stateManager.get('newsData') || []) : [];
-            const stateLastUpdatedBefore = this.stateManager ? this.stateManager.get('lastUpdated') : null;
-            const stateSnapshotAtBefore = this.stateManager ? this.stateManager.get('lastSnapshotPublishedAt') : null;
-            const knownSyncedAt = stateSnapshotAtBefore || this.lastSyncedPublishedAt || null;
-            const stateUpdatedMs = stateLastUpdatedBefore ? new Date(stateLastUpdatedBefore).getTime() : 0;
-            const knownSyncedMs = knownSyncedAt ? new Date(knownSyncedAt).getTime() : 0;
-            const localPolluted = isLocalNewsPolluted(currentNewsBefore);
-            const localStateIntact =
-                !localPolluted &&
-                knownSyncedMs > 0 &&
-                !isNaN(knownSyncedMs) &&
-                stateUpdatedMs > 0 &&
-                !isNaN(stateUpdatedMs) &&
-                stateUpdatedMs === knownSyncedMs;
-
-            const { data, sourceUrl, notModified, etag } = await this.fetchRemoteSnapshot(snapshotUrl, {
-                useEtag: !force && localStateIntact,
-                force: force || !localStateIntact
-            });
-            const newsList = Array.isArray(data?.news)
-                ? data.news
-                : (Array.isArray(data?.articles) ? data.articles : null);
-
-            if (!Array.isArray(newsList) || newsList.length === 0) {
-                const invalidErr = new Error('GitHub 快照中不包含有效的 news 数组');
-                invalidErr.statusCode = 400;
-                throw invalidErr;
-            }
-
-            const remotePublishedAt = data.publishedAt || data.lastUpdated || null;
-            const remotePublishedBy = String(data.publishedBy || data.clientId || '').trim() || null;
-            const remoteMs = remotePublishedAt ? new Date(remotePublishedAt).getTime() : 0;
-
-            const remotePulseUpdatedAt = data.socialPulseUpdatedAt || data.socialPulse?.updatedAt || null;
-            const localPulseUpdatedAt = this.stateManager
-                ? (this.stateManager.get('lastSocialPulseUpdatedAt') || this.stateManager.get('socialPulse')?.updatedAt || null)
-                : null;
-            const hasNewerPulse = Boolean(
-                data.socialPulse &&
-                Array.isArray(data.socialPulse.issues) &&
-                data.socialPulse.issues.length > 0 &&
-                (!localPulseUpdatedAt || (remotePulseUpdatedAt && remotePulseUpdatedAt !== localPulseUpdatedAt))
-            );
-
-            const remoteAudioUpdatedAt = data.audioBroadcastUpdatedAt || data.audioBroadcast?.updatedAt || null;
-            const localAudioUpdatedAt = this.stateManager
-                ? (this.stateManager.get('lastAudioBroadcastUpdatedAt') || this.stateManager.get('audioBroadcast')?.updatedAt || null)
-                : null;
-            const hasNewerAudio = Boolean(
-                data.audioBroadcast &&
-                data.audioBroadcast.tracks &&
-                Object.keys(data.audioBroadcast.tracks).length > 0 &&
-                (!localAudioUpdatedAt || (remoteAudioUpdatedAt && remoteAudioUpdatedAt !== localAudioUpdatedAt))
-            );
-
-            const isSameRemoteSnapshot =
-                localStateIntact &&
-                !hasNewerPulse &&
-                !hasNewerAudio &&
-                (notModified ||
-                    (remoteMs > 0 &&
-                        !isNaN(remoteMs) &&
-                        remoteMs === knownSyncedMs));
-
-            if (!force && isSameRemoteSnapshot) {
-                this.lastSyncStatus = 'up-to-date';
-                this.lastSyncError = null;
-                this.lastSyncSourceUrl = sourceUrl;
-                if (!this.lastSyncedAt) {
-                    this.lastSyncedAt = this.lastSyncCheckAt;
-                }
-                if (remotePublishedAt) {
-                    this.lastSyncedPublishedAt = remotePublishedAt;
-                }
-                if (remotePublishedBy) {
-                    this.lastSyncedPublishedBy = remotePublishedBy;
-                    if (this.stateManager && !this.stateManager.get('lastPublishedBy')) {
-                        this.stateManager.set('lastPublishedBy', remotePublishedBy, false);
-                    }
-                }
+        while (this._inflightPull) {
+            if (!force) {
                 return {
                     success: true,
                     updated: false,
                     applied: false,
                     skipped: true,
-                    reason: 'already-up-to-date',
-                    notModified: Boolean(notModified),
+                    reason: 'sync-in-progress',
+                    trigger
+                };
+            }
+            if (this._inflightPull.force && this._inflightPull.snapshotUrl === snapshotUrl) {
+                return await this._inflightPull.promise;
+            }
+            // Wait for the previous in-flight pull to finish before running a forced/different-URL pull
+            await this._inflightPull.promise.catch(() => null);
+        }
+
+        const entry = {
+            force: Boolean(force),
+            snapshotUrl,
+            promise: null
+        };
+        this.isSyncing = true;
+        this.lastSyncCheckAt = new Date().toISOString();
+
+        const runPromise = (async () => {
+            try {
+                const currentNewsBefore = this.stateManager ? (this.stateManager.get('newsData') || []) : [];
+                const stateLastUpdatedBefore = this.stateManager ? this.stateManager.get('lastUpdated') : null;
+                const stateSnapshotAtBefore = this.stateManager ? this.stateManager.get('lastSnapshotPublishedAt') : null;
+                const knownSyncedAt = stateSnapshotAtBefore || this.lastSyncedPublishedAt || null;
+                const stateUpdatedMs = stateLastUpdatedBefore ? new Date(stateLastUpdatedBefore).getTime() : 0;
+                const knownSyncedMs = knownSyncedAt ? new Date(knownSyncedAt).getTime() : 0;
+                const localPolluted = isLocalNewsPolluted(currentNewsBefore);
+                const localStateIntact =
+                    !localPolluted &&
+                    knownSyncedMs > 0 &&
+                    !isNaN(knownSyncedMs) &&
+                    stateUpdatedMs > 0 &&
+                    !isNaN(stateUpdatedMs) &&
+                    stateUpdatedMs === knownSyncedMs;
+
+                const { data, sourceUrl, notModified, etag } = await this.fetchRemoteSnapshot(snapshotUrl, {
+                    useEtag: !force && localStateIntact,
+                    force: force || !localStateIntact
+                });
+                const newsList = Array.isArray(data?.news)
+                    ? data.news
+                    : (Array.isArray(data?.articles) ? data.articles : null);
+
+                if (!Array.isArray(newsList) || newsList.length === 0) {
+                    const invalidErr = new Error('GitHub 快照中不包含有效的 news 数组');
+                    invalidErr.statusCode = 400;
+                    throw invalidErr;
+                }
+
+                const remotePublishedAt = data.publishedAt || data.lastUpdated || null;
+                const remotePublishedBy = String(data.publishedBy || data.clientId || '').trim() || null;
+                const remoteMs = remotePublishedAt ? new Date(remotePublishedAt).getTime() : 0;
+
+                const remotePulseUpdatedAt = data.socialPulseUpdatedAt || data.socialPulse?.updatedAt || null;
+                const localPulseUpdatedAt = this.stateManager
+                    ? (this.stateManager.get('lastSocialPulseUpdatedAt') || this.stateManager.get('socialPulse')?.updatedAt || null)
+                    : null;
+                const hasNewerPulse = Boolean(
+                    data.socialPulse &&
+                    Array.isArray(data.socialPulse.issues) &&
+                    data.socialPulse.issues.length > 0 &&
+                    (!localPulseUpdatedAt || (remotePulseUpdatedAt && remotePulseUpdatedAt !== localPulseUpdatedAt))
+                );
+
+                const remoteAudioUpdatedAt = data.audioBroadcastUpdatedAt || data.audioBroadcast?.updatedAt || null;
+                const localAudioUpdatedAt = this.stateManager
+                    ? (this.stateManager.get('lastAudioBroadcastUpdatedAt') || this.stateManager.get('audioBroadcast')?.updatedAt || null)
+                    : null;
+                const hasNewerAudio = Boolean(
+                    data.audioBroadcast &&
+                    data.audioBroadcast.tracks &&
+                    Object.keys(data.audioBroadcast.tracks).length > 0 &&
+                    (!localAudioUpdatedAt || (remoteAudioUpdatedAt && remoteAudioUpdatedAt !== localAudioUpdatedAt))
+                );
+
+                const isSameRemoteSnapshot =
+                    localStateIntact &&
+                    !hasNewerPulse &&
+                    !hasNewerAudio &&
+                    (notModified ||
+                        (remoteMs > 0 &&
+                            !isNaN(remoteMs) &&
+                            remoteMs === knownSyncedMs));
+
+                if (!force && isSameRemoteSnapshot) {
+                    this.lastSyncStatus = 'up-to-date';
+                    this.lastSyncError = null;
+                    this.lastSyncSourceUrl = sourceUrl;
+                    if (!this.lastSyncedAt) {
+                        this.lastSyncedAt = this.lastSyncCheckAt;
+                    }
+                    if (remotePublishedAt) {
+                        this.lastSyncedPublishedAt = remotePublishedAt;
+                    }
+                    if (remotePublishedBy) {
+                        this.lastSyncedPublishedBy = remotePublishedBy;
+                        if (this.stateManager && !this.stateManager.get('lastPublishedBy')) {
+                            this.stateManager.set('lastPublishedBy', remotePublishedBy, false);
+                        }
+                    }
+                    return {
+                        success: true,
+                        updated: false,
+                        applied: false,
+                        skipped: true,
+                        reason: 'already-up-to-date',
+                        notModified: Boolean(notModified),
+                        etag: etag || this.lastEtag,
+                        trigger,
+                        snapshotUrl: sourceUrl,
+                        publishedAt: remotePublishedAt,
+                        publishedBy: remotePublishedBy || this.lastSyncedPublishedBy,
+                        lastUpdated: stateLastUpdatedBefore || remotePublishedAt,
+                        displayedCount: currentNewsBefore.length
+                    };
+                }
+
+                const applied = await applySnapshotToRouter(data, {
+                    stateManager: this.stateManager,
+                    newsAgentService: this.services.newsAgentService,
+                    newsService: this.services.newsService,
+                    audioBroadcastService: this.services.audioBroadcastService,
+                    io: this.io,
+                    sourceLabel: 'GitHub 快照中转同步',
+                    snapshotUrl: sourceUrl,
+                    syncAudioFiles: true,
+                    awaitAudioSync
+                });
+
+                this.lastSyncedAt = new Date().toISOString();
+                this.lastSyncedPublishedAt = remotePublishedAt || applied.lastUpdated;
+                this.lastSyncedPublishedBy = remotePublishedBy || applied.publishedBy || null;
+                this.lastSyncStatus = 'synced';
+                this.lastSyncError = null;
+                this.lastSyncSourceUrl = sourceUrl;
+
+                return {
+                    success: true,
+                    updated: true,
+                    applied: true,
+                    skipped: false,
+                    notModified: false,
                     etag: etag || this.lastEtag,
                     trigger,
                     snapshotUrl: sourceUrl,
-                    publishedAt: remotePublishedAt,
-                    publishedBy: remotePublishedBy || this.lastSyncedPublishedBy,
-                    lastUpdated: stateLastUpdatedBefore || remotePublishedAt,
-                    displayedCount: currentNewsBefore.length
+                    ...applied,
+                    publishedBy: this.lastSyncedPublishedBy
                 };
+            } catch (err) {
+                this.lastSyncStatus = 'error';
+                this.lastSyncError = err.message;
+                throw err;
+            } finally {
+                if (this._inflightPull === entry) {
+                    this._inflightPull = null;
+                    this.isSyncing = false;
+                }
             }
+        })();
 
-            const applied = await applySnapshotToRouter(data, {
-                stateManager: this.stateManager,
-                newsAgentService: this.services.newsAgentService,
-                newsService: this.services.newsService,
-                audioBroadcastService: this.services.audioBroadcastService,
-                io: this.io,
-                sourceLabel: 'GitHub 快照中转同步',
-                snapshotUrl: sourceUrl,
-                syncAudioFiles: true,
-                awaitAudioSync
-            });
-
-            this.lastSyncedAt = new Date().toISOString();
-            this.lastSyncedPublishedAt = remotePublishedAt || applied.lastUpdated;
-            this.lastSyncedPublishedBy = remotePublishedBy || applied.publishedBy || null;
-            this.lastSyncStatus = 'synced';
-            this.lastSyncError = null;
-            this.lastSyncSourceUrl = sourceUrl;
-
-            return {
-                success: true,
-                updated: true,
-                applied: true,
-                skipped: false,
-                notModified: false,
-                etag: etag || this.lastEtag,
-                trigger,
-                snapshotUrl: sourceUrl,
-                ...applied,
-                publishedBy: this.lastSyncedPublishedBy
-            };
-        } catch (err) {
-            this.lastSyncStatus = 'error';
-            this.lastSyncError = err.message;
-            throw err;
-        } finally {
-            this.isSyncing = false;
-        }
+        entry.promise = runPromise;
+        this._inflightPull = entry;
+        return await runPromise;
     }
 
     getStatus() {

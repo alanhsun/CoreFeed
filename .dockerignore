@@ -18,6 +18,11 @@ yarn-error.log*
 .gitignore
 .github
 *.md
+!integrations/**/*.md
+!integrations/hermes-skill/corefeed-news/SKILL.md
+
+# 离线 TTS 语音样本（仅本机 Colab 合成用，服务端容器无需打包）
+config/voices
 
 # 运行时数据、日志与临时文件
 data

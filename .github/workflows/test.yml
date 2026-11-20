@@ -1,0 +1,37 @@
+name: CI Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run shell syntax checks
+        run: |
+          sh -n deploy-router.sh
+          sh -n integrations/hermes-skill/install.sh
+
+      - name: Run Python syntax checks
+        run: |
+          python3 -m py_compile integrations/hermes-skill/corefeed-news/scripts/corefeed_cli.py
+          python3 -m py_compile scripts/ag-generate-tts.py
+
+      - name: Run full Node.js test suite
+        run: npm test
