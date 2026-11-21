@@ -26,7 +26,9 @@ const { SocialPulseService, getDefaultExternalPulseDir } = require('../services/
 const { AudioBroadcastService, normalizeAudioBroadcastBundle } = require('../services/audio_broadcast_service');
 const {
     publishSnapshotToGitHub,
-    fetchRemoteSnapshotViaGit,
+    fetchRemoteSnapshotViaGit
+} = require('../utils/snapshot_publisher');
+const {
     GitHubSyncManager,
     isLocalNewsPolluted,
     isSuspectedTestFixtureNews

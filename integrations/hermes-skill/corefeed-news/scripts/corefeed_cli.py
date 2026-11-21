@@ -20,7 +20,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-DEFAULT_GITHUB_SNAPSHOT_BASE = "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot"
+_DEFAULT_REPO = os.environ.get("COREFEED_REPO", "alanhsun/CoreFeed").strip().strip("/") or "alanhsun/CoreFeed"
+_DEFAULT_BRANCH = os.environ.get("AG_GITHUB_BRANCH", "ag-snapshot").strip() or "ag-snapshot"
+DEFAULT_GITHUB_SNAPSHOT_BASE = f"https://raw.githubusercontent.com/{_DEFAULT_REPO}/{_DEFAULT_BRANCH}"
 DEFAULT_SEGMENT_CHARS = 240
 DEFAULT_ORAL_CHARS = 280
 

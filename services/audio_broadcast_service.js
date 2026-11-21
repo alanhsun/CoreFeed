@@ -38,12 +38,14 @@ function computeFileSha256(filePath) {
 }
 
 function resolveSnapshotRawDirUrl(customSnapshotUrl = null) {
+    const defaultRepo = String(process.env.COREFEED_REPO || config.repo || 'alanhsun/CoreFeed').trim().replace(/^\/+|\/+$/g, '') || 'alanhsun/CoreFeed';
+    const defaultBranch = String(process.env.AG_GITHUB_BRANCH || config.githubSync?.branch || 'ag-snapshot').trim() || 'ag-snapshot';
     let snapUrl = String(
         customSnapshotUrl ||
         process.env.GITHUB_SNAPSHOT_URL ||
         config.githubSync?.snapshotUrl ||
         config.agent?.githubSnapshotUrl ||
-        'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json'
+        `https://raw.githubusercontent.com/${defaultRepo}/${encodeURIComponent(defaultBranch)}/manifest.json`
     ).trim();
     if (!snapUrl) return '';
 

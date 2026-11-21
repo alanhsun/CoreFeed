@@ -6,7 +6,7 @@
 
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SRC_SKILL_DIR="$SCRIPT_DIR/corefeed-news"
 HERMES_HOME_DIR="${HERMES_HOME:-$HOME/.hermes}"
 DEST_SKILL_DIR="$HERMES_HOME_DIR/skills/corefeed-news"
@@ -60,7 +60,8 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-RAW_SKILL_BASE="${COREFEED_RAW_SKILL_BASE:-https://raw.githubusercontent.com/alanhsun/CoreFeed/main/integrations/hermes-skill/corefeed-news}"
+COREFEED_REPO="${COREFEED_REPO:-alanhsun/CoreFeed}"
+RAW_SKILL_BASE="${COREFEED_RAW_SKILL_BASE:-https://raw.githubusercontent.com/${COREFEED_REPO}/main/integrations/hermes-skill/corefeed-news}"
 
 download_url_quiet() {
     _url="$1"

@@ -11,28 +11,7 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run shell and Python syntax checks
-        run: |
-          sh -n deploy-router.sh
-          sh -n integrations/hermes-skill/install.sh
-          python3 -m py_compile integrations/hermes-skill/corefeed-news/scripts/corefeed_cli.py
-
-      - name: Run automated tests
-        run: npm test
+    uses: ./.github/workflows/test.yml
 
   build-and-push:
     needs: test
@@ -51,10 +30,38 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Smoke-test local Docker build (verify runtime files including SKILL.md)
+      - name: Smoke-test local Docker build (non-root runtime, health, SSR, SKILL.md)
         run: |
-          docker build -t corefeed:ci-smoke .
-          docker run --rm corefeed:ci-smoke test -f /app/integrations/hermes-skill/corefeed-news/SKILL.md
+          set -e
+          EXPECTED_VERSION=$(node -p "require('./package.json').version")
+          docker build --build-arg APP_VERSION="${EXPECTED_VERSION}" -t corefeed:ci-smoke .
+          trap 'docker rm -f corefeed-ci-smoke >/dev/null 2>&1 || true' EXIT
+          docker run -d --name corefeed-ci-smoke -p 3120:3120 -e GITHUB_SYNC_ENABLED=false corefeed:ci-smoke
+
+          HEALTH_JSON=""
+          for _ in $(seq 1 20); do
+            if HEALTH_JSON=$(curl -fsS http://127.0.0.1:3120/api/health 2>/dev/null); then
+              break
+            fi
+            sleep 1
+          done
+          test -n "${HEALTH_JSON}"
+          echo "Health response: ${HEALTH_JSON}"
+          echo "${HEALTH_JSON}" | grep -q "\"version\":\"${EXPECTED_VERSION}\""
+
+          # Verify non-root node process UID inside container
+          NODE_UID=$(docker exec corefeed-ci-smoke sh -c 'for p in /proc/[0-9]*; do if grep -q "server.js" "$p/cmdline" 2>/dev/null; then awk "/^Uid:/ {print \$2}" "$p/status"; break; fi; done')
+          echo "Running node UID: ${NODE_UID}"
+          test -n "${NODE_UID}"
+          test "${NODE_UID}" != "0"
+
+          # Verify SSR root HTML serves cleanly with zero external CDN references
+          HOME_HTML=$(curl -fsS http://127.0.0.1:3120/)
+          echo "${HOME_HTML}" | grep -q 'type="module"'
+          ! echo "${HOME_HTML}" | grep -qE 'cdn\.tailwindcss\.com|fonts\.googleapis\.com|cdnjs\.cloudflare\.com'
+
+          # Verify Hermes Skill endpoint serves SKILL.md cleanly
+          curl -fsS http://127.0.0.1:3120/api/ai/hermes-skill/SKILL.md | grep -qi 'corefeed'
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3

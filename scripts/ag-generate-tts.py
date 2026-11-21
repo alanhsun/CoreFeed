@@ -56,7 +56,9 @@ def _resolve_snapshot_raw_base() -> str:
         for suffix in ("/manifest.json", "/news.json", "/latest.json"):
             if cleaned.endswith(suffix):
                 return cleaned[: -len(suffix)]
-    return "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot"
+    repo = os.environ.get("COREFEED_REPO", "alanhsun/CoreFeed").strip().strip("/") or "alanhsun/CoreFeed"
+    branch = os.environ.get("AG_GITHUB_BRANCH", "ag-snapshot").strip() or "ag-snapshot"
+    return f"https://raw.githubusercontent.com/{repo}/{branch}"
 
 
 def _resolve_colab_repo_root() -> Path:

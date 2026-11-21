@@ -1470,11 +1470,17 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
             assert.ok(html.includes('/js/main.js?v=3.0.0'), 'SSR HTML should include cache-busted /js/main.js?v=3.0.0');
             assert.ok(html.includes('id="fullTextModal"') && html.includes('fulltext-reader-sheet'), 'SSR HTML should include #fullTextModal and .fulltext-reader-sheet');
 
-            const mainJsSource = fs.readFileSync(path.join(ROOT_DIR, 'public', 'js', 'main.js'), 'utf8');
+            const frontendJsFiles = [
+                path.join(ROOT_DIR, 'public', 'js', 'main.js'),
+                ...fs.readdirSync(path.join(ROOT_DIR, 'public', 'js', 'modules'))
+                    .filter(f => f.endsWith('.js'))
+                    .map(f => path.join(ROOT_DIR, 'public', 'js', 'modules', f))
+            ];
+            const frontendJsSource = frontendJsFiles.map(f => fs.readFileSync(f, 'utf8')).join('\n');
             assert.ok(
-                mainJsSource.includes('openFullTextModal') &&
-                !mainJsSource.includes('/api/news/translate-fulltext'),
-                'public/js/main.js must read pre-compiled translatedParagraphs from snapshot without runtime translation API calls'
+                frontendJsSource.includes('openFullTextModal') &&
+                !frontendJsSource.includes('/api/news/translate-fulltext'),
+                'public/js/**/*.js must read pre-compiled translatedParagraphs from snapshot without runtime translation API calls'
             );
 
             // Verify GET /api/config exposes schedule & githubSync without legacy ai block
@@ -1967,10 +1973,11 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
     it('17. Router Sync Resilience: canonical mirror fallback, GitHub base64 envelope decoding, non-blocking UI audio sync, test-fixture guard, and main.js modal/status fixes', async () => {
         const { GitHubSyncManager, isSuspectedTestFixtureNews } = require('../utils/github_sync');
 
-        // 17a. main.js regression checks: renderFullTextModalContent must use data.originalLanguage (not undefined `article`) and fetchStatus must refresh news on change
+        // 17a. frontend regression checks: renderFullTextModalContent must use data.originalLanguage (not undefined `article`) and fetchStatus must refresh news on change
         const mainJsSrc = fs.readFileSync(path.join(ROOT_DIR, 'public', 'js', 'main.js'), 'utf8');
-        const modalRenderMatch = mainJsSrc.match(/renderFullTextModalContent\(data = \{\}\) \{[\s\S]*?\n    \}/);
-        assert.ok(modalRenderMatch, 'renderFullTextModalContent should exist in public/js/main.js');
+        const readerModalSrc = fs.readFileSync(path.join(ROOT_DIR, 'public', 'js', 'modules', 'reader_modal.js'), 'utf8');
+        const modalRenderMatch = readerModalSrc.match(/renderFullTextModalContent\(data = \{\}\) \{[\s\S]*?\n    \}/);
+        assert.ok(modalRenderMatch, 'renderFullTextModalContent should exist in public/js/modules/reader_modal.js');
         assert.equal(
             modalRenderMatch[0].includes('article?.source?.language'),
             false,

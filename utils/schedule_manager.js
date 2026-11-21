@@ -60,8 +60,8 @@ class ScheduleManager {
                         await this.executeUpdate();
                     },
                     {
-                        scheduled: true,
-                        timezone
+                        timezone,
+                        noOverlap: true
                     }
                 );
 
@@ -114,7 +114,15 @@ class ScheduleManager {
      */
     stop() {
         if (this.currentTasks.length > 0) {
-            this.currentTasks.forEach(({ task }) => task.stop());
+            this.currentTasks.forEach(({ task }) => {
+                if (!task) return;
+                try {
+                    if (typeof task.stop === 'function') task.stop();
+                } catch (_) {}
+                try {
+                    if (typeof task.destroy === 'function') task.destroy();
+                } catch (_) {}
+            });
             this.currentTasks = [];
         }
         if (this.githubSyncTimer) {
@@ -177,43 +185,87 @@ class ScheduleManager {
         return `${minute} ${hour} * * *`;
     }
 
+    _computeNextRunInTimezone(timeStr, timezone, now = new Date()) {
+        const [hour, minute] = String(timeStr || '').split(':').map(Number);
+        if (isNaN(hour) || isNaN(minute)) return null;
+        const tz = timezone || 'Asia/Shanghai';
+
+        // 使用 Intl.DateTimeFormat 计算目标时区当前年月日及 UTC 偏移（支持任意 IANA 时区）
+        const getTzParts = (dateObj) => {
+            const fmt = new Intl.DateTimeFormat('en-US', {
+                timeZone: tz,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            });
+            const map = {};
+            for (const part of fmt.formatToParts(dateObj)) {
+                if (part.type !== 'literal') map[part.type] = Number(part.value);
+            }
+            return {
+                year: map.year,
+                month: map.month,
+                day: map.day,
+                hour: map.hour === 24 ? 0 : map.hour,
+                minute: map.minute,
+                second: map.second
+            };
+        };
+
+        const toUtcForLocal = (year, month, day, h, m) => {
+            const guessUtcMs = Date.UTC(year, month - 1, day, h, m, 0, 0);
+            const observed = getTzParts(new Date(guessUtcMs));
+            const observedAsUtcMs = Date.UTC(observed.year, observed.month - 1, observed.day, observed.hour, observed.minute, observed.second, 0);
+            const offsetMs = observedAsUtcMs - guessUtcMs;
+            return new Date(guessUtcMs - offsetMs);
+        };
+
+        const cur = getTzParts(now);
+        let candidate = toUtcForLocal(cur.year, cur.month, cur.day, hour, minute);
+        if (candidate <= now) {
+            const nextDayAnchor = new Date(Date.UTC(cur.year, cur.month - 1, cur.day + 1, 12, 0, 0));
+            const nextDay = getTzParts(nextDayAnchor);
+            candidate = toUtcForLocal(nextDay.year, nextDay.month, nextDay.day, hour, minute);
+        }
+        return candidate;
+    }
+
     getNextExecutionTime() {
         try {
-            const updateTimes = this.currentTasks.length > 0
-                ? this.currentTasks.map(t => t.time)
-                : (config.news.updateTimes?.length ? config.news.updateTimes : ['08:00', '12:30', '19:30']);
-
-            if (!updateTimes.length) return '未设置';
-
-            const now = new Date();
-            const shanghaiOffsetMs = 8 * 3600000;
-            const shNow = new Date(now.getTime() + shanghaiOffsetMs);
-            const shYear = shNow.getUTCFullYear();
-            const shMonth = shNow.getUTCMonth();
-            const shDate = shNow.getUTCDate();
-
-            let nextExecution = null;
-
-            for (const time of updateTimes) {
-                const [hour, minute] = String(time).split(':').map(Number);
-                if (isNaN(hour) || isNaN(minute)) continue;
-                const execTime = new Date(Date.UTC(shYear, shMonth, shDate, hour - 8, minute, 0, 0));
-                if (execTime > now && (!nextExecution || execTime < nextExecution)) {
-                    nextExecution = execTime;
-                }
-            }
-
-            if (!nextExecution) {
-                for (const time of updateTimes) {
-                    const [hour, minute] = String(time).split(':').map(Number);
-                    if (isNaN(hour) || isNaN(minute)) continue;
-                    const execTime = new Date(Date.UTC(shYear, shMonth, shDate + 1, hour - 8, minute, 0, 0));
-                    if (!nextExecution || execTime < nextExecution) {
-                        nextExecution = execTime;
+            // 优先使用 node-cron v4 原生 task.getNextRun()
+            let earliest = null;
+            for (const item of this.currentTasks) {
+                if (item.task && typeof item.task.getNextRun === 'function') {
+                    const nextDt = item.task.getNextRun();
+                    if (nextDt instanceof Date && !isNaN(nextDt.getTime())) {
+                        if (!earliest || nextDt < earliest) {
+                            earliest = nextDt;
+                        }
                     }
                 }
             }
+            if (earliest) {
+                return earliest.toISOString();
+            }
 
+            const updateTimes = this.currentTasks.length > 0
+                ? this.currentTasks.map(t => t.time)
+                : (config.news.updateTimes?.length ? config.news.updateTimes : ['08:00', '12:30', '19:30']);
+            if (!updateTimes.length) return '未设置';
+
+            const timezone = (this.currentTasks[0] && this.currentTasks[0].timezone) || config.news.timezone || 'Asia/Shanghai';
+            const now = new Date();
+            let nextExecution = null;
+            for (const time of updateTimes) {
+                const candidate = this._computeNextRunInTimezone(time, timezone, now);
+                if (candidate && (!nextExecution || candidate < nextExecution)) {
+                    nextExecution = candidate;
+                }
+            }
             return nextExecution ? nextExecution.toISOString() : '无法计算';
         } catch (_) {
             return '无法计算';

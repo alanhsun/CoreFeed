@@ -109,17 +109,36 @@ function buildConfig() {
     savedSettings = loadSavedSettings();
 
     const env = getConfig('NODE_ENV', 'development');
+    const corefeedRepo = String(getConfig('COREFEED_REPO', 'alanhsun/CoreFeed')).trim().replace(/^\/+|\/+$/g, '') || 'alanhsun/CoreFeed';
+    const githubBranch = String(getConfig('AG_GITHUB_BRANCH', 'ag-snapshot')).trim() || 'ag-snapshot';
+    const githubRemote = String(getConfig('AG_GITHUB_REMOTE', 'origin')).trim() || 'origin';
+    const defaultSnapshotUrl = `https://raw.githubusercontent.com/${corefeedRepo}/${encodeURIComponent(githubBranch)}/manifest.json`;
     const defaultPushToGithub = getBooleanConfig('GITHUB_PUSH_ENABLED', getBooleanConfig('AG_GITHUB_SYNC', true));
     const defaultClientId = getConfig('CLIENT_ID', getConfig('AG_CLIENT_ID', os.hostname() || 'antigravity-client'));
 
+    const githubSync = {
+        repo: corefeedRepo,
+        enabled: getBooleanConfig('GITHUB_SYNC_ENABLED', true),
+        pushEnabled: defaultPushToGithub,
+        pushToGithub: defaultPushToGithub,
+        snapshotUrl: getConfig('GITHUB_SNAPSHOT_URL', defaultSnapshotUrl),
+        intervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 60),
+        cooldownMinutes: getNumberConfig('GITHUB_COOLDOWN_MINUTES', 30),
+        clientId: defaultClientId,
+        branch: githubBranch,
+        remote: githubRemote,
+        syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)
+    };
+
     const baseConfig = {
+        repo: corefeedRepo,
         server: {
             port: getNumberConfig('PORT', 3120),
             host: getConfig('HOST', '0.0.0.0'),
             env
         },
 
-        // Agent 原始采集与快照同步配置 (CoreFeed v2.0)
+        // Agent 原始采集与快照同步配置 (CoreFeed v3.0；GitHub 同步项共享 githubSync 真源)
         agent: {
             enabled: getBooleanConfig('AGENT_ENABLED', true),
             jinaReaderEnabled: getBooleanConfig('JINA_READER_ENABLED', true),
@@ -132,37 +151,20 @@ function buildConfig() {
             freshnessHours: getNumberConfig('AGENT_FRESHNESS_HOURS', 48),
             publishSecret: getConfig('PUBLISH_SECRET', getConfig('PUBLISH_API_KEY', '')),
             siteUrl: getConfig('COREFEED_SITE_URL', `http://localhost:${getNumberConfig('PORT', 3120)}`),
-            githubSyncEnabled: getBooleanConfig('GITHUB_SYNC_ENABLED', true),
-            githubPushEnabled: defaultPushToGithub,
-            pushToGithub: defaultPushToGithub,
-            githubSnapshotUrl: getConfig(
-                'GITHUB_SNAPSHOT_URL',
-                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json'
-            ),
-            githubSyncIntervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 60),
-            githubCooldownMinutes: getNumberConfig('GITHUB_COOLDOWN_MINUTES', 30),
-            clientId: defaultClientId,
-            githubBranch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),
-            githubRemote: getConfig('AG_GITHUB_REMOTE', 'origin'),
-            syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)
+            githubSyncEnabled: githubSync.enabled,
+            githubPushEnabled: githubSync.pushEnabled,
+            pushToGithub: githubSync.pushToGithub,
+            githubSnapshotUrl: githubSync.snapshotUrl,
+            githubSyncIntervalMinutes: githubSync.intervalMinutes,
+            githubCooldownMinutes: githubSync.cooldownMinutes,
+            clientId: githubSync.clientId,
+            githubBranch: githubSync.branch,
+            githubRemote: githubSync.remote,
+            syncOnStartup: githubSync.syncOnStartup
         },
 
         // GitHub 快照中转同步配置 (多客户端方案 2B 统一中枢: Antigravity Clients <-> GitHub ag-snapshot -> 软路由)
-        githubSync: {
-            enabled: getBooleanConfig('GITHUB_SYNC_ENABLED', true),
-            pushEnabled: defaultPushToGithub,
-            pushToGithub: defaultPushToGithub,
-            snapshotUrl: getConfig(
-                'GITHUB_SNAPSHOT_URL',
-                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json'
-            ),
-            intervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 60),
-            cooldownMinutes: getNumberConfig('GITHUB_COOLDOWN_MINUTES', 30),
-            clientId: defaultClientId,
-            branch: getConfig('AG_GITHUB_BRANCH', 'ag-snapshot'),
-            remote: getConfig('AG_GITHUB_REMOTE', 'origin'),
-            syncOnStartup: getBooleanConfig('GITHUB_SYNC_ON_STARTUP', true)
-        },
+        githubSync,
 
         // 新闻源与每日定时调度配置
         news: {

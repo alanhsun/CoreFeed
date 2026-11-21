@@ -29,7 +29,7 @@ const { readJsonFile, writeJsonFile, truncateText } = require('../utils/helpers'
 const NewsService = require('../services/news_service');
 const NewsAgentService = require('../services/news_agent_service');
 const stateManager = require('../services/state_manager');
-const { checkRemoteSnapshotCooldown } = require('../utils/github_sync');
+const { checkRemoteSnapshotCooldown } = require('../utils/snapshot_publisher');
 const { splitCandidateParagraphs } = require('../utils/snapshot_schema');
 
 function computeHarvestId(candidates = []) {

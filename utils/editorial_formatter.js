@@ -189,6 +189,19 @@ function renderSafeSummaryHtml(summaryArticle, newsData = []) {
 }
 
 /**
+ * 剥离综述正文中的 [NEWS_k] 引注角标、Markdown 标题/加粗标记并压缩空白
+ */
+function stripNewsCitationsAndMarkdown(rawText = '', maxLen = 0) {
+    const cleaned = String(rawText || '')
+        .replace(/\[NEWS_\d+\]/g, '')
+        .replace(/#+\s*/g, '')
+        .replace(/\*\*/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return maxLen > 0 ? cleaned.slice(0, maxLen) : cleaned;
+}
+
+/**
  * 将大模型撰写的综述 Markdown 包装为标准 summaryArticle 对象
  */
 function createSummaryArticleObject(articleContent, newsData = [], currentDate = '') {
@@ -209,13 +222,7 @@ function createSummaryArticleObject(articleContent, newsData = [], currentDate =
 
     const content = bodyLines.join('\n\n');
     const htmlContent = convertSummaryToRichHtml(content, newsData);
-    const plainSummary = content
-        .replace(/\[NEWS_\d+\]/g, '')
-        .replace(/#+\s*/g, '')
-        .replace(/\*\*/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 160);
+    const plainSummary = stripNewsCitationsAndMarkdown(content, 160);
 
     const regions = [...new Set((newsData || []).map(n => n?.region).filter(Boolean))];
 
@@ -241,5 +248,6 @@ module.exports = {
     mergeClusterArticles,
     convertSummaryToRichHtml,
     renderSafeSummaryHtml,
+    stripNewsCitationsAndMarkdown,
     createSummaryArticleObject
 };

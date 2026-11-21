@@ -1,7 +1,7 @@
 {
   "name": "corefeed",
-  "version": "2.0.0",
-  "description": "CoreFeed v2.0 - Global News Collector, Cross-Source Verifier & Reader",
+  "version": "3.0.0",
+  "description": "CoreFeed v3.0 - Global News Collector, Cross-Source Verifier & Reader",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -12,8 +12,8 @@
     "pm2:restart": "pm2 restart corefeed",
     "pm2:logs": "pm2 logs corefeed",
     "pm2:monit": "pm2 monit",
-    "docker:build": "docker build -t corefeed:2.0 .",
-    "docker:run": "docker run -d --name corefeed -p 3120:3120 --env-file .env corefeed:2.0",
+    "docker:build": "docker build -t corefeed:3.0 .",
+    "docker:run": "docker run -d --name corefeed -p 3120:3120 --env-file .env corefeed:3.0",
     "docker:stop": "docker stop corefeed && docker rm corefeed",
     "docker:logs": "docker logs corefeed",
     "compose:up": "docker-compose up -d",
@@ -31,7 +31,10 @@
     "ag:tts:news": "node scripts/ag-tts.js --mode=news",
     "ag:tts:pulse": "node scripts/ag-tts.js --mode=pulse",
     "ag:tts:both": "node scripts/ag-tts.js --mode=both",
-    "test": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js tests/audio_broadcast_integration.test.js tests/ai_briefing_hermes.test.js tests/deploy_router.test.js tests/security_hardening.test.js tests/pipeline_integrity_tls.test.js tests/snapshot_slim_incremental.test.js",
+    "lint": "eslint .",
+    "check:security": "npm audit --omit=dev --audit-level=moderate",
+    "check:ci": "npm run lint && npm run check:security && npm test",
+    "test": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js tests/audio_broadcast_integration.test.js tests/ai_briefing_hermes.test.js tests/deploy_router.test.js tests/security_hardening.test.js tests/pipeline_integrity_tls.test.js tests/snapshot_slim_incremental.test.js tests/engineering_phase4.test.js",
     "test:core": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js tests/audio_broadcast_integration.test.js"
   },
   "dependencies": {
@@ -42,11 +45,12 @@
     "dotenv": "^16.3.1",
     "ejs": "^3.1.9",
     "express": "^4.18.2",
-    "node-cron": "^3.0.3",
+    "node-cron": "^4.6.0",
     "rss-parser": "^3.13.0",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
+    "eslint": "^10.15.0",
     "nodemon": "^3.0.1"
   },
   "keywords": [
@@ -59,6 +63,6 @@
   "author": "CoreFeed Contributors",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }

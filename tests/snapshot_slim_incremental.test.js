@@ -841,7 +841,13 @@ describe('CoreFeed v3.0 — Phase 3 Snapshot Slimming, Incremental Sync, Runtime
         assert.equal(jsRes.statusCode, 200);
         assert.equal(jsRes.headers['content-encoding'], 'gzip', 'Multi-chunk /js/main.js must be gzip-compressed without backpressure deadlock');
         const jsText = zlib.gunzipSync(jsRes.body).toString('utf8');
-        assert.ok(jsText.includes('selectPulseIssue'));
+        assert.ok(jsText.includes('CoreFeedApp'));
+
+        const pulseModRes = await rawHttpGet(`${baseUrl}/js/modules/social_pulse.js`, { 'Accept-Encoding': 'gzip' });
+        assert.equal(pulseModRes.statusCode, 200);
+        assert.equal(pulseModRes.headers['content-encoding'], 'gzip', 'ES module /js/modules/social_pulse.js must be gzip-compressed');
+        const pulseModText = zlib.gunzipSync(pulseModRes.body).toString('utf8');
+        assert.ok(pulseModText.includes('selectPulseIssue'));
 
         // 5d. Audio HTTP 206 Range streaming must NEVER be gzip-compressed
         const audioRes = await rawHttpGet(`${baseUrl}/api/audio/news.mp3`, {
@@ -884,23 +890,29 @@ describe('CoreFeed v3.0 — Phase 3 Snapshot Slimming, Incremental Sync, Runtime
             assert.match(String(res.headers['content-type'] || ''), /text\/css/i);
         }
 
-        // Static audit: 100% of fa-* icon classes in views/index.ejs and public/js/main.js exist in public/css/icons.css
+        // Static audit: 100% of fa-* icon classes in views/index.ejs and public/js/**/*.js exist in public/css/icons.css
         const ejsSrc = fs.readFileSync(path.join(ROOT_DIR, 'views', 'index.ejs'), 'utf8');
-        const mainJsSrc = fs.readFileSync(path.join(ROOT_DIR, 'public', 'js', 'main.js'), 'utf8');
+        const jsModulesDir = path.join(ROOT_DIR, 'public', 'js', 'modules');
+        const allJsSources = [
+            fs.readFileSync(path.join(ROOT_DIR, 'public', 'js', 'main.js'), 'utf8'),
+            ...fs.readdirSync(jsModulesDir)
+                .filter(f => f.endsWith('.js'))
+                .map(f => fs.readFileSync(path.join(jsModulesDir, f), 'utf8'))
+        ].join('\n');
         const iconsCss = fs.readFileSync(path.join(ROOT_DIR, 'public', 'css', 'icons.css'), 'utf8');
         const utilCss = fs.readFileSync(path.join(ROOT_DIR, 'public', 'css', 'utilities.css'), 'utf8');
         const styleCss = fs.readFileSync(path.join(ROOT_DIR, 'public', 'css', 'style.css'), 'utf8');
         const allCss = `${iconsCss}\n${utilCss}\n${styleCss}`;
 
-        const usedFaClasses = [...new Set([...(`${ejsSrc}\n${mainJsSrc}`).matchAll(/\bfa-[a-z0-9-]+\b/g)].map(m => m[0]))];
+        const usedFaClasses = [...new Set([...(`${ejsSrc}\n${allJsSources}`).matchAll(/\bfa-[a-z0-9-]+\b/g)].map(m => m[0]))];
         assert.ok(usedFaClasses.length >= 20, 'Should detect used FontAwesome icon classes');
         const missingIcons = usedFaClasses.filter((cls) => !new RegExp(`\\.${cls}(?![a-z0-9-])`).test(iconsCss));
         assert.deepEqual(missingIcons, [], `All used fa-* classes must be defined in icons.css (missing: ${missingIcons.join(', ')})`);
 
-        // Static audit: 100% of concrete class="..." tokens in views/index.ejs & public/js/main.js exist in self-hosted CSS
+        // Static audit: 100% of concrete class="..." tokens in views/index.ejs & public/js/**/*.js exist in self-hosted CSS
         const classStrings = [
             ...[...ejsSrc.matchAll(/class="([^"]+)"/g)].map(m => m[1]),
-            ...[...mainJsSrc.matchAll(/class="([^"]+)"/g)].map(m => m[1])
+            ...[...allJsSources.matchAll(/class="([^"]+)"/g)].map(m => m[1])
         ];
         const structuralHooks = new Set(['pulse-panel-inner', 'pulse-spectrum-seg--']);
         const usedClasses = new Set();

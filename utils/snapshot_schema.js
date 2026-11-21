@@ -10,12 +10,28 @@
  *   3. 提供统一的同目录文件 URL 推导 (`deriveSiblingFileUrl`) 与分域快照重组 (`reassembleCombinedSnapshot`)。
  */
 const crypto = require('crypto');
-const { normalizeRegion, normalizeCategory, createSummaryArticleObject } = require('./editorial_formatter');
+const {
+    normalizeRegion,
+    normalizeCategory,
+    createSummaryArticleObject,
+    stripNewsCitationsAndMarkdown
+} = require('./editorial_formatter');
 const { normalizeSocialPulseBundle } = require('../services/social_pulse_service');
 const { normalizeAudioBroadcastBundle } = require('../services/audio_broadcast_service');
 
 const SNAPSHOT_SCHEMA_VERSION = '3.0';
-const DEFAULT_SNAPSHOT_URL = 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json';
+
+function getDefaultRepoSlug() {
+    return String(process.env.COREFEED_REPO || 'alanhsun/CoreFeed').trim().replace(/^\/+|\/+$/g, '') || 'alanhsun/CoreFeed';
+}
+
+function buildDefaultSnapshotUrl(repo = null, branch = null, file = 'manifest.json') {
+    const slug = String(repo || getDefaultRepoSlug()).trim().replace(/^\/+|\/+$/g, '') || 'alanhsun/CoreFeed';
+    const ref = String(branch || process.env.AG_GITHUB_BRANCH || 'ag-snapshot').trim() || 'ag-snapshot';
+    return `https://raw.githubusercontent.com/${slug}/${encodeURIComponent(ref)}/${String(file || 'manifest.json').replace(/^\/+/, '')}`;
+}
+
+const DEFAULT_SNAPSHOT_URL = buildDefaultSnapshotUrl();
 
 function computeSha256(input) {
     const buf = Buffer.isBuffer(input) ? input : Buffer.from(String(input ?? ''), 'utf8');
@@ -208,7 +224,7 @@ function stripSummaryForSnapshot(rawSummary, newsList = [], publishedAtIso = nul
     const content = String(rawSummary.content || rawSummary.markdown || '').trim();
     if (!content) return null;
 
-    const plainForSummary = content.replace(/\[NEWS_\d+\]/g, '').replace(/#+\s*/g, '').trim();
+    const plainForSummary = stripNewsCitationsAndMarkdown(content, 160);
     return {
         title: String(rawSummary.title || `${currentDate} 全球要闻深度综述`).trim(),
         content,
@@ -217,7 +233,7 @@ function stripSummaryForSnapshot(rawSummary, newsList = [], publishedAtIso = nul
             ? rawSummary.regions
             : [...new Set(newsList.map(n => n.region || '国际'))],
         generatedAt: rawSummary.generatedAt || nowIso,
-        summary: String(rawSummary.summary || plainForSummary.slice(0, 160)).trim(),
+        summary: String(rawSummary.summary || plainForSummary).trim(),
         wordCount: Number(rawSummary.wordCount) || content.length
     };
 }
@@ -477,6 +493,8 @@ function reassembleCombinedSnapshot({ manifest = null, newsDomain = null, pulseD
 module.exports = {
     SNAPSHOT_SCHEMA_VERSION,
     DEFAULT_SNAPSHOT_URL,
+    getDefaultRepoSlug,
+    buildDefaultSnapshotUrl,
     computeSha256,
     splitCandidateParagraphs,
     deriveSiblingFileUrl,

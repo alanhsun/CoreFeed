@@ -1,15 +1,18 @@
 services:
   corefeed:
     build: .
-    image: corefeed:2.0
+    image: corefeed:3.0
     container_name: corefeed
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "3120:3120"
     environment:
       - NODE_ENV=production
       - PORT=3120
       - TZ=Asia/Shanghai
+      - COREFEED_REPO=${COREFEED_REPO:-alanhsun/CoreFeed}
       - UPDATE_TIMES=${UPDATE_TIMES:-08:00,12:30,19:30}
       - PUBLISH_SECRET=${PUBLISH_SECRET:-}
       - ALLOW_INSECURE_TLS=${ALLOW_INSECURE_TLS:-false}

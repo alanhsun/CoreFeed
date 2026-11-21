@@ -36,6 +36,7 @@ const { AudioBroadcastService } = require('./services/audio_broadcast_service');
 const ScheduleManager = require('./utils/schedule_manager');
 const { GitHubSyncManager } = require('./utils/github_sync');
 const initializeApiRoutes = require('./routes/api');
+const { version: APP_VERSION } = require('./package.json');
 const { getGlobalSourceMatrix } = require('./config/global_sources');
 
 NetworkConfig.initialize();
@@ -217,8 +218,8 @@ app.get('/api/health', (req, res) => {
     const memUsage = process.memoryUsage();
     res.status(200).json({
         status: 'healthy',
-        version: '3.0.0',
-        engine: 'CoreFeed Global News Reader v3.0',
+        version: APP_VERSION,
+        engine: `CoreFeed Global News Reader v${APP_VERSION}`,
         timestamp: new Date().toISOString(),
         uptime: Math.floor(process.uptime()),
         memory: {
@@ -301,6 +302,7 @@ app.get('/', (req, res) => {
 
     res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.render('index', {
+        assetVersion: APP_VERSION,
         news: displayNews,
         totalNews: allEnhanced.length || displayNews.length,
         displayedNews: displayNews.length,
@@ -330,7 +332,7 @@ app.use(errorHandler);
 io.on('connection', (socket) => {
     socket.emit('connected', {
         id: socket.id,
-        version: '2.0.0',
+        version: APP_VERSION,
         isUpdating: stateManager.get('isUpdating'),
         collectionPhase: stateManager.get('collectionPhase') || 'idle',
         progress: stateManager.get('updateProgress'),
@@ -355,7 +357,10 @@ async function startServer() {
             const localPulse = await socialPulseService.loadLocalBundle();
             if (localPulse) {
                 stateManager.updateSocialPulse(localPulse);
-            } else if (process.env.NODE_ENV !== 'test') {
+            } else if (
+                process.env.NODE_ENV !== 'test' &&
+                (process.env.SOCIAL_PULSE_WORKSPACE || config.socialPulse?.workspaceDir)
+            ) {
                 try {
                     await socialPulseService.syncFromExternalWorkspace({ emit: false });
                 } catch (_) {}

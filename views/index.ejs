@@ -13,9 +13,9 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="alternate icon" href="/favicon.ico" type="image/x-icon">
     <link rel="apple-touch-icon" href="/images/logo.png">
-    <link rel="stylesheet" href="/css/utilities.css?v=3.0.0">
-    <link rel="stylesheet" href="/css/icons.css?v=3.0.0">
-    <link rel="stylesheet" href="/css/style.css?v=3.0.0">
+    <link rel="stylesheet" href="/css/utilities.css?v=<%= assetVersion %>">
+    <link rel="stylesheet" href="/css/icons.css?v=<%= assetVersion %>">
+    <link rel="stylesheet" href="/css/style.css?v=<%= assetVersion %>">
 </head>
 <body class="antialiased">
     <div class="kami-page">
@@ -73,7 +73,7 @@
             <div class="kami-masthead-main">
                 <div class="kami-brand-group">
                     <div class="kami-brand-row">
-                        <img src="/images/logo.png?v=2.7.0" alt="CoreFeed" width="42" height="42" class="kami-brand-logo">
+                        <img src="/images/logo.png?v=<%= assetVersion %>" alt="CoreFeed" width="42" height="42" class="kami-brand-logo">
                         <div class="flex items-baseline gap-3 flex-wrap">
                             <h1 class="kami-display-title">CoreFeed</h1>
                             <span class="kami-masthead-divider">/</span>
@@ -410,6 +410,9 @@
                                                             <button type="button" class="hero-step-btn" onclick="app.nextHeroSlide()" aria-label="下一条要闻" title="下一条要闻">
                                                                 <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
                                                             </button>
+                                                            <button type="button" class="hero-step-btn hero-pause-btn" onclick="app.toggleHeroCarouselPause()" aria-pressed="false" aria-label="暂停自动轮播" title="暂停自动轮播">
+                                                                <i class="fa-solid fa-pause" aria-hidden="true"></i>
+                                                            </button>
                                                         </div>
                                                     <% } %>
                                                 </div>
@@ -736,9 +739,9 @@
     </div>
 
     <div id="settingsModal" class="fixed inset-0 z-50 hidden kami-modal-backdrop flex items-center justify-center p-4" onclick="if(event.target===this) app.closeSettingsModal()">
-        <form id="settingsForm" class="kami-modal-surface max-w-lg w-full flex flex-col overflow-hidden" onsubmit="event.preventDefault(); app.saveSettings();">
+        <form id="settingsForm" class="kami-modal-surface max-w-lg w-full flex flex-col overflow-hidden" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle" onsubmit="event.preventDefault(); app.saveSettings();">
             <div class="px-6 py-5 flex items-center justify-between" style="border-bottom: 1px solid var(--border-hairline);">
-                <h3 class="text-base font-bold" style="color: var(--text-primary); margin: 0;">系统设置</h3>
+                <h3 id="settingsModalTitle" class="text-base font-bold" style="color: var(--text-primary); margin: 0;">系统设置</h3>
                 <button type="button" id="btnCloseSettings" onclick="app.closeSettingsModal()" class="btn-ghost btn-icon-only" aria-label="关闭设置">
                     <i class="fa-solid fa-xmark text-sm"></i>
                 </button>
@@ -800,6 +803,6 @@
         };
     </script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/js/main.js?v=3.0.0"></script>
+    <script type="module" src="/js/main.js?v=<%= assetVersion %>"></script>
 </body>
 </html>

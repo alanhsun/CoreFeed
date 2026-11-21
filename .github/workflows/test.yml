@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   test:
@@ -23,10 +24,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run shell syntax checks
+      - name: Run ESLint static checks
+        run: npm run lint
+
+      - name: Run production dependency audit (0 moderate+ vulnerabilities)
+        run: npm run check:security
+
+      - name: Run shell syntax and ShellCheck static checks
         run: |
           sh -n deploy-router.sh
+          sh -n docker-entrypoint.sh
           sh -n integrations/hermes-skill/install.sh
+          shellcheck -S warning deploy-router.sh docker-entrypoint.sh integrations/hermes-skill/install.sh
 
       - name: Run Python syntax checks
         run: |

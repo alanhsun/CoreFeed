@@ -13,14 +13,23 @@
 const config = require('../config');
 const logger = require('../utils/logger');
 const { stripHtml } = require('../utils/helpers');
-const { getGlobalSourceMatrix, getSourceAuthorityScore } = require('../config/global_sources');
-const {
-    fetchFromGlobalSource,
-    fetchArticleLeadImage,
-    searchNewsImageByTitle,
-    extractFullArticleContent,
-    createArticleId
-} = require('./agent_tools');
+
+let _agentToolsModule = null;
+let _globalSourcesModule = null;
+
+function getAgentTools() {
+    if (!_agentToolsModule) {
+        _agentToolsModule = require('./agent_tools');
+    }
+    return _agentToolsModule;
+}
+
+function getGlobalSources() {
+    if (!_globalSourcesModule) {
+        _globalSourcesModule = require('../config/global_sources');
+    }
+    return _globalSourcesModule;
+}
 
 class NewsAgentService {
     constructor(io = null, stateManager = null, newsService = null) {
@@ -123,6 +132,8 @@ class NewsAgentService {
      * 并发拉取所有启用的全球信源与自定义补充 RSS 源（纯网络搬运，不做任何筛选或加工）
      */
     async _executeScoutPatrol(categoryFilter = null) {
+        const { getGlobalSourceMatrix, getSourceAuthorityScore } = getGlobalSources();
+        const { fetchFromGlobalSource, createArticleId } = getAgentTools();
         const matrix = getGlobalSourceMatrix();
         const disabledSet = new Set((config.news.disabledSources || []).map(s => s.trim()));
 
@@ -223,6 +234,7 @@ class NewsAgentService {
         if (!Array.isArray(articles) || articles.length === 0) return;
         const missing = articles.filter(a => !a.urlToImage);
         if (missing.length === 0) return;
+        const { fetchArticleLeadImage, searchNewsImageByTitle } = getAgentTools();
 
         const concurrency = 8;
         for (let i = 0; i < missing.length; i += concurrency) {
@@ -250,6 +262,7 @@ class NewsAgentService {
      */
     async _enrichMissingArticleFullTexts(articles) {
         if (!Array.isArray(articles) || articles.length === 0) return;
+        const { extractFullArticleContent } = getAgentTools();
 
         const concurrency = 8;
         for (let i = 0; i < articles.length; i += concurrency) {

@@ -221,16 +221,22 @@ describe('CoreFeed v2.0 — Phase 1 Security & Stability Hardening Suite', () =>
         assert.ok(!legacyOnlyHtml.includes('onerror='));
         assert.ok(legacyOnlyHtml.includes('安全文本内容'));
 
-        // 1e. Verify public/js/main.js uses event delegation & URL/HTML sanitizers instead of inline interpolated onclicks
-        const mainJs = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'main.js'), 'utf8');
-        assert.ok(!mainJs.includes('onclick="app.setRegionFilter('));
-        assert.ok(!mainJs.includes('onclick="app.setCategoryFilter('));
-        assert.ok(!mainJs.includes('onclick="app.setPulseRegionFilter('));
-        assert.ok(!mainJs.includes('onclick="app.setPulseLangFilter('));
-        assert.ok(!mainJs.includes('onclick="app.setPulseCategoryFilter('));
-        assert.ok(!mainJs.includes('onclick="app.handleCardBodyClick('));
-        assert.ok(mainJs.includes('sanitizeSummaryHtml('));
-        assert.ok(mainJs.includes('safeHttpUrl('));
+        // 1e. Verify public/js/**/*.js uses event delegation & URL/HTML sanitizers instead of inline interpolated onclicks
+        const jsDir = path.join(__dirname, '..', 'public', 'js');
+        const moduleFiles = fs.readdirSync(path.join(jsDir, 'modules'))
+            .filter(f => f.endsWith('.js'))
+            .map(f => path.join(jsDir, 'modules', f));
+        const allFrontendJs = [path.join(jsDir, 'main.js'), ...moduleFiles]
+            .map(f => fs.readFileSync(f, 'utf8'))
+            .join('\n');
+        assert.ok(!allFrontendJs.includes('onclick="app.setRegionFilter('));
+        assert.ok(!allFrontendJs.includes('onclick="app.setCategoryFilter('));
+        assert.ok(!allFrontendJs.includes('onclick="app.setPulseRegionFilter('));
+        assert.ok(!allFrontendJs.includes('onclick="app.setPulseLangFilter('));
+        assert.ok(!allFrontendJs.includes('onclick="app.setPulseCategoryFilter('));
+        assert.ok(!allFrontendJs.includes('onclick="app.handleCardBodyClick('));
+        assert.ok(allFrontendJs.includes('sanitizeSummaryHtml('));
+        assert.ok(allFrontendJs.includes('safeHttpUrl('));
     });
 
     it('2. Auth, CSRF, CORS, security headers, and dynamic config allowlist enforcement', async () => {

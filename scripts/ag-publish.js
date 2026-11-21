@@ -24,7 +24,9 @@ const { getHttpsAgent } = require('../utils/network_config');
 const stateManager = require('../services/state_manager');
 const {
     publishSnapshotToGitHub,
-    fetchRemoteSnapshotViaGit,
+    fetchRemoteSnapshotViaGit
+} = require('../utils/snapshot_publisher');
+const {
     GitHubSyncManager,
     isSuspectedTestFixtureNews
 } = require('../utils/github_sync');
@@ -37,6 +39,7 @@ const {
     splitTextIntoParagraphs,
     mergeClusterArticles,
     renderSafeSummaryHtml,
+    stripNewsCitationsAndMarkdown,
     createSummaryArticleObject
 } = require('../utils/editorial_formatter');
 const {
@@ -564,7 +567,7 @@ async function runPublish(customOptions = {}) {
                 ? rawSummaryObj.regions
                 : [...new Set(finalNews.map(n => n.region || '国际'))],
             generatedAt: rawSummaryObj.generatedAt || nowIso,
-            summary: rawSummaryObj.summary || content.replace(/\[NEWS_\d+\]/g, '').replace(/#+\s*/g, '').trim().slice(0, 160),
+            summary: rawSummaryObj.summary || stripNewsCitationsAndMarkdown(content, 160),
             wordCount: rawSummaryObj.wordCount || content.length
         };
     } else if (rawSummaryMd.length > 0) {
