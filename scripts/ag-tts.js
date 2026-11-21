@@ -9,26 +9,35 @@
  *   node scripts/ag-tts.js --dry-run-script    # 仅预览双主播口播分幕文稿 JSON（不拉起 Colab）
  */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('dotenv').config();
 const axios = require('axios');
-const https = require('https');
 const config = require('../config');
 const logger = require('../utils/logger');
+const { getHttpsAgent } = require('../utils/network_config');
 const stateManager = require('../services/state_manager');
 const { AudioBroadcastService } = require('../services/audio_broadcast_service');
-
-const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: false });
 
 function resolveColabPython() {
     if (process.env.QWEN3_COLAB_PYTHON && fs.existsSync(process.env.QWEN3_COLAB_PYTHON)) {
         return process.env.QWEN3_COLAB_PYTHON;
     }
-    const winDefault = 'c:\\Users\\alan\\Documents\\antigravity\\Google_Colab\\.venv\\Scripts\\python.exe';
-    if (fs.existsSync(winDefault)) {
-        return winDefault;
+    const colabRoot = process.env.QWEN3_COLAB_ROOT
+        ? path.resolve(process.env.QWEN3_COLAB_ROOT)
+        : path.join(os.homedir(), 'Documents', 'antigravity', 'Google_Colab');
+    const venvCandidates = process.platform === 'win32'
+        ? [path.join(colabRoot, '.venv', 'Scripts', 'python.exe')]
+        : [
+            path.join(colabRoot, '.venv', 'bin', 'python3'),
+            path.join(colabRoot, '.venv', 'bin', 'python')
+        ];
+    for (const candidate of venvCandidates) {
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
     }
     return process.platform === 'win32' ? 'python' : 'python3';
 }
@@ -40,6 +49,9 @@ function parseTtsCliArgs(argv = process.argv.slice(2)) {
         gpu: 'L4',
         speed: '1.03',
         maxHeadlines: '10',
+        timeoutSec: 1200,
+        maxTotalChars: 12000,
+        force: false,
         dryRunScript: false,
         allowFailure: false,
         localOnly: false,
@@ -69,6 +81,20 @@ function parseTtsCliArgs(argv = process.argv.slice(2)) {
             opts.maxHeadlines = argv[++i];
         } else if (arg.startsWith('--max-headlines=')) {
             opts.maxHeadlines = eqVal(arg);
+        } else if (arg === '--timeout-sec' && argv[i + 1]) {
+            const n = parseInt(argv[++i], 10);
+            if (!isNaN(n) && n > 0) opts.timeoutSec = n;
+        } else if (arg.startsWith('--timeout-sec=')) {
+            const n = parseInt(eqVal(arg), 10);
+            if (!isNaN(n) && n > 0) opts.timeoutSec = n;
+        } else if (arg === '--max-total-chars' && argv[i + 1]) {
+            const n = parseInt(argv[++i], 10);
+            if (!isNaN(n) && n >= 0) opts.maxTotalChars = n;
+        } else if (arg.startsWith('--max-total-chars=')) {
+            const n = parseInt(eqVal(arg), 10);
+            if (!isNaN(n) && n >= 0) opts.maxTotalChars = n;
+        } else if (arg === '--force') {
+            opts.force = true;
         } else if (arg === '--dry-run-script') {
             opts.dryRunScript = true;
         } else if (arg === '--allow-failure') {
@@ -108,6 +134,8 @@ async function runTtsSynthesis(customOptions = {}) {
     const opts = { ...parseTtsCliArgs([]), ...customOptions };
     const pyBin = resolveColabPython();
     const pyScript = path.join(__dirname, 'ag-generate-tts.py');
+    const timeoutSec = Math.max(30, Number(opts.timeoutSec) || 1200);
+    const maxTotalChars = Number.isFinite(Number(opts.maxTotalChars)) ? Number(opts.maxTotalChars) : 12000;
 
     const pyArgs = [
         '-u',
@@ -120,6 +148,10 @@ async function runTtsSynthesis(customOptions = {}) {
         String(opts.speed || '1.03'),
         '--max-headlines',
         String(opts.maxHeadlines || '10'),
+        '--timeout-sec',
+        String(timeoutSec),
+        '--max-total-chars',
+        String(maxTotalChars),
         '--data-dir',
         path.resolve(opts.dataDir)
     ];
@@ -133,6 +165,9 @@ async function runTtsSynthesis(customOptions = {}) {
     if (opts.apiKey) {
         pyArgs.push('--api-key', String(opts.apiKey));
     }
+    if (opts.force) {
+        pyArgs.push('--force');
+    }
     if (opts.dryRunScript) {
         pyArgs.push('--dry-run-script');
     }
@@ -140,14 +175,19 @@ async function runTtsSynthesis(customOptions = {}) {
     const res = spawnSync(pyBin, pyArgs, {
         cwd: path.resolve(__dirname, '..'),
         stdio: 'inherit',
+        timeout: (timeoutSec + 120) * 1000,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
 
-    if (res.status !== 0) {
-        const msg = `Qwen3-TTS 语音合成脚本退出码异常 (code=${res.status})`;
+    if (res.error || res.status !== 0) {
+        const msg = res.error?.code === 'ETIMEDOUT'
+            ? `Qwen3-TTS 语音合成子进程超时 (>${timeoutSec + 120}s)`
+            : (res.error
+                ? `Qwen3-TTS 语音合成启动失败 (${res.error.message})`
+                : `Qwen3-TTS 语音合成脚本退出码异常 (code=${res.status})`);
         if (opts.allowFailure) {
             logger.warn('AG-TTS', `${msg}，已设置 --allow-failure，跳过语音阻断继续后续发布`);
-            return { success: false, skippedOnFailure: true, exitCode: res.status };
+            return { success: false, skippedOnFailure: true, exitCode: res.status, timedOut: res.error?.code === 'ETIMEDOUT' };
         }
         throw new Error(msg);
     }
@@ -201,7 +241,7 @@ async function runTtsSynthesis(customOptions = {}) {
                         headers,
                         timeout: 30000,
                         maxBodyLength: 50 * 1024 * 1024,
-                        httpsAgent: httpsAgentIgnoreTls,
+                        httpsAgent: getHttpsAgent({ keepAlive: false }),
                         ...(isLocalTarget ? { proxy: false } : {})
                     }
                 );

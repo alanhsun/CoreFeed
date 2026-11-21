@@ -10,11 +10,11 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const https = require('https');
 const axios = require('axios');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { readJsonFile, writeJsonFile } = require('../utils/helpers');
+const { getHttpsAgent } = require('../utils/network_config');
 
 const VALID_TRACK_KEYS = ['news', 'pulse'];
 const TRACK_SNAPSHOT_FILENAMES = {
@@ -25,8 +25,6 @@ const TRACK_DEFAULT_LABELS = {
     news: '全球要闻播报',
     pulse: '欧美社媒早班车'
 };
-
-const audioFetchHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
 function computeBufferSha256(buf) {
     return crypto.createHash('sha256').update(buf).digest('hex');
@@ -45,7 +43,7 @@ function resolveSnapshotRawDirUrl(customSnapshotUrl = null) {
         process.env.GITHUB_SNAPSHOT_URL ||
         config.githubSync?.snapshotUrl ||
         config.agent?.githubSnapshotUrl ||
-        'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
+        'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json'
     ).trim();
     if (!snapUrl) return '';
 
@@ -153,7 +151,7 @@ function normalizeAudioTrack(rawTrack, trackKey, options = {}) {
 
     const fileName = TRACK_SNAPSHOT_FILENAMES[key];
     const sha256 = String(rawTrack.sha256 || '').trim().toLowerCase();
-    const generatedAt = String(rawTrack.generatedAt || new Date().toISOString()).trim();
+    const generatedAt = String(rawTrack.generatedAt || options.updatedAt || new Date().toISOString()).trim();
     const versionToken = sha256 ? sha256.slice(0, 10) : String(new Date(generatedAt).getTime() || Date.now());
     const rawDirUrl = resolveSnapshotRawDirUrl(options.snapshotUrl);
 
@@ -173,7 +171,9 @@ function normalizeAudioTrack(rawTrack, trackKey, options = {}) {
         title,
         subtitle: String(rawTrack.subtitle || '林远 & Serena 双主播交替播报').trim(),
         issueKey: rawTrack.issueKey ? String(rawTrack.issueKey).trim() : null,
+        editionId: rawTrack.editionId ? String(rawTrack.editionId).trim() : null,
         editionTimestamp: rawTrack.editionTimestamp ? String(rawTrack.editionTimestamp).trim() : null,
+        scriptSha256: rawTrack.scriptSha256 ? String(rawTrack.scriptSha256).trim().toLowerCase() : null,
         generatedAt,
         fileName,
         audioUrl: `/api/audio/${key}.mp3?v=${encodeURIComponent(versionToken)}`,
@@ -198,10 +198,14 @@ function normalizeAudioBroadcastBundle(rawInput, options = {}) {
         ? rawInput.tracks
         : (VALID_TRACK_KEYS.includes(rawInput.track) ? { [rawInput.track]: rawInput } : {});
 
+    const trackOpts = {
+        ...options,
+        updatedAt: options.updatedAt || rawInput.updatedAt || null
+    };
     const tracks = {};
     for (const key of VALID_TRACK_KEYS) {
         if (rawTracksObj[key]) {
-            const norm = normalizeAudioTrack(rawTracksObj[key], key, options);
+            const norm = normalizeAudioTrack(rawTracksObj[key], key, trackOpts);
             if (norm) {
                 tracks[key] = norm;
             }
@@ -439,7 +443,7 @@ class AudioBroadcastService {
                         responseType: 'arraybuffer',
                         timeout: 30000,
                         maxContentLength: 40 * 1024 * 1024,
-                        httpsAgent: audioFetchHttpsAgent,
+                        httpsAgent: getHttpsAgent({ keepAlive: true }),
                         headers: {
                             'Cache-Control': 'no-cache',
                             'User-Agent': 'CoreFeed-Audio-Sync/2.0',

@@ -12,6 +12,7 @@ services:
       - TZ=Asia/Shanghai
       - UPDATE_TIMES=${UPDATE_TIMES:-08:00,12:30,19:30}
       - PUBLISH_SECRET=${PUBLISH_SECRET:-}
+      - ALLOW_INSECURE_TLS=${ALLOW_INSECURE_TLS:-false}
     env_file:
       - path: .env
         required: false

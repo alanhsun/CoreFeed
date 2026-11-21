@@ -23,6 +23,7 @@
     "setup": "npm install && cp .env.example .env",
     "clean": "rm -rf node_modules package-lock.json && npm install",
     "ag:harvest": "node scripts/ag-harvest.js",
+    "ag:validate": "node scripts/ag-publish.js --validate",
     "ag:publish": "node scripts/ag-publish.js",
     "ag:pulse": "node scripts/ag-sync-pulse.js",
     "ag:pulse:github": "node scripts/ag-sync-pulse.js --github",
@@ -30,7 +31,7 @@
     "ag:tts:news": "node scripts/ag-tts.js --mode=news",
     "ag:tts:pulse": "node scripts/ag-tts.js --mode=pulse",
     "ag:tts:both": "node scripts/ag-tts.js --mode=both",
-    "test": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js tests/audio_broadcast_integration.test.js tests/ai_briefing_hermes.test.js tests/deploy_router.test.js tests/security_hardening.test.js",
+    "test": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js tests/audio_broadcast_integration.test.js tests/ai_briefing_hermes.test.js tests/deploy_router.test.js tests/security_hardening.test.js tests/pipeline_integrity_tls.test.js tests/snapshot_slim_incremental.test.js",
     "test:core": "node --test --test-concurrency=1 tests/ag_pipeline.test.js tests/social_pulse_integration.test.js tests/audio_broadcast_integration.test.js"
   },
   "dependencies": {

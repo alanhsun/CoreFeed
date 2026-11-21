@@ -248,16 +248,20 @@ describe('CoreFeed v2.0 — AI Briefing API & Hermes × Open-XiaoAI Bridge Integ
             );
 
             assert.equal(pub.success, true);
-            assert.deepEqual(pub.files, ['briefing.json', 'briefing.md', 'latest.json']);
+            assert.deepEqual(pub.files, ['briefing.json', 'briefing.md', 'manifest.json', 'news.json']);
 
             const commitCount = execFileSync('git', ['--git-dir', bareRemoteDir, 'rev-list', '--count', 'refs/heads/ag-snapshot'], { encoding: 'utf8' }).trim();
             assert.equal(commitCount, '1');
 
-            const latestRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:latest.json'], { encoding: 'utf8' });
+            const manifestRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:manifest.json'], { encoding: 'utf8' });
+            const newsRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:news.json'], { encoding: 'utf8' });
             const briefingJsonRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:briefing.json'], { encoding: 'utf8' });
             const briefingMdRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:briefing.md'], { encoding: 'utf8' });
 
-            assert.ok(briefingJsonRaw.length < latestRaw.length, 'briefing.json should be much smaller than latest.json');
+            const parsedManifest = JSON.parse(manifestRaw);
+            const parsedNews = JSON.parse(newsRaw);
+            assert.equal(parsedManifest.schemaVersion, '3.0');
+            assert.equal(parsedNews.news.length, 3);
             const parsedBriefing = JSON.parse(briefingJsonRaw);
             assert.equal(parsedBriefing.articleCount, 3);
             assert.ok(Array.isArray(parsedBriefing.ttsPresets.top5Headlines.segments));

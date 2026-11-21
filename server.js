@@ -25,6 +25,7 @@ const {
     createRateLimiter
 } = require('./middleware/error_handler');
 const { isOriginAllowed, getAllowedCorsOrigins } = require('./middleware/auth');
+const { compressionMiddleware } = require('./middleware/compression');
 const { serializeForScript, sanitizeHttpUrl } = require('./utils/helpers');
 const { renderSafeSummaryHtml } = require('./utils/editorial_formatter');
 
@@ -118,6 +119,7 @@ if (config.server.env === 'production') {
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+app.use(compressionMiddleware);
 app.use(express.static(path.join(__dirname, 'public'), {
     maxAge: config.server.env === 'production' ? '1h' : 0,
     etag: true,
@@ -192,12 +194,10 @@ stateManager.on('socialPulse-changed', ({ value }) => {
 });
 
 stateManager.on('audioBroadcast-changed', ({ value }) => {
-    if (value) {
-        io.emit('audio-updated', {
-            success: true,
-            audioBroadcast: value
-        });
-    }
+    io.emit('audio-updated', {
+        success: true,
+        audioBroadcast: value || null
+    });
 });
 
 stateManager.on('updateProgress-changed', ({ value }) => {
@@ -217,8 +217,8 @@ app.get('/api/health', (req, res) => {
     const memUsage = process.memoryUsage();
     res.status(200).json({
         status: 'healthy',
-        version: '2.0.0',
-        engine: 'CoreFeed Global News Reader v2.0',
+        version: '3.0.0',
+        engine: 'CoreFeed Global News Reader v3.0',
         timestamp: new Date().toISOString(),
         uptime: Math.floor(process.uptime()),
         memory: {
@@ -232,11 +232,41 @@ app.get('/api/health', (req, res) => {
 const apiRoutes = initializeApiRoutes(services, io, stateManager);
 app.use('/api', apiRoutes);
 
+function buildSsrSocialPulse(rawPulse) {
+    if (!rawPulse || !Array.isArray(rawPulse.issues) || rawPulse.issues.length === 0) {
+        return rawPulse || null;
+    }
+    const latestKey = rawPulse.latestKey || rawPulse.issues[0].key;
+    const slimIssues = rawPulse.issues.map((iss, idx) => {
+        const isLatest = iss.key === latestKey || (idx === 0 && !rawPulse.issues.some(x => x.key === latestKey));
+        if (isLatest) {
+            return {
+                ...iss,
+                clusterCount: Array.isArray(iss.clusters) ? iss.clusters.length : (Number(iss.clusterCount) || 0)
+            };
+        }
+        return {
+            key: iss.key,
+            mode: iss.mode,
+            date: iss.date,
+            slug: iss.slug || null,
+            generated_at: iss.generated_at || null,
+            headline: iss.headline || '',
+            clusterCount: Array.isArray(iss.clusters) ? iss.clusters.length : (Number(iss.clusterCount) || 0),
+            _summaryOnly: true
+        };
+    });
+    return {
+        ...rawPulse,
+        issues: slimIssues
+    };
+}
+
 app.get('/', (req, res) => {
     const newsData = stateManager.get('newsData') || [];
     const allEnhanced = stateManager.get('allEnhancedNews') || newsData;
     const rawSummaryArticle = stateManager.get('summaryArticle') || null;
-    const socialPulse = stateManager.get('socialPulse') || null;
+    const socialPulse = buildSsrSocialPulse(stateManager.get('socialPulse') || null);
     const audioBroadcast = stateManager.get('audioBroadcast') || null;
     const lastUpdated = stateManager.get('lastUpdated');
     const githubSyncStatus = githubSyncManager ? githubSyncManager.getStatus() : null;
@@ -252,11 +282,20 @@ app.get('/', (req, res) => {
         (githubSyncStatus && githubSyncStatus.publishedBy) ||
         clientId;
 
-    const displayNews = newsData.slice(0, config.agent.maxCuratedArticles || 30);
+    const displayNews = newsData.slice(0, config.agent.maxCuratedArticles || 30).map((item) => {
+        if (!item || typeof item !== 'object') return item;
+        const { fullText, content, translatedContent, translatedDescription, ...leanItem } = item;
+        return leanItem;
+    });
     const summaryArticle = rawSummaryArticle
         ? {
-            ...rawSummaryArticle,
-            htmlContent: renderSafeSummaryHtml(rawSummaryArticle, displayNews)
+            title: rawSummaryArticle.title,
+            htmlContent: renderSafeSummaryHtml(rawSummaryArticle, displayNews),
+            newsCount: rawSummaryArticle.newsCount || displayNews.length,
+            regions: rawSummaryArticle.regions || [],
+            generatedAt: rawSummaryArticle.generatedAt,
+            summary: rawSummaryArticle.summary || '',
+            wordCount: rawSummaryArticle.wordCount || 0
         }
         : null;
 

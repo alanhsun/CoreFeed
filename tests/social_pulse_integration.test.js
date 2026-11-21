@@ -323,25 +323,47 @@ describe('CoreFeed x Western Social Pulse Integration Suite', () => {
             assert.equal(syncRes.issueCount, 1);
             assert.ok(syncRes.githubSync && syncRes.githubSync.pushed);
 
-            // Inspect ag-snapshot:latest.json from bare remote git repo
-            const committedJson = JSON.parse(
-                execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:latest.json'], { encoding: 'utf8' })
-            );
-            assert.equal(committedJson.news.length, 1, 'ag-sync-pulse must preserve existing global news');
-            assert.equal(committedJson.publishedAt, tenHoursAgoIso, 'ag-sync-pulse must preserve news publishedAt so 07:40 news cooldown is NOT tripped');
-            assert.equal(committedJson.socialPulse.issueCount, 1);
-            assert.equal(committedJson.socialPulse.latestKey, 'daily:2026-11-15');
+            // Inspect Schema v3.0 split-domain files from bare remote git repo
+            const manifestRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:manifest.json'], { encoding: 'utf8' });
+            const newsRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:news.json'], { encoding: 'utf8' });
+            const pulseRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:pulse.json'], { encoding: 'utf8' });
+            const committedManifest = JSON.parse(manifestRaw);
+            const committedNews = JSON.parse(newsRaw);
+            const committedPulse = JSON.parse(pulseRaw);
+            assert.equal(committedNews.news.length, 1, 'ag-sync-pulse must preserve existing global news');
+            assert.equal(committedManifest.publishedAt, tenHoursAgoIso, 'ag-sync-pulse must preserve news publishedAt so 07:40 news cooldown is NOT tripped');
+            assert.equal(committedPulse.issueCount, 1);
+            assert.equal(committedPulse.latestKey, 'daily:2026-11-15');
             const treeFiles = execFileSync('git', ['--git-dir', bareRemoteDir, 'ls-tree', '--name-only', 'ag-snapshot'], { encoding: 'utf8' }).trim().split(/\r?\n/);
-            assert.ok(treeFiles.includes('latest.json') && treeFiles.includes('briefing.json') && treeFiles.includes('briefing.md'), 'ag-sync-pulse must preserve briefing.json and briefing.md in ag-snapshot tree');
+            assert.ok(
+                treeFiles.includes('manifest.json') &&
+                treeFiles.includes('news.json') &&
+                treeFiles.includes('pulse.json') &&
+                treeFiles.includes('briefing.json') &&
+                treeFiles.includes('briefing.md'),
+                'ag-sync-pulse must preserve manifest.json, news.json, pulse.json, briefing.json and briefing.md in ag-snapshot tree'
+            );
+            assert.ok(!treeFiles.includes('latest.json'), 'Q1=B: ag-snapshot must NOT include latest.json');
 
-            // Verify 07:40 cooldown check against committedJson returns inCooldown === false!
-            let currentRemotePayload = committedJson;
+            // Verify 07:40 cooldown check against split-domain manifest returns inCooldown === false!
             const mockGh = http.createServer((req, res) => {
-                res.writeHead(200, { 'Content-Type': 'application/json', ETag: `"etag-${currentRemotePayload.socialPulseUpdatedAt || '1'}"` });
-                res.end(JSON.stringify(currentRemotePayload));
+                const u = (req.url || '').split('?')[0];
+                if (u.endsWith('/manifest.json')) {
+                    res.writeHead(200, { 'Content-Type': 'application/json', ETag: `"etag-${committedManifest.domains?.pulse?.updatedAt || '1'}"` });
+                    res.end(manifestRaw);
+                } else if (u.endsWith('/news.json')) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(newsRaw);
+                } else if (u.endsWith('/pulse.json')) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(pulseRaw);
+                } else {
+                    res.writeHead(404);
+                    res.end();
+                }
             });
             await new Promise((res, rej) => mockGh.listen(0, '127.0.0.1', e => (e ? rej(e) : res())));
-            const mockSnapUrl = `http://127.0.0.1:${mockGh.address().port}/alanhsun/CoreFeed/ag-snapshot/latest.json`;
+            const mockSnapUrl = `http://127.0.0.1:${mockGh.address().port}/alanhsun/CoreFeed/ag-snapshot/manifest.json`;
 
             try {
                 const cdCheck = await checkRemoteSnapshotCooldown({
@@ -349,6 +371,7 @@ describe('CoreFeed x Western Social Pulse Integration Suite', () => {
                     cooldownMinutes: 30
                 });
                 assert.equal(cdCheck.inCooldown, false, '07:15 social pulse push must NOT trigger 30m news cooldown for 07:40');
+                assert.equal(cdCheck.viaManifest, true, 'Cooldown check should read lightweight manifest.json');
 
                 // Verify router/server with older state (news already synced at tenHoursAgoIso, but socialPulse missing!) pulls and applies socialPulse even with force: false!
                 stateManager.set('lastUpdated', tenHoursAgoIso, false);
@@ -361,6 +384,7 @@ describe('CoreFeed x Western Social Pulse Integration Suite', () => {
                     trigger: 'schedule'
                 });
                 assert.equal(pullRes.applied, true, 'GitHubSyncManager must detect and apply new socialPulse even when news publishedAt is unchanged');
+                assert.equal(pullRes.syncMode, 'incremental');
                 assert.equal(pullRes.hasSocialPulse, true);
                 assert.equal(stateManager.get('socialPulse').latestKey, 'daily:2026-11-15');
 
@@ -395,12 +419,15 @@ describe('CoreFeed x Western Social Pulse Integration Suite', () => {
                     clientId: 'morning-news-0740'
                 });
 
-                const morningSnap = JSON.parse(
-                    execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:latest.json'], { encoding: 'utf8' })
+                const morningNews = JSON.parse(
+                    execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:news.json'], { encoding: 'utf8' })
                 );
-                assert.equal(morningSnap.news[0].translatedTitle, '早间全球权威要闻更新：跨境电网互联提速');
-                assert.ok(morningSnap.socialPulse, '07:40 ag-publish.js must retain socialPulse in ag-snapshot/latest.json');
-                assert.equal(morningSnap.socialPulse.latestKey, 'daily:2026-11-15');
+                const morningPulse = JSON.parse(
+                    execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:pulse.json'], { encoding: 'utf8' })
+                );
+                assert.equal(morningNews.news[0].translatedTitle, '早间全球权威要闻更新：跨境电网互联提速');
+                assert.ok(morningPulse, '07:40 ag-publish.js must retain pulse.json in ag-snapshot');
+                assert.equal(morningPulse.latestKey, 'daily:2026-11-15');
             } finally {
                 await new Promise((r) => mockGh.close(() => r()));
             }

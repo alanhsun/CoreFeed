@@ -27,7 +27,10 @@ from typing import Any
 import wave
 from zoneinfo import ZoneInfo
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore[assignment]
 
 COREFEED_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = COREFEED_ROOT / "data"
@@ -43,11 +46,38 @@ DEFAULT_MALE_ANCHOR_INSTRUCT = (
     "情绪高度克制客观，语速均匀流畅，绝不夸张拿腔，像财经新闻联播演播室播音。"
 )
 
-COLAB_REPO_ROOT = Path(r"c:\Users\alan\Documents\antigravity\Google_Colab")
-DEPLOY_COLAB_SCRIPT = COLAB_REPO_ROOT / "qwen3_tts_colab" / "scripts" / "deploy_colab.py"
-SKILL_JOB_RUNNER = Path(r"C:\Users\alan\.gemini\config\skills\qwen3-tts-colab\scripts\run_qwen3_tts_colab_job.py")
+def _resolve_snapshot_raw_base() -> str:
+    explicit = os.environ.get("COREFEED_SNAPSHOT_RAW_BASE", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    snap_url = os.environ.get("GITHUB_SNAPSHOT_URL", "").strip()
+    if snap_url:
+        cleaned = snap_url.split("?", 1)[0].rstrip("/")
+        for suffix in ("/manifest.json", "/news.json", "/latest.json"):
+            if cleaned.endswith(suffix):
+                return cleaned[: -len(suffix)]
+    return "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot"
 
-RAW_SNAPSHOT_BASE = "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot"
+
+def _resolve_colab_repo_root() -> Path:
+    env_root = os.environ.get("QWEN3_COLAB_ROOT", "").strip()
+    if env_root:
+        return Path(env_root).expanduser()
+    return Path.home() / "Documents" / "antigravity" / "Google_Colab"
+
+
+def _resolve_skill_job_runner() -> Path:
+    env_runner = os.environ.get("QWEN3_JOB_RUNNER", "").strip()
+    if env_runner:
+        return Path(env_runner).expanduser()
+    return Path.home() / ".gemini" / "config" / "skills" / "qwen3-tts-colab" / "scripts" / "run_qwen3_tts_colab_job.py"
+
+
+COLAB_REPO_ROOT = _resolve_colab_repo_root()
+DEPLOY_COLAB_SCRIPT = COLAB_REPO_ROOT / "qwen3_tts_colab" / "scripts" / "deploy_colab.py"
+SKILL_JOB_RUNNER = _resolve_skill_job_runner()
+
+RAW_SNAPSHOT_BASE = _resolve_snapshot_raw_base()
 
 CN_NUMS = {
     1: "第一",
@@ -214,6 +244,19 @@ def _format_shanghai_edition(iso_str: str | None) -> dict[str, str]:
     }
 
 
+def _compute_plan_script_sha256(chapters: list[dict[str, Any]]) -> str:
+    canonical = [
+        {
+            "id": str(ch.get("id") or ""),
+            "speaker": str(ch.get("speaker") or ""),
+            "text": str(ch.get("text") or "").strip(),
+        }
+        for ch in (chapters or [])
+    ]
+    payload = json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def build_news_broadcast_plan(data_dir: Path = DATA_DIR, max_headlines: int = 10) -> dict[str, Any]:
     news_doc = json.loads((data_dir / "news.json").read_text(encoding="utf-8"))
     summary_doc = json.loads((data_dir / "summary.json").read_text(encoding="utf-8"))
@@ -223,6 +266,7 @@ def build_news_broadcast_plan(data_dir: Path = DATA_DIR, max_headlines: int = 10
     if not news_list:
         raise RuntimeError(f"No curated news articles found in {data_dir / 'news.json'}")
 
+    edition_id = str(news_doc.get("editionId") or summary_doc.get("editionId") or "").strip() or None
     last_updated = str(news_doc.get("lastUpdated") or summary_art.get("generatedAt") or "")
     ed = _format_shanghai_edition(last_updated)
     top_items = news_list[: max(1, min(max_headlines, len(news_list)))]
@@ -341,7 +385,10 @@ def build_news_broadcast_plan(data_dir: Path = DATA_DIR, max_headlines: int = 10
         "label": "全球要闻播报",
         "title": f"{ed['date_zh']}{ed['period']} · 全球要闻双主播精播",
         "subtitle": f"{subtitle_part} · {MALE_ANCHOR_NAME} & Serena",
+        "editionId": edition_id,
         "editionTimestamp": last_updated or ed["iso"],
+        "scriptSha256": _compute_plan_script_sha256(chapters),
+        "totalChars": sum(len(ch["text"]) for ch in chapters),
         "chapters": chapters,
     }
 
@@ -485,11 +532,15 @@ def build_pulse_broadcast_plan(data_dir: Path = DATA_DIR, pulse_file: Path | Non
         "subtitle": f"{headline[:36]} · {MALE_ANCHOR_NAME} & Serena",
         "issueKey": issue_key,
         "editionTimestamp": str(issue.get("generated_at") or ""),
+        "scriptSha256": _compute_plan_script_sha256(chapters),
+        "totalChars": sum(len(ch["text"]) for ch in chapters),
         "chapters": chapters,
     }
 
 
 def _read_wav_float32_mono(wav_path: Path) -> tuple[np.ndarray, int]:
+    if np is None:
+        raise RuntimeError("numpy is required for WAV decoding/stitching (install via `pip install numpy`).")
     with wave.open(str(wav_path), "rb") as wf:
         sr = wf.getframerate()
         nch = wf.getnchannels()
@@ -618,7 +669,7 @@ def stitch_chapters_to_mp3(
             "1",
             str(tmp_mp3),
         ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=300)
         raw_mp3 = tmp_mp3.read_bytes()
         if len(raw_mp3) < 256:
             tmp_mp3.unlink(missing_ok=True)
@@ -628,16 +679,33 @@ def stitch_chapters_to_mp3(
     return final_chapters, total_duration_sec, target_sr
 
 
-def _ensure_colab_stopped() -> dict[str, Any]:
+def _preflight_check_scripts(using_external_server: bool = False) -> None:
+    if not SKILL_JOB_RUNNER.is_file():
+        raise RuntimeError(
+            f"Qwen3-TTS job runner script not found: {SKILL_JOB_RUNNER}. "
+            "Set env QWEN3_JOB_RUNNER to the path of run_qwen3_tts_colab_job.py."
+        )
+    if not using_external_server and not DEPLOY_COLAB_SCRIPT.is_file():
+        raise RuntimeError(
+            f"Google Colab deploy script not found: {DEPLOY_COLAB_SCRIPT}. "
+            "Set env QWEN3_COLAB_ROOT to your Google_Colab directory."
+        )
+
+
+def _ensure_colab_stopped(timeout_sec: int = 90) -> dict[str, Any]:
     if not DEPLOY_COLAB_SCRIPT.is_file():
-        return {}
-    proc = subprocess.run(
-        [sys.executable, str(DEPLOY_COLAB_SCRIPT), "stop"],
-        cwd=str(COLAB_REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+        return {"error": f"deploy_colab.py not found: {DEPLOY_COLAB_SCRIPT}"}
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(DEPLOY_COLAB_SCRIPT), "stop"],
+            cwd=str(COLAB_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": f"deploy_colab.py stop timed out after {timeout_sec}s", "timed_out": True}
     last_json: dict[str, Any] = {}
     for line in (proc.stdout or "").splitlines():
         s = line.strip()
@@ -646,17 +714,60 @@ def _ensure_colab_stopped() -> dict[str, Any]:
                 last_json = json.loads(s)
             except Exception:
                 pass
+    if not last_json and proc.returncode != 0:
+        return {"error": f"deploy_colab.py stop exited with code {proc.returncode}", "stderr": (proc.stderr or "").strip()[:300]}
     return last_json
 
 
-def _check_colab_login_and_balance() -> dict[str, Any]:
-    proc = subprocess.run(
-        [sys.executable, str(DEPLOY_COLAB_SCRIPT), "status"],
-        cwd=str(COLAB_REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+def _verify_zero_billing(receipt: dict[str, Any] | None) -> tuple[bool, str]:
+    if not isinstance(receipt, dict) or not receipt:
+        return False, "missing billing receipt from Colab stop"
+    if receipt.get("timed_out") or receipt.get("error"):
+        return False, f"Colab stop error: {receipt.get('error') or 'timed_out'}"
+    if receipt.get("ok") is False:
+        return False, "Colab stop receipt returned ok=False"
+    if receipt.get("stopped") is False:
+        return False, "Colab stop receipt returned stopped=False"
+
+    if "active_assignments" in receipt:
+        active = receipt["active_assignments"]
+        if isinstance(active, bool):
+            if active:
+                return False, "active_assignments is True"
+        elif isinstance(active, (int, float)):
+            if active > 0:
+                return False, f"active_assignments={active} (> 0)"
+        elif isinstance(active, (list, tuple, set, dict)):
+            if len(active) > 0:
+                return False, f"active_assignments still non-empty ({len(active)})"
+        elif isinstance(active, str):
+            if active.strip().lower() not in ("", "0", "[]", "none", "false", "{}"):
+                return False, f"active_assignments={active!r}"
+
+    for rate_key in ("cu_per_hour", "billing_rate", "current_cu_per_hour"):
+        if rate_key in receipt and receipt[rate_key] is not None:
+            try:
+                rate_val = float(receipt[rate_key])
+            except (TypeError, ValueError):
+                return False, f"unparseable {rate_key}={receipt[rate_key]!r}"
+            if rate_val > 1e-6:
+                return False, f"{rate_key}={rate_val} CU/hr (> 0.0)"
+
+    return True, "verified 0.0 CU/hr and 0 active assignments"
+
+
+def _check_colab_login_and_balance(timeout_sec: int = 60) -> dict[str, Any]:
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(DEPLOY_COLAB_SCRIPT), "status"],
+            cwd=str(COLAB_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Google Colab status check timed out after {timeout_sec}s.") from exc
     info: dict[str, Any] = {}
     for line in (proc.stdout or "").splitlines():
         s = line.strip()
@@ -674,6 +785,33 @@ def _check_colab_login_and_balance() -> dict[str, Any]:
     return info
 
 
+def _can_reuse_existing_track(
+    plan: dict[str, Any],
+    existing_tracks: dict[str, Any],
+    audio_dir: Path,
+) -> bool:
+    track_key = plan["track"]
+    existing = existing_tracks.get(track_key)
+    if not isinstance(existing, dict):
+        return False
+    out_mp3 = audio_dir / f"briefing-{track_key}.mp3"
+    if not out_mp3.is_file() or out_mp3.stat().st_size < 256:
+        return False
+    plan_script_sha = str(plan.get("scriptSha256") or "").strip()
+    existing_script_sha = str(existing.get("scriptSha256") or "").strip()
+    if not plan_script_sha or existing_script_sha != plan_script_sha:
+        return False
+    if track_key == "news":
+        plan_ed = str(plan.get("editionId") or "").strip()
+        if plan_ed and str(existing.get("editionId") or "").strip() != plan_ed:
+            return False
+    if track_key == "pulse":
+        plan_issue = str(plan.get("issueKey") or "").strip()
+        if plan_issue and str(existing.get("issueKey") or "").strip() != plan_issue:
+            return False
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     _ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="Generate CoreFeed Dual-Anchor Qwen3-TTS 1.7B Broadcast Audio")
@@ -686,6 +824,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bitrate-kbps", type=int, default=80, help="Output MP3 bitrate in kbps (default: 80)")
     parser.add_argument("--base-url", default="", help="Optional existing/mock Qwen3-TTS server URL (skips Colab VM)")
     parser.add_argument("--api-key", default="", help="Optional API key when --base-url is used")
+    parser.add_argument("--timeout-sec", type=int, default=1200, help="Subprocess timeout in seconds for TTS synthesis (default: 1200)")
+    parser.add_argument("--max-total-chars", type=int, default=12000, help="Max total spoken characters across planned chapters (default: 12000)")
+    parser.add_argument("--force", action="store_true", help="Force re-synthesis even when local audio already matches scriptSha256 and editionId")
     parser.add_argument("--dry-run-script", action="store_true", help="Print compiled dual-anchor script JSON without running TTS")
     args = parser.parse_args(argv)
 
@@ -699,15 +840,55 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode in ("pulse", "both"):
         plans.append(build_pulse_broadcast_plan(data_dir=data_dir, pulse_file=args.pulse_file))
 
+    total_chars = sum(int(p.get("totalChars") or sum(len(c.get("text") or "") for c in p.get("chapters") or [])) for p in plans)
+    if args.max_total_chars > 0 and total_chars > args.max_total_chars:
+        raise RuntimeError(
+            f"Planned TTS script length ({total_chars} chars) exceeds --max-total-chars limit ({args.max_total_chars}). "
+            "Refusing to launch synthesis to prevent runaway GPU cost."
+        )
+
     if args.dry_run_script:
-        print(json.dumps({"ok": True, "plans": plans}, ensure_ascii=False, indent=2))
+        print(json.dumps({"ok": True, "totalChars": total_chars, "plans": plans}, ensure_ascii=False, indent=2))
+        return 0
+
+    # Load existing audio_broadcast.json to support idempotent reuse and sibling-track preservation
+    existing_bundle: dict[str, Any] = {}
+    if broadcast_json_path.is_file():
+        try:
+            existing_bundle = json.loads(broadcast_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            existing_bundle = {}
+    tracks_map: dict[str, Any] = dict(existing_bundle.get("tracks") or {})
+
+    reused_tracks: list[str] = []
+    pending_plans: list[dict[str, Any]] = []
+    for plan in plans:
+        if not args.force and _can_reuse_existing_track(plan, tracks_map, audio_dir):
+            reused_tracks.append(plan["track"])
+        else:
+            pending_plans.append(plan)
+
+    if not pending_plans:
+        result_report = {
+            "ok": True,
+            "mode": args.mode,
+            "reused": reused_tracks,
+            "synthesized": [],
+            "skipped_colab": True,
+            "broadcast_json": str(broadcast_json_path),
+        }
+        print("\n=== COREFEED DUAL-ANCHOR TTS SUMMARY (REUSED) ===", flush=True)
+        print(json.dumps(result_report, ensure_ascii=False, indent=2), flush=True)
         return 0
 
     using_external_server = bool(args.base_url.strip())
+    _preflight_check_scripts(using_external_server=using_external_server)
     if not using_external_server:
         _check_colab_login_and_balance()
 
     billing_receipt: dict[str, Any] = {}
+    billing_verified = True
+    billing_error = ""
     anchor_meta: dict[str, Any] = {}
     if MALE_ANCHOR_META_JSON.is_file():
         try:
@@ -726,7 +907,7 @@ def main(argv: list[str] | None = None) -> int:
         male_jobs: list[dict[str, Any]] = []
         plan_wav_map: dict[str, list[Path]] = {}
 
-        for plan in plans:
+        for plan in pending_plans:
             track_key = plan["track"]
             wav_list: list[Path] = []
             for ch in plan["chapters"]:
@@ -825,8 +1006,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             for attempt_idx in range(2):
                 try:
-                    subprocess.run(runner_cmd, check=True)
+                    subprocess.run(runner_cmd, check=True, timeout=max(30, int(args.timeout_sec)))
                     break
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError(
+                        f"Qwen3-TTS synthesis timed out after {args.timeout_sec}s; forcing Colab VM shutdown."
+                    ) from exc
                 except subprocess.CalledProcessError:
                     if using_external_server or attempt_idx == 1:
                         raise
@@ -839,27 +1024,34 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             if not using_external_server:
                 billing_receipt = _ensure_colab_stopped()
-
-        if manifest_out.is_file() and not billing_receipt:
-            try:
-                m_doc = json.loads(manifest_out.read_text(encoding="utf-8"))
-                billing_receipt = dict(m_doc.get("billing_status") or {})
-            except Exception:
-                pass
-
-        # Load existing audio_broadcast.json so updating one track preserves the sibling track
-        existing_bundle: dict[str, Any] = {}
-        if broadcast_json_path.is_file():
-            try:
-                existing_bundle = json.loads(broadcast_json_path.read_text(encoding="utf-8"))
-            except Exception:
-                existing_bundle = {}
-        tracks_map: dict[str, Any] = dict(existing_bundle.get("tracks") or {})
+                if manifest_out.is_file() and (not billing_receipt or billing_receipt.get("error")):
+                    try:
+                        m_doc = json.loads(manifest_out.read_text(encoding="utf-8"))
+                        manifest_billing = dict(m_doc.get("billing_status") or {})
+                        if manifest_billing:
+                            billing_receipt = manifest_billing
+                    except Exception:
+                        pass
+                billing_verified, billing_error = _verify_zero_billing(billing_receipt)
+                if not billing_verified:
+                    print(
+                        f"[WARN] Colab 0.0 CU/hr shutdown verification failed ({billing_error}); retrying stop once...",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    billing_receipt = _ensure_colab_stopped()
+                    billing_verified, billing_error = _verify_zero_billing(billing_receipt)
+                    if not billing_verified:
+                        print(
+                            f"[CRITICAL][BILLING] Failed to verify 0.0 CU/hr Colab shutdown: {billing_error} | receipt={billing_receipt}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
 
         now_iso = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
         synthesized_summary: list[dict[str, Any]] = []
 
-        for plan in plans:
+        for plan in pending_plans:
             track_key = plan["track"]
             file_name = f"briefing-{track_key}.mp3"
             out_mp3 = audio_dir / file_name
@@ -879,8 +1071,10 @@ def main(argv: list[str] | None = None) -> int:
                 "label": plan["label"],
                 "title": plan["title"],
                 "subtitle": plan["subtitle"],
+                "editionId": plan.get("editionId"),
                 "issueKey": plan.get("issueKey"),
                 "editionTimestamp": plan.get("editionTimestamp"),
+                "scriptSha256": plan.get("scriptSha256"),
                 "generatedAt": now_iso,
                 "fileName": file_name,
                 "audioUrl": f"/api/audio/{track_key}.mp3?v={ver_short}",
@@ -903,6 +1097,8 @@ def main(argv: list[str] | None = None) -> int:
             synthesized_summary.append(
                 {
                     "track": track_key,
+                    "edition_id": plan.get("editionId"),
+                    "script_sha256": plan.get("scriptSha256"),
                     "output_mp3": str(out_mp3),
                     "duration_sec": total_dur_sec,
                     "size_kb": round(len(mp3_bytes) / 1024.0, 1),
@@ -925,13 +1121,21 @@ def main(argv: list[str] | None = None) -> int:
         tmp_json.write_text(json.dumps(final_bundle, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp_json, broadcast_json_path)
 
-    result_report = {
-        "ok": True,
+    result_report: dict[str, Any] = {
+        "ok": True if (using_external_server or billing_verified) else False,
         "mode": args.mode,
+        "reused": reused_tracks,
         "synthesized": synthesized_summary,
         "broadcast_json": str(broadcast_json_path),
         "billing_status": billing_receipt,
+        "billing_verified": True if using_external_server else billing_verified,
     }
+    if not using_external_server and not billing_verified:
+        result_report["billing_error"] = billing_error
+        print("\n=== COREFEED DUAL-ANCHOR TTS SUMMARY (BILLING ALERT) ===", flush=True)
+        print(json.dumps(result_report, ensure_ascii=False, indent=2), flush=True)
+        return 2
+
     print("\n=== COREFEED DUAL-ANCHOR TTS SUMMARY ===", flush=True)
     print(json.dumps(result_report, ensure_ascii=False, indent=2), flush=True)
     return 0

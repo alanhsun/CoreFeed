@@ -74,6 +74,12 @@ describe('CoreFeed v2.0 — Phase 1 Security & Stability Hardening Suite', () =>
     let prevHttpsProxy;
     let originalSettingsBackup = null;
     const settingsPath = config.storage.settingsFile;
+    const trackedDataFiles = [
+        config.storage.newsFile,
+        config.storage.summaryFile,
+        config.storage.stateFile
+    ];
+    const dataBackups = new Map();
 
     before(async () => {
         prevNoProxy = process.env.NO_PROXY;
@@ -84,6 +90,11 @@ describe('CoreFeed v2.0 — Phase 1 Security & Stability Hardening Suite', () =>
 
         if (fs.existsSync(settingsPath)) {
             originalSettingsBackup = fs.readFileSync(settingsPath, 'utf8');
+        }
+        for (const f of trackedDataFiles) {
+            if (f && fs.existsSync(f)) {
+                dataBackups.set(f, fs.readFileSync(f));
+            }
         }
         tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'corefeed-sec-test-'));
 
@@ -110,6 +121,14 @@ describe('CoreFeed v2.0 — Phase 1 Security & Stability Hardening Suite', () =>
             fs.writeFileSync(settingsPath, originalSettingsBackup, 'utf8');
         } else if (fs.existsSync(settingsPath)) {
             fs.unlinkSync(settingsPath);
+        }
+        for (const f of trackedDataFiles) {
+            if (!f) continue;
+            if (dataBackups.has(f)) {
+                fs.writeFileSync(f, dataBackups.get(f));
+            } else if (fs.existsSync(f)) {
+                fs.unlinkSync(f);
+            }
         }
         config.reload();
 

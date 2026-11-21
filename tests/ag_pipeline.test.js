@@ -974,11 +974,23 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
             const commitCount = execFileSync('git', ['--git-dir', bareRemoteDir, 'rev-list', '--count', 'refs/heads/ag-snapshot'], { encoding: 'utf8' }).trim();
             assert.equal(commitCount, '1', 'ag-snapshot must be a single-commit orphan branch without history bloat');
 
-            const remoteJsonRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:latest.json'], { encoding: 'utf8' });
-            const remoteSnap = JSON.parse(remoteJsonRaw);
-            assert.equal(remoteSnap.publishedAt, '2026-11-07T06:45:00.000Z');
-            assert.equal(remoteSnap.news.length, 1);
-            assert.equal(remoteSnap.news[0].translatedTitle, '全球清洁能源年度投资创历史新高');
+            const treeFiles = execFileSync('git', ['--git-dir', bareRemoteDir, 'ls-tree', '--name-only', 'refs/heads/ag-snapshot'], { encoding: 'utf8' })
+                .trim()
+                .split(/\r?\n/);
+            assert.ok(treeFiles.includes('manifest.json') && treeFiles.includes('news.json'), 'ag-snapshot must contain manifest.json and news.json');
+            assert.ok(!treeFiles.includes('latest.json'), 'Q1=B: ag-snapshot must NOT contain legacy latest.json');
+
+            const remoteManifest = JSON.parse(
+                execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:manifest.json'], { encoding: 'utf8' })
+            );
+            const remoteNews = JSON.parse(
+                execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:news.json'], { encoding: 'utf8' })
+            );
+            assert.equal(remoteManifest.schemaVersion, '3.0');
+            assert.equal(remoteManifest.publishedAt, '2026-11-07T06:45:00.000Z');
+            assert.equal(remoteNews.publishedAt, '2026-11-07T06:45:00.000Z');
+            assert.equal(remoteNews.news.length, 1);
+            assert.equal(remoteNews.news[0].translatedTitle, '全球清洁能源年度投资创历史新高');
         } finally {
             fs.rmSync(tmpRoot, { recursive: true, force: true });
         }
@@ -1234,12 +1246,17 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
             assert.equal(pubDefaultRes.githubSync.pushed, true);
             assert.equal(pubDefaultRes.githubSync.publishedBy, 'test-client-m2b');
 
-            const remoteJsonRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:latest.json'], { encoding: 'utf8' });
-            const remoteSnap = JSON.parse(remoteJsonRaw);
-            assert.equal(remoteSnap.publishedBy, 'test-client-m2b');
-            assert.equal(remoteSnap.clientId, 'test-client-m2b');
-            assert.ok(remoteSnap.articleCount >= 2);
-            assert.ok(remoteSnap.sourceCount >= 1);
+            const remoteManifest = JSON.parse(
+                execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:manifest.json'], { encoding: 'utf8' })
+            );
+            const remoteNews = JSON.parse(
+                execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'refs/heads/ag-snapshot:news.json'], { encoding: 'utf8' })
+            );
+            assert.equal(remoteManifest.publishedBy, 'test-client-m2b');
+            assert.equal(remoteManifest.clientId, 'test-client-m2b');
+            assert.equal(remoteNews.publishedBy, 'test-client-m2b');
+            assert.ok(remoteNews.articleCount >= 2);
+            assert.ok(remoteNews.sourceCount >= 1);
 
             const pubDisabledRes = await runPublish({
                 candidates: candidatesPath,
@@ -1447,8 +1464,10 @@ describe('CoreFeed v2.0 — Antigravity Built-in LLM Editorial Pipeline & Snapsh
             assert.ok(!html.includes('id="cfgAiApiKey"'), 'SSR HTML must NOT contain #cfgAiApiKey');
             assert.ok(!html.includes('id="cfgAiBaseUrl"'), 'SSR HTML must NOT contain #cfgAiBaseUrl');
             assert.ok(!html.includes('id="cfgAiModel"'), 'SSR HTML must NOT contain #cfgAiModel');
-            assert.ok(html.includes('/css/style.css?v=2.7.0'), 'SSR HTML should include cache-busted /css/style.css?v=2.7.0');
-            assert.ok(html.includes('/js/main.js?v=2.7.0'), 'SSR HTML should include cache-busted /js/main.js?v=2.7.0');
+            assert.ok(html.includes('/css/utilities.css?v=3.0.0'), 'SSR HTML should include cache-busted /css/utilities.css?v=3.0.0');
+            assert.ok(html.includes('/css/icons.css?v=3.0.0'), 'SSR HTML should include cache-busted /css/icons.css?v=3.0.0');
+            assert.ok(html.includes('/css/style.css?v=3.0.0'), 'SSR HTML should include cache-busted /css/style.css?v=3.0.0');
+            assert.ok(html.includes('/js/main.js?v=3.0.0'), 'SSR HTML should include cache-busted /js/main.js?v=3.0.0');
             assert.ok(html.includes('id="fullTextModal"') && html.includes('fulltext-reader-sheet'), 'SSR HTML should include #fullTextModal and .fulltext-reader-sheet');
 
             const mainJsSource = fs.readFileSync(path.join(ROOT_DIR, 'public', 'js', 'main.js'), 'utf8');

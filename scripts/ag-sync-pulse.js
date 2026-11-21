@@ -17,22 +17,22 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('dotenv').config();
 const axios = require('axios');
 const http = require('http');
-const https = require('https');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { readJsonFile, writeJsonFile } = require('../utils/helpers');
+const { getHttpsAgent } = require('../utils/network_config');
 const stateManager = require('../services/state_manager');
 const { SocialPulseService, getDefaultExternalPulseDir } = require('../services/social_pulse_service');
 const { AudioBroadcastService, normalizeAudioBroadcastBundle } = require('../services/audio_broadcast_service');
 const {
     publishSnapshotToGitHub,
+    fetchRemoteSnapshotViaGit,
     GitHubSyncManager,
     isLocalNewsPolluted,
     isSuspectedTestFixtureNews
 } = require('../utils/github_sync');
 
 const httpAgentNoKeepAlive = new http.Agent({ keepAlive: false });
-const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: false });
 
 function resolveDefaultPushToGithub() {
     if (process.env.GITHUB_PUSH_ENABLED !== undefined && process.env.GITHUB_PUSH_ENABLED !== '') {
@@ -140,7 +140,7 @@ function parsePulseSyncArgs(argv = process.argv.slice(2)) {
     return options;
 }
 
-async function resolveBaseNewsSnapshot(opts = {}) {
+async function resolveBaseNewsSnapshot(opts = {}, { preferGit = false, includeMeta = false } = {}) {
     const localNewsDoc = await readJsonFile(config.storage.newsFile, null);
     const localSummaryDoc = await readJsonFile(config.storage.summaryFile, null);
     const localStateDoc = await readJsonFile(config.storage.stateFile, null);
@@ -165,8 +165,12 @@ async function resolveBaseNewsSnapshot(opts = {}) {
                 localNewsDoc?.lastUpdated ||
                 localStateDoc?.lastUpdated ||
                 new Date().toISOString();
+            const localEditionId = String(localNewsDoc?.editionId || localStateDoc?.lastEditionId || '').trim() || undefined;
+            const localHarvestId = String(localNewsDoc?.harvestId || '').trim() || undefined;
 
             localCandidate = {
+                ...(localEditionId ? { editionId: localEditionId } : {}),
+                ...(localHarvestId ? { harvestId: localHarvestId } : {}),
                 publishedAt: basePublishedAt,
                 lastUpdated: basePublishedAt,
                 publishedBy: localStateDoc?.lastPublishedBy || opts.publishedBy,
@@ -185,7 +189,27 @@ async function resolveBaseNewsSnapshot(opts = {}) {
     }
 
     let remoteCandidate = null;
-    if (opts.snapshotUrl || process.env.NODE_ENV !== 'test') {
+    let remoteCommitSha;
+    let remoteFromGit = false;
+
+    if (preferGit) {
+        const gitInfo = fetchRemoteSnapshotViaGit({
+            repoDir: opts.repoDir || path.resolve(__dirname, '..'),
+            remote: opts.githubRemote || 'origin',
+            branch: opts.githubBranch || 'ag-snapshot',
+            skipFetch: Boolean(opts.skipGitPush)
+        });
+        if (!gitInfo.error) {
+            remoteCommitSha = gitInfo.commitSha;
+        }
+        const gitNews = Array.isArray(gitInfo.snapshot?.news) ? gitInfo.snapshot.news : [];
+        if (gitNews.length > 0 && !isLocalNewsPolluted(gitNews) && !isSuspectedTestFixtureNews(gitNews)) {
+            remoteCandidate = gitInfo.snapshot;
+            remoteFromGit = true;
+        }
+    }
+
+    if (!remoteCandidate && (opts.snapshotUrl || process.env.NODE_ENV !== 'test')) {
         try {
             const ghMgr = new GitHubSyncManager();
             const { data } = await ghMgr.fetchRemoteSnapshot(opts.snapshotUrl || null, { useEtag: false, force: true });
@@ -198,22 +222,76 @@ async function resolveBaseNewsSnapshot(opts = {}) {
         }
     }
 
+    let selected = null;
     if (localCandidate && remoteCandidate) {
         const localMs = Date.parse(localCandidate.publishedAt || localCandidate.lastUpdated || '') || 0;
         const remoteMs = Date.parse(remoteCandidate.publishedAt || remoteCandidate.lastUpdated || '') || 0;
         const remoteIsNewer = remoteMs > localMs;
+        const remoteEqualAndAuthoritative = remoteFromGit && remoteMs === localMs && remoteCandidate.news.length >= localCandidate.news.length;
         const localLooksTruncated = localCandidate.news.length <= 2 && remoteCandidate.news.length >= 5;
-        if (remoteIsNewer || localLooksTruncated) {
-            logger.info(
-                'AG-PULSE',
-                `远端快照基础要闻更完整/更新 (remote=${remoteCandidate.news.length}条@${remoteCandidate.publishedAt}, local=${localCandidate.news.length}条@${localCandidate.publishedAt})，优先沿用远端基础要闻`
-            );
-            return remoteCandidate;
+        if (remoteIsNewer || localLooksTruncated || remoteEqualAndAuthoritative) {
+            if (remoteIsNewer || localLooksTruncated) {
+                logger.info(
+                    'AG-PULSE',
+                    `远端快照基础要闻更完整/更新 (remote=${remoteCandidate.news.length}条@${remoteCandidate.publishedAt}, local=${localCandidate.news.length}条@${localCandidate.publishedAt})，优先沿用远端基础要闻`
+                );
+            }
+            selected = remoteCandidate;
+        } else {
+            selected = localCandidate;
         }
-        return localCandidate;
+    } else {
+        selected = localCandidate || remoteCandidate || null;
     }
 
-    return localCandidate || remoteCandidate || null;
+    if (includeMeta) {
+        return {
+            baseSnap: selected,
+            remoteCommitSha,
+            remoteFromGit
+        };
+    }
+    return selected;
+}
+
+function mergeAudioForPulseSync(baseAudio, localAudio, baseEditionId) {
+    if (!baseAudio && !localAudio) return null;
+    const mergedTracks = {};
+
+    const baseNews = baseAudio?.tracks?.news || null;
+    const localNews = localAudio?.tracks?.news || null;
+    const targetEdition = String(baseEditionId || '').trim();
+    const isNewsValidForEdition = (track) => {
+        if (!track) return false;
+        const trEd = String(track.editionId || '').trim();
+        if (!targetEdition || !trEd) return true;
+        return trEd === targetEdition;
+    };
+
+    const validBaseNews = isNewsValidForEdition(baseNews) ? baseNews : null;
+    const validLocalNews = isNewsValidForEdition(localNews) ? localNews : null;
+
+    if (validBaseNews && validLocalNews) {
+        const baseGen = Date.parse(validBaseNews.generatedAt || '') || 0;
+        const localGen = Date.parse(validLocalNews.generatedAt || '') || 0;
+        mergedTracks.news = localGen >= baseGen ? validLocalNews : validBaseNews;
+    } else if (validBaseNews) {
+        mergedTracks.news = validBaseNews;
+    } else if (validLocalNews) {
+        mergedTracks.news = validLocalNews;
+    }
+
+    if (localAudio?.tracks?.pulse) {
+        mergedTracks.pulse = localAudio.tracks.pulse;
+    } else if (baseAudio?.tracks?.pulse) {
+        mergedTracks.pulse = baseAudio.tracks.pulse;
+    }
+
+    if (Object.keys(mergedTracks).length === 0) return null;
+    return normalizeAudioBroadcastBundle({
+        updatedAt: localAudio?.updatedAt || baseAudio?.updatedAt || new Date().toISOString(),
+        tracks: mergedTracks
+    });
 }
 
 async function runSyncPulse(customOptions = {}) {
@@ -263,21 +341,20 @@ async function runSyncPulse(customOptions = {}) {
         !opts.repoDir &&
         !opts.skipGitPush;
 
-    const mergeAudioWithBase = (baseAudio, localAudio) => {
-        if (!baseAudio && !localAudio) return null;
-        return normalizeAudioBroadcastBundle({
-            updatedAt: localAudio?.updatedAt || baseAudio?.updatedAt || new Date().toISOString(),
-            tracks: {
-                ...(baseAudio?.tracks || {}),
-                ...(localAudio?.tracks || {})
-            }
-        });
-    };
-
     if (shouldPushToGithub && !isUnscopedTestRun) {
-        const baseSnap = await resolveBaseNewsSnapshot(opts);
-        if (baseSnap && Array.isArray(baseSnap.news) && baseSnap.news.length > 0) {
-            const mergedAudio = mergeAudioWithBase(baseSnap.audioBroadcast, localAudioBundle);
+        const maxLeaseAttempts = 3;
+        for (let attempt = 0; attempt < maxLeaseAttempts; attempt++) {
+            const baseInfo = await resolveBaseNewsSnapshot(opts, {
+                preferGit: true,
+                includeMeta: true
+            });
+            const baseSnap = baseInfo.baseSnap;
+            if (!baseSnap || !Array.isArray(baseSnap.news) || baseSnap.news.length === 0) {
+                logger.warn('AG-PULSE', '本地与远端均暂无基础新闻列表，本次仅落盘 data/social_pulse.json，待下次要闻发布一并推送快照');
+                break;
+            }
+
+            const mergedAudio = mergeAudioForPulseSync(baseSnap.audioBroadcast, localAudioBundle, baseSnap.editionId);
             const combinedPayload = {
                 ...baseSnap,
                 version: '2.0',
@@ -285,14 +362,20 @@ async function runSyncPulse(customOptions = {}) {
                 publishedAt: baseSnap.publishedAt || baseSnap.lastUpdated || new Date().toISOString(),
                 lastUpdated: baseSnap.lastUpdated || baseSnap.publishedAt || new Date().toISOString(),
                 socialPulse,
-                socialPulseUpdatedAt: socialPulse.updatedAt,
-                ...(mergedAudio && mergedAudio.trackCount > 0
-                    ? {
-                        audioBroadcast: mergedAudio,
-                        audioBroadcastUpdatedAt: mergedAudio.updatedAt
-                    }
-                    : {})
+                socialPulseUpdatedAt: socialPulse.updatedAt
             };
+            if (mergedAudio && mergedAudio.trackCount > 0) {
+                combinedPayload.audioBroadcast = mergedAudio;
+                combinedPayload.audioBroadcastUpdatedAt = mergedAudio.updatedAt;
+            } else {
+                delete combinedPayload.audioBroadcast;
+                delete combinedPayload.audioBroadcastUpdatedAt;
+            }
+
+            const leaseSha = attempt === 0 && customOptions.expectedRemoteSha !== undefined
+                ? customOptions.expectedRemoteSha
+                : baseInfo.remoteCommitSha;
+
             try {
                 githubSyncResult = publishSnapshotToGitHub(combinedPayload, {
                     branch: opts.githubBranch,
@@ -301,21 +384,32 @@ async function runSyncPulse(customOptions = {}) {
                     skipPush: Boolean(opts.skipGitPush),
                     snapshotOut: opts.snapshotOut,
                     publishedBy: baseSnap.publishedBy || opts.publishedBy,
-                    clientId: baseSnap.clientId || opts.clientId
+                    clientId: baseSnap.clientId || opts.clientId,
+                    ...(leaseSha !== undefined ? { expectedRemoteSha: leaseSha } : {})
                 });
+                if (attempt > 0) {
+                    githubSyncResult.retriedAfterLeaseConflict = attempt;
+                }
                 logger.success(
                     'AG-PULSE',
                     `已将欧美社媒热议合入 GitHub 分支 ${githubSyncResult.branch} (commit=${githubSyncResult.commitSha.slice(0, 8)}, issues=${socialPulse.issueCount})`
                 );
+                break;
             } catch (gitErr) {
-                if (opts.githubExplicit || opts.repoDir) {
+                if (gitErr.code === 'LEASE_CONFLICT' && !opts.skipGitPush && attempt + 1 < maxLeaseAttempts) {
+                    logger.warn(
+                        'AG-PULSE',
+                        `GitHub 快照推送遇到并发 lease 冲突，正在重新拉取最新远端要闻基线并合入重试 (${attempt + 1}/${maxLeaseAttempts - 1})...`
+                    );
+                    continue;
+                }
+                if (opts.githubExplicit || opts.repoDir || gitErr.code === 'LEASE_CONFLICT') {
                     throw gitErr;
                 }
                 logger.warn('AG-PULSE', `推送 GitHub 快照跳过或失败 (${gitErr.message})`);
                 githubSyncResult = { success: false, skipped: true, error: gitErr.message };
+                break;
             }
-        } else {
-            logger.warn('AG-PULSE', '本地与远端均暂无基础新闻列表，本次仅落盘 data/social_pulse.json，待下次要闻发布一并推送快照');
         }
     } else if (opts.snapshotOut) {
         const baseSnap = await resolveBaseNewsSnapshot(opts);
@@ -363,7 +457,7 @@ async function runSyncPulse(customOptions = {}) {
                     headers,
                     timeout: 15000,
                     httpAgent: httpAgentNoKeepAlive,
-                    httpsAgent: httpsAgentIgnoreTls,
+                    httpsAgent: getHttpsAgent({ keepAlive: false }),
                     ...(isLocalOrLanTarget ? { proxy: false } : {})
                 }
             );
@@ -388,7 +482,7 @@ async function runSyncPulse(customOptions = {}) {
                                 timeout: 30000,
                                 maxBodyLength: 50 * 1024 * 1024,
                                 httpAgent: httpAgentNoKeepAlive,
-                                httpsAgent: httpsAgentIgnoreTls,
+                                httpsAgent: getHttpsAgent({ keepAlive: false }),
                                 ...(isLocalOrLanTarget ? { proxy: false } : {})
                             }
                         );

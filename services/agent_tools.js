@@ -6,16 +6,14 @@
  *   2. 高清题图提取与分辨率升级 (`extractImageFromItem`, `fetchArticleLeadImage`, `searchNewsImageByTitle`, `upgradeImageResolution`)
  */
 const axios = require('axios');
-const https = require('https');
 const Parser = require('rss-parser');
 const cheerio = require('cheerio');
 const crypto = require('crypto');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { stripHtml, truncateText, isValidUrl, SimpleCache } = require('../utils/helpers');
+const { getHttpsAgent } = require('../utils/network_config');
 const { getSourceAuthorityScore } = require('../config/global_sources');
-
-const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
 const parser = new Parser({
     timeout: 10000,
@@ -294,7 +292,7 @@ async function parseRssUrlRobust(rssUrl, timeout = 10000, options = {}) {
     try {
         const response = await axios.get(rssUrl, {
             timeout,
-            httpsAgent: httpsAgentIgnoreTls,
+            httpsAgent: getHttpsAgent({ keepAlive: true }),
             headers: {
                 'User-Agent': config.webScraping.userAgent,
                 'Accept': 'application/rss+xml, application/xml, text/xml, application/atom+xml, */*',
@@ -470,7 +468,7 @@ async function scrapeSourceListViaJina(source, maxItems = 5) {
         headers['Authorization'] = `Bearer ${config.agent.jinaApiKey}`;
     }
 
-    const response = await axios.get(jinaUrl, { timeout: 15000, headers, httpsAgent: httpsAgentIgnoreTls });
+    const response = await axios.get(jinaUrl, { timeout: 15000, headers, httpsAgent: getHttpsAgent({ keepAlive: true }) });
     const markdown = String(response.data || '');
     if (!markdown) return [];
 
@@ -539,7 +537,7 @@ async function fetchArticleLeadImage(url, timeout = 5500, options = {}) {
             timeout,
             maxRedirects: 5,
             maxContentLength: 450 * 1024,
-            httpsAgent: httpsAgentIgnoreTls,
+            httpsAgent: getHttpsAgent({ keepAlive: true }),
             headers: {
                 'User-Agent': config.webScraping.userAgent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -618,7 +616,7 @@ async function searchNewsImageByTitle(title, sourceDomain = '', timeout = 4500) 
         const searchUrl = `https://www.bing.com/news/search?q=${encodeURIComponent(cleanQuery)}&format=rss`;
         const response = await axios.get(searchUrl, {
             timeout,
-            httpsAgent: httpsAgentIgnoreTls,
+            httpsAgent: getHttpsAgent({ keepAlive: true }),
             headers: {
                 'User-Agent': config.webScraping.userAgent,
                 'Accept': 'application/rss+xml, application/xml, text/xml, */*'
@@ -701,7 +699,7 @@ async function extractFullArticleContent(url, options = {}) {
         const response = await axios.get(url, {
             timeout: fastTimeout,
             maxRedirects: 5,
-            httpsAgent: httpsAgentIgnoreTls,
+            httpsAgent: getHttpsAgent({ keepAlive: true }),
             headers: {
                 'User-Agent': config.webScraping.userAgent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -830,7 +828,7 @@ async function extractFullArticleContent(url, options = {}) {
 
             const response = await axios.get(jinaUrl, {
                 timeout: 5500,
-                httpsAgent: httpsAgentIgnoreTls,
+                httpsAgent: getHttpsAgent({ keepAlive: true }),
                 headers
             });
 

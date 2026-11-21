@@ -239,7 +239,7 @@ exit 0
         assert.equal(settings.timezone, 'Asia/Shanghai');
         assert.equal(settings.GITHUB_SYNC_ENABLED, true);
         assert.equal(settings.GITHUB_SYNC_INTERVAL_MINUTES, 60);
-        assert.equal(settings.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
+        assert.equal(settings.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json');
 
         // Verify live POST /api/schedule/config was called
         assert.equal(schedulePostRequests.length, 1);
@@ -344,7 +344,7 @@ exit 0
         assert.equal(settings.timezone, 'Asia/Shanghai');
         assert.equal(settings.GITHUB_SYNC_ENABLED, true);
         assert.equal(settings.GITHUB_SYNC_INTERVAL_MINUTES, 60);
-        assert.equal(settings.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
+        assert.equal(settings.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json');
 
         assert.equal(schedulePostRequests.length, 1);
     });
@@ -386,7 +386,7 @@ exit 0
         assert.equal(envMap.SCHEDULE_TIMEZONE, 'Asia/Shanghai');
         assert.equal(envMap.GITHUB_SYNC_ENABLED, 'true');
         assert.equal(envMap.GITHUB_SYNC_INTERVAL_MINUTES, '60');
-        assert.equal(envMap.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json');
+        assert.equal(envMap.GITHUB_SNAPSHOT_URL, 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json');
 
         const dockerCommands = fs.readFileSync(dockerLog, 'utf8').trim().split('\n');
         assert.ok(

@@ -287,8 +287,8 @@ class CoreFeedApp {
         });
 
         this.socket.on('audio-updated', (payload) => {
-            if (payload && payload.audioBroadcast) {
-                this.audioBroadcast = payload.audioBroadcast;
+            if (payload && Object.prototype.hasOwnProperty.call(payload, 'audioBroadcast')) {
+                this.audioBroadcast = payload.audioBroadcast || null;
                 this.renderBroadcastPlayer({ preservePlayback: true });
                 this.renderSocialPulse();
             } else {
@@ -1582,12 +1582,33 @@ class CoreFeedApp {
             issues[0];
     }
 
-    selectPulseIssue(issueKey) {
-        this.selectedPulseKey = String(issueKey || '').trim();
+    async selectPulseIssue(issueKey) {
+        const cleanKey = String(issueKey || '').trim();
+        this.selectedPulseKey = cleanKey;
         this.selectedPulseRegion = '全部';
         this.selectedPulseLang = '全部';
         this.selectedPulsePlatform = '全部';
         this.selectedPulseCategory = '全部';
+
+        const issues = Array.isArray(this.socialPulse?.issues) ? this.socialPulse.issues : [];
+        const target = issues.find(it => it.key === cleanKey);
+        if (target && (!Array.isArray(target.clusters) || target._summaryOnly)) {
+            try {
+                const res = await fetch(`/api/pulse?key=${encodeURIComponent(cleanKey)}`);
+                const data = await res.json();
+                if (data && data.success && data.selectedIssue && Array.isArray(data.selectedIssue.clusters)) {
+                    const idx = issues.findIndex(it => it.key === cleanKey);
+                    if (idx !== -1) {
+                        issues[idx] = {
+                            ...data.selectedIssue,
+                            clusterCount: data.selectedIssue.clusters.length
+                        };
+                    }
+                }
+            } catch (_) {
+                // Keep existing stub on network failure
+            }
+        }
         this.renderSocialPulse();
     }
 
@@ -1660,7 +1681,7 @@ class CoreFeedApp {
                 selectEl.innerHTML = issues.map(iss => {
                     const modeLabel = iss.mode === 'topic' ? `专题 · ${iss.slug || '深挖'}` : '全量日报';
                     const sel = issue && iss.key === issue.key ? 'selected' : '';
-                    const cLen = Array.isArray(iss.clusters) ? iss.clusters.length : 0;
+                    const cLen = Array.isArray(iss.clusters) ? iss.clusters.length : (Number(iss.clusterCount) || 0);
                     return `<option value="${this.escapeHtml(iss.key)}" ${sel}>${this.escapeHtml(iss.date)} · ${this.escapeHtml(modeLabel)} (${cLen} 簇)</option>`;
                 }).join('');
             }

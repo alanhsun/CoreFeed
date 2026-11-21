@@ -390,12 +390,17 @@ describe('CoreFeed x Qwen3-TTS Dual-Anchor Audio Broadcast Suite', () => {
                 .split(/\r?\n/);
             assert.ok(treeNames.includes('briefing-news.mp3'), 'ag-snapshot must retain briefing-news.mp3 blob across 07:15 pulse sync');
             assert.ok(treeNames.includes('briefing-pulse.mp3'), 'ag-snapshot must include briefing-pulse.mp3 blob');
+            assert.ok(treeNames.includes('manifest.json') && treeNames.includes('news.json') && treeNames.includes('audio.json'));
+            assert.ok(!treeNames.includes('latest.json'), 'Q1=B: ag-snapshot must NOT include latest.json');
 
-            const snapJson = JSON.parse(
-                execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:latest.json'], { encoding: 'utf8' })
-            );
-            assert.equal(snapJson.publishedAt, tenHoursAgoIso, '07:15 pulse+audio sync must NOT alter news publishedAt');
-            assert.equal(snapJson.audioBroadcast.trackCount, 2);
+            const manifestRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:manifest.json'], { encoding: 'utf8' });
+            const newsRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:news.json'], { encoding: 'utf8' });
+            const pulseRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:pulse.json'], { encoding: 'utf8' });
+            const audioRaw = execFileSync('git', ['--git-dir', bareRemoteDir, 'show', 'ag-snapshot:audio.json'], { encoding: 'utf8' });
+            const manifestObj = JSON.parse(manifestRaw);
+            const audioObj = JSON.parse(audioRaw);
+            assert.equal(manifestObj.publishedAt, tenHoursAgoIso, '07:15 pulse+audio sync must NOT alter news publishedAt');
+            assert.equal(audioObj.trackCount, 2);
 
             // Simulate a clean soft-router with ZERO local MP3 files pulling from ag-snapshot HTTP server
             for (const fn of ['briefing-news.mp3', 'briefing-pulse.mp3']) {
@@ -406,9 +411,18 @@ describe('CoreFeed x Qwen3-TTS Dual-Anchor Audio Broadcast Suite', () => {
 
             const mockSnapshotHttp = http.createServer((req, res) => {
                 const u = (req.url || '').split('?')[0];
-                if (u.endsWith('/latest.json')) {
+                if (u.endsWith('/manifest.json')) {
                     res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify(snapJson));
+                    res.end(manifestRaw);
+                } else if (u.endsWith('/news.json')) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(newsRaw);
+                } else if (u.endsWith('/pulse.json')) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(pulseRaw);
+                } else if (u.endsWith('/audio.json')) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(audioRaw);
                 } else if (u.endsWith('/briefing-news.mp3')) {
                     res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
                     res.end(newsMp3Buf);
@@ -421,7 +435,7 @@ describe('CoreFeed x Qwen3-TTS Dual-Anchor Audio Broadcast Suite', () => {
                 }
             });
             await new Promise((r, j) => mockSnapshotHttp.listen(0, '127.0.0.1', (e) => (e ? j(e) : r())));
-            const mockSnapUrl = `http://127.0.0.1:${mockSnapshotHttp.address().port}/alanhsun/CoreFeed/ag-snapshot/latest.json`;
+            const mockSnapUrl = `http://127.0.0.1:${mockSnapshotHttp.address().port}/alanhsun/CoreFeed/ag-snapshot/manifest.json`;
 
             try {
                 const pullRes = await services.githubSyncManager.pullAndApply({
@@ -430,6 +444,7 @@ describe('CoreFeed x Qwen3-TTS Dual-Anchor Audio Broadcast Suite', () => {
                     trigger: 'schedule'
                 });
                 assert.equal(pullRes.applied, true);
+                assert.equal(pullRes.syncMode, 'incremental');
                 assert.equal(pullRes.hasAudioBroadcast, true);
                 assert.equal(pullRes.audioTrackCount, 2);
                 assert.deepEqual(fs.readFileSync(path.join(AUDIO_DIR, 'briefing-news.mp3')), newsMp3Buf);
@@ -438,13 +453,17 @@ describe('CoreFeed x Qwen3-TTS Dual-Anchor Audio Broadcast Suite', () => {
                 await new Promise((r) => mockSnapshotHttp.close(() => r()));
             }
 
-            // Verify resolveSnapshotRawDirUrl canonicalizes GitHub Contents API & ghfast.top mirror URLs
+            // Verify resolveSnapshotRawDirUrl canonicalizes GitHub Contents API & ghfast.top mirror URLs (both manifest.json and legacy latest.json)
+            assert.equal(
+                resolveSnapshotRawDirUrl('https://api.github.com/repos/alanhsun/CoreFeed/contents/manifest.json?ref=ag-snapshot'),
+                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot'
+            );
             assert.equal(
                 resolveSnapshotRawDirUrl('https://api.github.com/repos/alanhsun/CoreFeed/contents/latest.json?ref=ag-snapshot'),
                 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot'
             );
             assert.equal(
-                resolveSnapshotRawDirUrl('https://ghfast.top/https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'),
+                resolveSnapshotRawDirUrl('https://ghfast.top/https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json'),
                 'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot'
             );
         } finally {

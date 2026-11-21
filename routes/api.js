@@ -42,9 +42,11 @@ function initializeApiRoutes(services, io, stateManager) {
     // 启动时加载持久化的今日综述与欧美社媒热议数据
     (async () => {
         try {
-            const summaryData = await readJsonFile(config.storage.summaryFile);
-            if (summaryData && summaryData.article) {
-                stateManager.set('summaryArticle', summaryData.article, false);
+            if (!stateManager.get('summaryArticle')) {
+                const summaryData = await readJsonFile(config.storage.summaryFile);
+                if (summaryData && summaryData.article && !stateManager.get('summaryArticle')) {
+                    stateManager.set('summaryArticle', summaryData.article, false);
+                }
             }
         } catch (err) {
             logger.debug('API', '加载初始综述缓存跳过', err.message);

@@ -49,10 +49,12 @@ node scripts/ag-harvest.js --inspect 1,4,7,11,15,19
 
 对每一篇入选报道，**完全由大模型直接完成以下全部提取与编译工作**（严禁编写脚本调第三方免费翻译接口或用截断规则凑数）：
 
-1. **多语种正文提取与去噪 (`originalParagraphs`)**：
-   - 从 `rawText` 中识别并剔除残余的网页导航菜单、Cookie 弹窗文案、"Read more / Related articles" 推荐链接、版权声明与记者推广签名，保留干净的原始外文（英/日/韩/德/西原语种）自然段数组 `originalParagraphs`。
+1. **多语种正文提取与去噪（优先使用 `keepParagraphs` 段号引用，节省 ~45% 输出 token）**：
+   - `ag-harvest.js --inspect` 会为每篇报道输出带 1-based 编号的 `indexedParagraphs: [{ p: 1, text: "..." }, ...]`。
+   - **优先推荐**：识别其中属于干净正文的外文自然段编号，剔除网页导航菜单、Cookie 弹窗、"Read more / Related articles" 推荐链接、版权声明与记者推广签名对应的噪段，直接填写 **`keepParagraphs: [1, 2, 3, 5, 6]`**（`ag-publish.js` 会自动按段号从 `ag_candidates.json` 精确还原 `originalParagraphs`，无需逐字回抄外文原段，大幅节省输出 token 并提升全文覆盖率）。
+   - 如确需手工修订原文段落，也可显式提供 `originalParagraphs` 数组（两者并存时优先采用 `originalParagraphs`）。
 2. **全文中文精译 (`translatedParagraphs`)**：
-   - 将提纯后的外文正文**逐段完整精译为准确、流畅、地道的专业中文新闻译文**（保留关键数据、引语、机构与人名标准译名，严禁把多段长文压缩成一两句梗概）。
+   - 将提纯/选定的外文正文**逐段完整精译为准确、流畅、地道的专业中文新闻译文**（保留关键数据、引语、机构与人名标准译名，与 `keepParagraphs` 一一对应，严禁把多段长文压缩成一两句梗概）。
    - 每个元素对应一个自然段，供网站离线全文阅读器直接展示双语原文对照。
 3. **精编中文标题 (`translatedTitle`)**：
    - 撰写专业、克制、信息量饱满的中文新闻标题，字数控制在 **`14 ~ 32` 字**以内，去除媒体尾缀与标题党感叹号。
@@ -76,14 +78,16 @@ node scripts/ag-harvest.js --inspect 1,4,7,11,15,19
 
 ### Step 5：写入 `data/ag_compiled.json` 并发布快照 (`ag:publish`)
 
-1. 将编译结果按如下严格 JSON 结构写入 `data/ag_compiled.json`：
+1. 将编译结果按如下严格 JSON 结构写入 `data/ag_compiled.json`（务必从 `data/ag_candidates.json` 原样拷贝顶层 `harvestId` 与每篇主条目的 `id`，优先用 `keepParagraphs` 代替逐字回抄 `originalParagraphs`）：
 
 ```json
 {
+  "harvestId": "hv-a1b2c3d4e5f6",
   "publishedBy": "antigravity-client",
   "articles": [
     {
       "candidateIndex": 4,
+      "id": "reuters-abc123",
       "mergedIndices": [12, 29],
       "region": "美国",
       "category": "财经",
@@ -94,10 +98,7 @@ node scripts/ag-harvest.js --inspect 1,4,7,11,15,19
         "鲍威尔强调政策调整取决于后续核心通胀与劳动力市场数据",
         "美债收益率与美元指数在决议公布后呈现窄幅震荡走势"
       ],
-      "originalParagraphs": [
-        "Clean English paragraph 1...",
-        "Clean English paragraph 2..."
-      ],
+      "keepParagraphs": [1, 2],
       "translatedParagraphs": [
         "第一段完整流畅的中文精译正文……",
         "第二段完整流畅的中文精译正文……"
@@ -111,22 +112,28 @@ node scripts/ag-harvest.js --inspect 1,4,7,11,15,19
 }
 ```
 
-2. 先做本地全中文契约校验与落盘（不提前推送远端，防止多次触发快照同步）：
+2. 先运行只读聚合契约校验（一次性汇总全部错误与质量告警，不写任何磁盘文件；如需以最严格总编标准把字数/篇数/枚举/段数告警也升级为阻断门禁，可追加 `--strict`）：
+
+```bash
+npm run ag:validate
+```
+
+3. 校验通过后，先做本地落盘以生成确定性 `editionId` 并写入 `data/news.json` 与 `data/summary.json`（不提前推送远端，防止多次触发快照同步）：
 
 ```bash
 node scripts/ag-publish.js --local-only --no-github
 ```
 
-3. 调用 `/qwen3-tts-colab`（详见 `C:\Users\alan\.gemini\config\skills\qwen3-tts-colab\SKILL.md`）对应的双主播语音播报合成脚本，在单次拉起的 Google Colab `L4` 实例上以 `林远 (Lin_Yuan)`（定制克制标准普通话新闻男主播，基于 `config/voices/anchor_male_news.wav` ICL 锁音色播报深度综述评论）+ `Serena`（前 10 条重点要闻精播）交替合成并拼接生成 `data/audio/briefing-news.mp3` 与 `data/audio_broadcast.json`（自动核验 `0.0 CU/hr` 退机防扣费）：
+4. 调用 `/qwen3-tts-colab`（详见 `~/.gemini/config/skills/qwen3-tts-colab/SKILL.md`，可通过环境变量 `QWEN3_COLAB_ROOT` / `QWEN3_JOB_RUNNER` / `QWEN3_COLAB_PYTHON` 指定路径）对应的双主播语音播报合成脚本，在单次拉起的 Google Colab `L4` 实例上以 `林远 (Lin_Yuan)`（定制克制标准普通话新闻男主播，基于 `config/voices/anchor_male_news.wav` ICL 锁音色播报深度综述评论）+ `Serena`（前 10 条重点要闻精播）交替合成并拼接生成 `data/audio/briefing-news.mp3` 与 `data/audio_broadcast.json`（绑定本期 `editionId` 与 `scriptSha256`，并自动核验 `0.0 CU/hr` 退机防扣费）：
 
 ```bash
 npm run ag:tts:news
 ```
 
-4. 执行最终快照与音频联合发布命令：
+5. 执行最终快照与音频联合发布命令：
 
 ```bash
 npm run ag:publish
 ```
 
-- `scripts/ag-publish.js` 会严格校验每篇报道的中文标题、导语、要点、全文译文段落以及深度综述完整性（任何未翻译字段均会报错拦截），更新本地 `data/{news,summary,audio_broadcast,state}.json`，并通过 Git Plumbing 将单提交快照（含 `latest.json`、`briefing.json`、`briefing.md` 及双主播语音 `briefing-news.mp3` / `briefing-pulse.mp3`）一并推送至远端 `ag-snapshot` 分支，供软路由与网站顶部播放器同步展示与收听。
+- `scripts/ag-publish.js` 会严格校验 `harvestId` 批次绑定、`keepParagraphs` 段号合法性、每篇报道的中文标题/导语/要点/逐段全文译文以及深度综述 `[NEWS_k]` 引注完整性，核对音频 `editionId` 一致性（自动剔除过期新闻音轨并保留有效社媒音轨），更新本地 `data/{news,summary,audio_broadcast,state}.json`，并通过 Git Plumbing + `--force-with-lease` 将 Schema v3.0 分域单提交快照（`manifest.json`、`news.json`、`pulse.json`、`audio.json`、`briefing.json`、`briefing.md` 及双主播语音 `briefing-news.mp3` / `briefing-pulse.mp3`）安全推送至远端 `ag-snapshot` 分支，供软路由按域增量拉取与网站顶部播放器同步展示与收听。

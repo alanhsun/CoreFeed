@@ -11,13 +11,11 @@
  */
 const dns = require('dns');
 const net = require('net');
-const https = require('https');
 const axios = require('axios');
 const config = require('../config');
 const { isSafeHttpUrl, ByteBoundedCache } = require('../utils/helpers');
+const { getHttpsAgent } = require('../utils/network_config');
 const asyncHandler = require('../utils/async_handler');
-
-const proxyHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
 const MAX_REDIRECT_HOPS = 3;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -277,7 +275,7 @@ function createImageProxyHandler(options = {}) {
                 maxRedirects: 0,
                 maxContentLength: MAX_IMAGE_BYTES,
                 maxBodyLength: MAX_IMAGE_BYTES,
-                httpsAgent: proxyHttpsAgent,
+                httpsAgent: getHttpsAgent({ keepAlive: true }),
                 lookup: pinnedLookup,
                 headers,
                 validateStatus: (status) => status >= 200 && status < 400

@@ -137,7 +137,7 @@ function buildConfig() {
             pushToGithub: defaultPushToGithub,
             githubSnapshotUrl: getConfig(
                 'GITHUB_SNAPSHOT_URL',
-                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
+                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json'
             ),
             githubSyncIntervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 60),
             githubCooldownMinutes: getNumberConfig('GITHUB_COOLDOWN_MINUTES', 30),
@@ -154,7 +154,7 @@ function buildConfig() {
             pushToGithub: defaultPushToGithub,
             snapshotUrl: getConfig(
                 'GITHUB_SNAPSHOT_URL',
-                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json'
+                'https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json'
             ),
             intervalMinutes: getNumberConfig('GITHUB_SYNC_INTERVAL_MINUTES', 60),
             cooldownMinutes: getNumberConfig('GITHUB_COOLDOWN_MINUTES', 30),
@@ -187,6 +187,7 @@ function buildConfig() {
             audioDir: path.join(__dirname, '..', 'data', 'audio'),
             newsFile: path.join(__dirname, '..', 'data', 'news.json'),
             stateFile: path.join(__dirname, '..', 'data', 'state.json'),
+            syncStateFile: path.join(__dirname, '..', 'data', 'sync_state.json'),
             summaryFile: path.join(__dirname, '..', 'data', 'summary.json'),
             socialPulseFile: path.join(__dirname, '..', 'data', 'social_pulse.json'),
             audioBroadcastFile: path.join(__dirname, '..', 'data', 'audio_broadcast.json'),
@@ -206,7 +207,8 @@ function buildConfig() {
             retries: getNumberConfig('NETWORK_RETRIES', 3),
             retryDelay: getNumberConfig('NETWORK_RETRY_DELAY', 1500),
             keepAlive: getBooleanConfig('NETWORK_KEEP_ALIVE', true),
-            maxSockets: getNumberConfig('NETWORK_MAX_SOCKETS', 50)
+            maxSockets: getNumberConfig('NETWORK_MAX_SOCKETS', 50),
+            allowInsecureTls: getBooleanConfig('ALLOW_INSECURE_TLS', false)
         },
 
         // 网页抓取配置

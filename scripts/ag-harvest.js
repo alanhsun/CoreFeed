@@ -20,6 +20,7 @@
  *   --inspect <indices>      按 1-based 序号读取已有候选池中的指定原始全文 (例如: --inspect 1,4,7,12)
  */
 const path = require('path');
+const crypto = require('crypto');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('dotenv').config();
 const config = require('../config');
@@ -29,6 +30,14 @@ const NewsService = require('../services/news_service');
 const NewsAgentService = require('../services/news_agent_service');
 const stateManager = require('../services/state_manager');
 const { checkRemoteSnapshotCooldown } = require('../utils/github_sync');
+const { splitCandidateParagraphs } = require('../utils/snapshot_schema');
+
+function computeHarvestId(candidates = []) {
+    const fingerprint = (Array.isArray(candidates) ? candidates : [])
+        .map((c, idx) => `${Number(c?.index) || idx + 1}|${c?.id || ''}|${c?.url || ''}`)
+        .join('\n');
+    return `hv-${crypto.createHash('sha256').update(fingerprint).digest('hex').slice(0, 12)}`;
+}
 
 function parseArgs(argv = process.argv.slice(2)) {
     const eqVal = (a) => a.slice(a.indexOf('=') + 1);
@@ -43,7 +52,8 @@ function parseArgs(argv = process.argv.slice(2)) {
         checkCooldown: false,
         force: false,
         cooldownMinutes: Number(config.githubSync?.cooldownMinutes ?? 30),
-        inspectIndices: null
+        inspectIndices: null,
+        maxChars: null
     };
 
     for (let i = 0; i < argv.length; i++) {
@@ -76,10 +86,18 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.cooldownMinutes = Math.max(0, parseInt(argv[++i], 10));
         } else if (arg.startsWith('--cooldown=')) {
             options.cooldownMinutes = Math.max(0, parseInt(eqVal(arg), 10));
-        } else if (arg === '--inspect' && argv[i + 1]) {
-            options.inspectIndices = String(argv[++i]);
+        } else if (arg === '--inspect') {
+            options.inspectIndices = argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')
+                ? String(argv[++i])
+                : '';
         } else if (arg.startsWith('--inspect=')) {
             options.inspectIndices = eqVal(arg);
+        } else if (arg === '--max-chars' && argv[i + 1]) {
+            const parsedMax = parseInt(argv[++i], 10);
+            if (!isNaN(parsedMax) && parsedMax > 0) options.maxChars = parsedMax;
+        } else if (arg.startsWith('--max-chars=')) {
+            const parsedMax = parseInt(eqVal(arg), 10);
+            if (!isNaN(parsedMax) && parsedMax > 0) options.maxChars = parsedMax;
         }
     }
 
@@ -192,23 +210,45 @@ function selectStratifiedCandidates(sortedArticles = [], { limit = 110, maxPerSo
     });
 }
 
-async function inspectCandidates(candidatesFile, rawIndicesStr) {
+async function inspectCandidates(candidatesFile, rawIndicesStr, options = {}) {
     const data = await readJsonFile(candidatesFile, null);
     if (!data || !Array.isArray(data.fullCandidates)) {
         throw new Error(`无法读取候选池文件: ${candidatesFile}`);
     }
 
+    const rawTrimmed = String(rawIndicesStr ?? '').trim();
+    const inspectAll = rawTrimmed.toLowerCase() === 'all';
     const wanted = new Set(
-        String(rawIndicesStr || '')
+        rawTrimmed
             .split(',')
-            .map(s => parseInt(s.trim(), 10))
-            .filter(n => !isNaN(n) && n >= 1)
+            .map(s => s.trim())
+            .filter(s => /^\d+$/.test(s))
+            .map(s => parseInt(s, 10))
+            .filter(n => n >= 1)
     );
 
+    if (!inspectAll && wanted.size === 0) {
+        throw new Error(
+            `无效的 --inspect 序号列表: "${rawTrimmed}"。请提供逗号分隔的 1-based 正整数序号（如 --inspect 1,4,7），或显式传 --inspect all`
+        );
+    }
+
+    const maxChars = Number.isFinite(Number(options.maxChars)) && Number(options.maxChars) > 0
+        ? Number(options.maxChars)
+        : null;
+    const foundIndices = new Set();
     const selected = [];
     data.fullCandidates.forEach((item, idx) => {
-        const oneBased = item.index || idx + 1;
-        if (wanted.size === 0 || wanted.has(oneBased)) {
+        const oneBased = Number(item.index) || idx + 1;
+        if (inspectAll || wanted.has(oneBased)) {
+            foundIndices.add(oneBased);
+            let rawText = item.fullText || item.content || item.description || '';
+            const fullParas = Array.isArray(item.paragraphs) && item.paragraphs.length > 0
+                ? item.paragraphs
+                : splitCandidateParagraphs(rawText, item.source?.language || 'en');
+            if (maxChars && rawText.length > maxChars) {
+                rawText = rawText.slice(0, maxChars);
+            }
             selected.push({
                 index: oneBased,
                 id: item.id,
@@ -221,15 +261,23 @@ async function inspectCandidates(candidatesFile, rawIndicesStr) {
                 urlToImage: item.urlToImage || null,
                 title: item.title,
                 rssDescription: item.description || '',
-                rawText: item.fullText || item.content || item.description || ''
+                paragraphCount: fullParas.length,
+                indexedParagraphs: fullParas.map((text, pIdx) => ({ p: pIdx + 1, text })),
+                rawText
             });
         }
     });
 
+    const missingIndices = inspectAll
+        ? []
+        : [...wanted].filter(n => !foundIndices.has(n)).sort((a, b) => a - b);
+
     return {
+        harvestId: data.harvestId || computeHarvestId(data.fullCandidates),
         harvestedAt: data.harvestedAt,
         totalCandidates: data.fullCandidates.length,
         inspectedCount: selected.length,
+        missingIndices,
         items: selected
     };
 }
@@ -240,8 +288,8 @@ async function runHarvest(customOptions = {}) {
         opts.imageLimit = opts.limit;
     }
 
-    if (opts.inspectIndices) {
-        return inspectCandidates(opts.out, opts.inspectIndices);
+    if (opts.inspectIndices !== null && opts.inspectIndices !== undefined) {
+        return inspectCandidates(opts.out, opts.inspectIndices, { maxChars: opts.maxChars });
     }
 
     if (opts.checkCooldown && !opts.force && opts.cooldownMinutes > 0) {
@@ -302,6 +350,12 @@ async function runHarvest(customOptions = {}) {
     enrichTasks.push(agentService._enrichMissingArticleFullTexts(candidates));
     await Promise.all(enrichTasks);
 
+    // 生成确定性编号段落数组 paragraphs，供大模型使用 keepParagraphs 按段号引用原文（节省输出 token）
+    for (const cand of candidates) {
+        const rawSourceText = cand.fullText || cand.content || cand.description || '';
+        cand.paragraphs = splitCandidateParagraphs(rawSourceText, cand.source?.language || 'en');
+    }
+
     const briefIndex = candidates.map((a, idx) => ({
         index: idx + 1,
         id: a.id,
@@ -316,10 +370,13 @@ async function runHarvest(customOptions = {}) {
         rssExcerpt: truncateText(a.description || '', 240),
         hasImage: Boolean(a.urlToImage),
         rawTextChars: (a.fullText || a.content || '').length,
+        paragraphCount: Array.isArray(a.paragraphs) ? a.paragraphs.length : 0,
         url: a.url
     }));
 
+    const harvestId = computeHarvestId(candidates);
     const payload = {
+        harvestId,
         harvestedAt: new Date().toISOString(),
         elapsedSeconds: Number(((Date.now() - startTime) / 1000).toFixed(1)),
         rawCount: rawHarvested.length,
@@ -334,7 +391,7 @@ async function runHarvest(customOptions = {}) {
     await writeJsonFile(opts.out, payload);
     logger.success(
         'AG-HARVEST',
-        `[3/3] 原始信源搬运完成！共输出 ${candidates.length} 条多语种外媒素材（覆盖 ${representedSources} 家信源）至 ${opts.out} (耗时 ${payload.elapsedSeconds}s)，请交由 Antigravity 大模型执行选稿、精译与综述创作`
+        `[3/3] 原始信源搬运完成！批次 harvestId=${harvestId}，共输出 ${candidates.length} 条多语种外媒素材（覆盖 ${representedSources} 家信源）至 ${opts.out} (耗时 ${payload.elapsedSeconds}s)，请交由 Antigravity 大模型执行选稿、精译与综述创作`
     );
 
     return payload;
@@ -344,7 +401,7 @@ if (require.main === module) {
     const cliOpts = parseArgs(process.argv.slice(2));
     runHarvest(cliOpts)
         .then((res) => {
-            if (cliOpts.inspectIndices || res?.cooldownSkipped) {
+            if (cliOpts.inspectIndices !== null || res?.cooldownSkipped) {
                 console.log(JSON.stringify(res, null, 2));
             }
             process.exit(0);
@@ -358,6 +415,8 @@ if (require.main === module) {
 module.exports = {
     runHarvest,
     inspectCandidates,
+    computeHarvestId,
+    splitCandidateParagraphs,
     parseArgs,
     deduplicateExactUrlsAndSortByTime,
     selectStratifiedCandidates

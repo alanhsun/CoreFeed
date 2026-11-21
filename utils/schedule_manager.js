@@ -3,7 +3,7 @@
  *
  * 核心职责：
  *   1. 按北京时间 (`Asia/Shanghai`) 设定每日多个快照同步时间点（默认 `08:00`, `12:30`, `19:30`）
- *   2. 定时任务与每 60 分钟后台轮询仅从 GitHub `ag-snapshot/latest.json` 拉取由 Antigravity 客户端大模型精编发布的最新快照；
+ *   2. 定时任务与每 60 分钟后台轮询仅从 GitHub `ag-snapshot/manifest.json` 增量拉取由 Antigravity 客户端大模型精编发布的最新快照；
  *      若远端无更新或网络波动，严格保持本地已有中文精编内容不变，绝不执行本地英文 RSS 抓取或机器翻译回退。
  */
 const cron = require('node-cron');
@@ -32,52 +32,54 @@ class ScheduleManager {
             enabled = config.news.autoUpdateEnabled,
             updateTimes = config.news.updateTimes && config.news.updateTimes.length > 0
                 ? config.news.updateTimes
-                : ['08:00', '12:30', '19:30']
+                : ['08:00', '12:30', '19:30'],
+            timezone = config.news.timezone || 'Asia/Shanghai',
+            allowPeriodicInTest = false
         } = settings;
-
-        if (!enabled) {
-            logger.warn('SCHEDULE', '自动定时同步已禁用');
-            return;
-        }
 
         const timesToSchedule = Array.isArray(updateTimes) && updateTimes.length > 0
             ? updateTimes
             : ['08:00', '12:30', '19:30'];
 
-        logger.info('SCHEDULE', `定时 GitHub 快照同步计划时间: ${timesToSchedule.join(', ')}`);
+        if (!enabled) {
+            logger.warn('SCHEDULE', '每日固定时间点定时同步已禁用（后台定期增量轮询仍由 GITHUB_SYNC_ENABLED 独立控制）');
+        } else {
+            logger.info('SCHEDULE', `定时 GitHub 快照同步计划时间 (${timezone}): ${timesToSchedule.join(', ')}`);
 
-        for (const time of timesToSchedule) {
-            const cronExpression = this.parseTimeToDaily(time);
+            for (const time of timesToSchedule) {
+                const cronExpression = this.parseTimeToDaily(time);
 
-            if (!cron.validate(cronExpression)) {
-                logger.error('SCHEDULE', `无效的 cron 表达式: ${cronExpression}`, { time });
-                continue;
-            }
-
-            const task = cron.schedule(
-                cronExpression,
-                async () => {
-                    await this.executeUpdate();
-                },
-                {
-                    scheduled: true,
-                    timezone: 'Asia/Shanghai'
+                if (!cron.validate(cronExpression)) {
+                    logger.error('SCHEDULE', `无效的 cron 表达式: ${cronExpression}`, { time });
+                    continue;
                 }
-            );
 
-            this.currentTasks.push({
-                task,
-                time,
-                cronExpression
-            });
+                const task = cron.schedule(
+                    cronExpression,
+                    async () => {
+                        await this.executeUpdate();
+                    },
+                    {
+                        scheduled: true,
+                        timezone
+                    }
+                );
+
+                this.currentTasks.push({
+                    task,
+                    time,
+                    cronExpression,
+                    timezone
+                });
+            }
         }
 
         this.isRunning = this.currentTasks.length > 0;
 
-        // 后台 ETag 轻量轮询定时器（默认 60 分钟，使用 .unref() 确保不阻塞进程退出）
+        // 后台 manifest.json ETag 轻量增量轮询定时器（默认 60 分钟，独立于每日固定 cron 点，使用 .unref() 不阻塞进程退出）
         const githubSyncEnabled = Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true);
         const syncIntervalMinutes = Number(config.githubSync?.intervalMinutes || config.agent?.githubSyncIntervalMinutes || 60);
-        if (githubSyncEnabled && this.githubSyncManager && syncIntervalMinutes > 0 && process.env.NODE_ENV !== 'test') {
+        if (githubSyncEnabled && this.githubSyncManager && syncIntervalMinutes > 0 && (process.env.NODE_ENV !== 'test' || allowPeriodicInTest)) {
             this.githubSyncTimer = setInterval(async () => {
                 try {
                     await this.githubSyncManager.pullAndApply({ force: false, trigger: 'periodic' });
@@ -91,7 +93,7 @@ class ScheduleManager {
         }
 
         if (this.isRunning) {
-            logger.success('SCHEDULE', `定时调度器启动成功 (${this.currentTasks.length} 个时间点)`);
+            logger.success('SCHEDULE', `定时调度器启动成功 (${this.currentTasks.length} 个时间点, timezone=${timezone})`);
             logger.info('SCHEDULE', `下次同步时间: ${this.getNextExecutionTime()}`);
         }
 
@@ -100,7 +102,7 @@ class ScheduleManager {
                 enabled: this.isRunning,
                 updateTimes: timesToSchedule,
                 scheduleTimes: timesToSchedule,
-                timezone: config.news.timezone || 'Asia/Shanghai',
+                timezone,
                 nextExecution: this.getNextExecutionTime(),
                 timestamp: new Date().toISOString()
             });
@@ -130,7 +132,7 @@ class ScheduleManager {
     }
 
     /**
-     * 执行定时同步：仅从 GitHub ag-snapshot/latest.json 同步由 Antigravity 大模型发布的最新精编快照
+     * 执行定时同步：仅从 GitHub ag-snapshot/manifest.json 增量同步由 Antigravity 大模型发布的最新精编快照
      */
     async executeUpdate() {
         const githubSyncEnabled = Boolean(config.githubSync?.enabled ?? config.agent?.githubSyncEnabled ?? true);

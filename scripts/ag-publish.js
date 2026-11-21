@@ -13,17 +13,18 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 require('dotenv').config();
 const axios = require('axios');
-const https = require('https');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { readJsonFile, writeJsonFile } = require('../utils/helpers');
+const { getHttpsAgent } = require('../utils/network_config');
 const stateManager = require('../services/state_manager');
-const { execFileSync } = require('child_process');
 const {
     publishSnapshotToGitHub,
+    fetchRemoteSnapshotViaGit,
     GitHubSyncManager,
     isSuspectedTestFixtureNews
 } = require('../utils/github_sync');
@@ -35,12 +36,25 @@ const {
     normalizeCategory,
     splitTextIntoParagraphs,
     mergeClusterArticles,
-    convertSummaryToRichHtml,
     renderSafeSummaryHtml,
     createSummaryArticleObject
 } = require('../utils/editorial_formatter');
+const {
+    inspectCompiledArticle,
+    validateCompiledBundle,
+    formatValidationReport
+} = require('../utils/compiled_validator');
+const {
+    splitCandidateParagraphs,
+    stripArticleForSnapshot
+} = require('../utils/snapshot_schema');
 
-const httpsAgentIgnoreTls = new https.Agent({ rejectUnauthorized: false, keepAlive: false });
+function computeNewsEditionId(finalNews = [], summaryArticle = null) {
+    const parts = (Array.isArray(finalNews) ? finalNews : [])
+        .map((a, idx) => `${idx + 1}|${a?.id || a?.url || ''}|${a?.translatedTitle || a?.title || ''}`);
+    parts.push(`summary|${summaryArticle?.title || ''}`);
+    return `ed-${crypto.createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 12)}`;
+}
 
 function resolveDefaultPushToGithub() {
     if (process.env.GITHUB_PUSH_ENABLED !== undefined && process.env.GITHUB_PUSH_ENABLED !== '') {
@@ -64,6 +78,11 @@ function parseArgs(argv = process.argv.slice(2)) {
         secret: process.env.PUBLISH_SECRET || config.agent.publishSecret || '',
         limit: config.agent.maxCuratedArticles || 30,
         localOnly: false,
+        validateOnly: false,
+        strict: false,
+        ignoreHarvestId: false,
+        force: false,
+        cooldownMinutes: Number(config.githubSync?.cooldownMinutes ?? 30),
         pushToGithub: resolveDefaultPushToGithub(),
         githubExplicit: false,
         githubBranch: process.env.AG_GITHUB_BRANCH || config.githubSync?.branch || 'ag-snapshot',
@@ -100,6 +119,20 @@ function parseArgs(argv = process.argv.slice(2)) {
             options.limit = Math.max(1, parseInt(eqVal(arg), 10) || 30);
         } else if (arg === '--local-only') {
             options.localOnly = true;
+        } else if (arg === '--validate' || arg === '--check') {
+            options.validateOnly = true;
+        } else if (arg === '--strict') {
+            options.strict = true;
+        } else if (arg === '--ignore-harvest-id') {
+            options.ignoreHarvestId = true;
+        } else if (arg === '--force') {
+            options.force = true;
+        } else if (arg === '--cooldown' && argv[i + 1] !== undefined) {
+            const parsedCd = parseInt(argv[++i], 10);
+            if (!isNaN(parsedCd) && parsedCd >= 0) options.cooldownMinutes = parsedCd;
+        } else if (arg.startsWith('--cooldown=')) {
+            const parsedCd = parseInt(eqVal(arg), 10);
+            if (!isNaN(parsedCd) && parsedCd >= 0) options.cooldownMinutes = parsedCd;
         } else if (arg === '--github' || arg === '--push-github') {
             options.pushToGithub = true;
             options.githubExplicit = true;
@@ -138,29 +171,76 @@ function parseArgs(argv = process.argv.slice(2)) {
     return options;
 }
 
-function createValidationError(message) {
+function createValidationError(message, details = null) {
     const err = new Error(message);
     err.statusCode = 400;
+    if (details) err.validationReport = details;
     return err;
 }
 
 /**
  * 校验单篇大模型精编文章是否满足全中文精编契约（严禁未翻译生肉或空字段混入快照）
  */
-function validateCompiledArticle(article, position) {
-    const label = `第 ${position} 篇 (${article.id || article.url || 'unknown'})`;
-    if (!hasChineseText(article.translatedTitle, 2)) {
-        throw createValidationError(`${label} 缺少由大模型精编的中文标题 (translatedTitle): "${article.translatedTitle || ''}"`);
+function validateCompiledArticle(article, position, context = {}) {
+    const { errors } = inspectCompiledArticle(article, position, context);
+    if (errors.length > 0) {
+        throw createValidationError(errors[0]);
     }
-    if (!hasChineseText(article.summary, 6)) {
-        throw createValidationError(`${label} 缺少由大模型撰写的中文导语摘要 (summary)`);
+}
+
+/**
+ * 根据本期新闻 editionId 过滤本地/远端音频轨道（Q2=A：剔除过期的 tracks.news，保留独立周期的 tracks.pulse）
+ */
+function resolveEditionMatchedAudio({ localAudio, remoteSnap, editionId }) {
+    const tracks = {};
+    let droppedStaleNewsAudio = false;
+    let staleNewsAudioReason = null;
+
+    const localNewsTrack = localAudio?.tracks?.news || null;
+    const remoteNewsTrack = remoteSnap?.audioBroadcast?.tracks?.news || null;
+
+    if (localNewsTrack) {
+        if (localNewsTrack.editionId && localNewsTrack.editionId !== editionId) {
+            droppedStaleNewsAudio = true;
+            staleNewsAudioReason = `local news audio editionId=${localNewsTrack.editionId} !== ${editionId}`;
+            logger.warn(
+                'AG-PUBLISH',
+                `检测到本地新闻播音 editionId=${localNewsTrack.editionId} 与本期新闻 ${editionId} 不匹配，已自动剔除过期新闻音轨（保留社媒音轨）`
+            );
+        } else {
+            tracks.news = localNewsTrack;
+        }
+    } else if (remoteNewsTrack) {
+        if (remoteNewsTrack.editionId && remoteNewsTrack.editionId === editionId) {
+            tracks.news = remoteNewsTrack;
+            logger.info('AG-PUBLISH', `远端新闻播音与本期 ${editionId} 一致，已继承保留 tracks.news`);
+        } else {
+            droppedStaleNewsAudio = true;
+            staleNewsAudioReason = `remote news audio editionId=${remoteNewsTrack.editionId || '<legacy>'} !== ${editionId}`;
+            logger.info(
+                'AG-PUBLISH',
+                `远端 tracks.news (${remoteNewsTrack.editionId || '无 editionId'}) 属于旧期次新闻，本期未继承以免声画错配`
+            );
+        }
     }
-    if (!Array.isArray(article.keyPoints) || article.keyPoints.length === 0 || !article.keyPoints.every(kp => hasChineseText(kp, 2))) {
-        throw createValidationError(`${label} 缺少由大模型提取的中文核心看点数组 (keyPoints)`);
+
+    const pulseTrack = localAudio?.tracks?.pulse || remoteSnap?.audioBroadcast?.tracks?.pulse || null;
+    if (pulseTrack) {
+        tracks.pulse = pulseTrack;
     }
-    if (!Array.isArray(article.translatedParagraphs) || article.translatedParagraphs.length === 0 || !article.translatedParagraphs.some(p => hasChineseText(p, 4))) {
-        throw createValidationError(`${label} 缺少由大模型翻译的全文中文段落数组 (translatedParagraphs)`);
-    }
+
+    const effectiveAudio = Object.keys(tracks).length > 0
+        ? normalizeAudioBroadcastBundle({
+            updatedAt: localAudio?.updatedAt || remoteSnap?.audioBroadcastUpdatedAt || remoteSnap?.audioBroadcast?.updatedAt || new Date().toISOString(),
+            tracks
+        })
+        : null;
+
+    return {
+        effectiveAudio,
+        droppedStaleNewsAudio,
+        staleNewsAudioReason
+    };
 }
 
 async function runPublish(customOptions = {}) {
@@ -288,18 +368,37 @@ async function runPublish(customOptions = {}) {
     // 仅按大模型选定的精编条目与顺序组装发布列表（未入选的原始候选绝不混入），并对同一并查集簇去重
     const consumedClusterRoots = new Set();
     const curatedArticles = [];
+    const articleContexts = [];
+    const preAssemblyErrors = [];
+    let duplicateSkippedCount = 0;
 
     for (let i = 0; i < rawEntryList.length; i++) {
         const comp = rawEntryList[i];
-        if (!comp || typeof comp !== 'object') continue;
+        if (!comp || typeof comp !== 'object') {
+            preAssemblyErrors.push(`第 ${i + 1} 条精编记录不是有效对象`);
+            continue;
+        }
 
         const lookupIndex = typeof comp.candidateIndex === 'number'
             ? comp.candidateIndex
             : (typeof comp.index === 'number' ? comp.index : null);
 
-        const baseCand = (comp.id && rawById.get(String(comp.id))) ||
-            (lookupIndex && rawByOneBasedIndex.get(lookupIndex)) ||
-            null;
+        const candByIndex = lookupIndex !== null ? (rawByOneBasedIndex.get(lookupIndex) || null) : null;
+        const candById = comp.id ? (rawById.get(String(comp.id)) || null) : null;
+
+        if (lookupIndex !== null && rawCandidates.length > 0) {
+            if (!candByIndex) {
+                preAssemblyErrors.push(
+                    `第 ${i + 1} 篇指定的 candidateIndex=${lookupIndex} 在候选池中越界或不存在（有效范围 1..${rawCandidates.length}）`
+                );
+            } else if (comp.id && candByIndex.id && String(candByIndex.id) !== String(comp.id)) {
+                preAssemblyErrors.push(
+                    `第 ${i + 1} 篇 id="${comp.id}" 与 candidateIndex=${lookupIndex} 对应候选 id="${candByIndex.id}" 不匹配（疑似候选池已发生重采位移）`
+                );
+            }
+        }
+
+        const baseCand = candById || candByIndex || null;
 
         const resolvedOneBased = lookupIndex ||
             (baseCand ? (Number(baseCand.index) || rawCandidates.indexOf(baseCand) + 1) : null);
@@ -308,6 +407,7 @@ async function runPublish(customOptions = {}) {
         if (ufGroupMembers.length > 1) {
             const rootKey = ufGroupMembers[0];
             if (consumedClusterRoots.has(rootKey)) {
+                duplicateSkippedCount++;
                 continue;
             }
             consumedClusterRoots.add(rootKey);
@@ -317,8 +417,20 @@ async function runPublish(customOptions = {}) {
         const companionList = [];
         const explicitMergedIndices = Array.isArray(comp.mergedIndices) ? comp.mergedIndices : [];
         const explicitMergedIds = Array.isArray(comp.mergedIds) ? comp.mergedIds : [];
+        const normalizedExplicitMerged = [];
 
-        for (const mIdx of [...ufGroupMembers, ...explicitMergedIndices]) {
+        for (const mIdx of explicitMergedIndices) {
+            const num = parseInt(String(mIdx).replace(/\D+/g, ''), 10);
+            if (!isNaN(num)) {
+                if (rawCandidates.length > 0 && !rawByOneBasedIndex.has(num)) {
+                    preAssemblyErrors.push(`第 ${i + 1} 篇 mergedIndices 包含越界序号 ${num}`);
+                } else if (num !== resolvedOneBased) {
+                    normalizedExplicitMerged.push(num);
+                }
+            }
+        }
+
+        for (const mIdx of [...ufGroupMembers, ...normalizedExplicitMerged]) {
             const num = parseInt(String(mIdx).replace(/\D+/g, ''), 10);
             if (!isNaN(num) && num !== resolvedOneBased && rawByOneBasedIndex.has(num)) {
                 companionList.push(rawByOneBasedIndex.get(num));
@@ -339,14 +451,41 @@ async function runPublish(customOptions = {}) {
         const translatedParagraphs = Array.isArray(comp.translatedParagraphs) && comp.translatedParagraphs.length > 0
             ? comp.translatedParagraphs.map(p => String(p).trim()).filter(Boolean)
             : (comp.translatedContent ? splitTextIntoParagraphs(String(comp.translatedContent)) : []);
-        const translatedContent = String(comp.translatedContent || translatedParagraphs.join('\n\n')).trim();
 
         const rawFull = String(comp.fullText || baseMerged?.fullText || baseMerged?.content || baseMerged?.description || '').trim();
+        const candParagraphs = Array.isArray(baseCand?.paragraphs) && baseCand.paragraphs.length > 0
+            ? baseCand.paragraphs
+            : (Array.isArray(baseMerged?.paragraphs) && baseMerged.paragraphs.length > 0
+                ? baseMerged.paragraphs
+                : splitCandidateParagraphs(rawFull, baseCand?.source?.language || baseMerged?.source?.language || 'en'));
+
+        let keepResolvedParagraphs = [];
+        if (Array.isArray(comp.keepParagraphs)) {
+            if (comp.keepParagraphs.length === 0 && (!Array.isArray(comp.originalParagraphs) || comp.originalParagraphs.length === 0)) {
+                preAssemblyErrors.push(`第 ${i + 1} 篇 keepParagraphs 不能为空数组`);
+            } else {
+                const seenParaIdx = new Set();
+                for (const rawP of comp.keepParagraphs) {
+                    const pNum = typeof rawP === 'number' ? rawP : (/^\d+$/.test(String(rawP).trim()) ? parseInt(String(rawP).trim(), 10) : NaN);
+                    if (!Number.isInteger(pNum) || pNum < 1 || pNum > candParagraphs.length) {
+                        preAssemblyErrors.push(
+                            `第 ${i + 1} 篇 keepParagraphs 包含越界或非法段号 ${JSON.stringify(rawP)}（候选原文有效范围 1..${candParagraphs.length}）`
+                        );
+                    } else if (!seenParaIdx.has(pNum)) {
+                        seenParaIdx.add(pNum);
+                        keepResolvedParagraphs.push(candParagraphs[pNum - 1]);
+                    }
+                }
+            }
+        }
+
         const originalParagraphs = Array.isArray(comp.originalParagraphs) && comp.originalParagraphs.length > 0
             ? comp.originalParagraphs.map(p => String(p).trim()).filter(Boolean)
-            : (Array.isArray(baseMerged?.originalParagraphs) && baseMerged.originalParagraphs.length > 0
-                ? baseMerged.originalParagraphs
-                : splitTextIntoParagraphs(rawFull));
+            : (keepResolvedParagraphs.length > 0
+                ? keepResolvedParagraphs
+                : (Array.isArray(baseMerged?.originalParagraphs) && baseMerged.originalParagraphs.length > 0
+                    ? baseMerged.originalParagraphs
+                    : splitTextIntoParagraphs(rawFull)));
 
         const sourceObj = (comp.source && typeof comp.source === 'object')
             ? comp.source
@@ -357,49 +496,44 @@ async function runPublish(customOptions = {}) {
                     name: String(comp.sourceName || comp.source || 'Global Media').trim()
                 });
 
-        const assembled = {
-            ...(baseMerged || {}),
+        const relatedSources = Array.isArray(comp.relatedSources) && comp.relatedSources.length > (baseMerged?.relatedSources?.length || 0)
+            ? comp.relatedSources
+            : (baseMerged?.relatedSources || []);
+
+        const assembled = stripArticleForSnapshot({
             id: comp.id || baseMerged?.id || `ag-${Date.now()}-${i + 1}`,
             title: String(baseCand?.title || comp.originalTitle || comp.title || zhTitle).trim(),
-            description: String(baseCand?.description || comp.description || zhSummary).trim(),
-            content: String(baseCand?.content || rawFull || zhSummary).trim(),
-            fullText: rawFull,
-            originalParagraphs,
             translatedTitle: zhTitle,
-            translatedDescription: zhSummary,
             summary: zhSummary,
+            originalParagraphs,
             translatedParagraphs,
-            translatedContent,
+            keyPoints,
             url: comp.url || baseMerged?.url || '',
             urlToImage: comp.urlToImage || baseMerged?.urlToImage || null,
             publishedAt: comp.publishedAt || baseMerged?.publishedAt || nowIso,
             processedAt: nowIso,
             region: normalizeRegion(comp.region, baseMerged?.region || '国际'),
             category: normalizeCategory(comp.category, baseMerged?.category || '国际'),
-            keyPoints,
             aiCompiled: true,
+            qualityScore: Number(comp.qualityScore || baseMerged?.qualityScore) || 88,
             source: sourceObj,
-            relatedSources: Array.isArray(comp.relatedSources) && comp.relatedSources.length > (baseMerged?.relatedSources?.length || 0)
-                ? comp.relatedSources
-                : (baseMerged?.relatedSources || []),
-            sourceCount: 1 + (
-                Array.isArray(comp.relatedSources) && comp.relatedSources.length > (baseMerged?.relatedSources?.length || 0)
-                    ? comp.relatedSources.length
-                    : (baseMerged?.relatedSources?.length || 0)
-            )
-        };
+            relatedSources,
+            sourceCount: 1 + relatedSources.length
+        }, i, nowIso);
 
-        validateCompiledArticle(assembled, curatedArticles.length + 1);
         curatedArticles.push(assembled);
-    }
-
-    if (curatedArticles.length === 0) {
-        throw createValidationError('未能从精编产物中解析出任何有效中文报道');
+        articleContexts.push({
+            rawComp: comp,
+            baseCand,
+            assembled,
+            resolvedOneBased,
+            explicitMergedIndices: normalizedExplicitMerged
+        });
     }
 
     const finalNews = curatedArticles.slice(0, opts.limit);
 
-    // 校验并渲染由大模型撰写的《今日全球要闻深度综述》
+    // 组装并渲染由大模型撰写的《今日全球要闻深度综述》
     const currentDate = new Date().toLocaleDateString('zh-CN', {
         year: 'numeric',
         month: 'long',
@@ -441,9 +575,43 @@ async function runPublish(customOptions = {}) {
         summaryArticle = createSummaryArticleObject(mdWithTitle, finalNews, currentDate);
     }
 
-    if (!summaryArticle || !hasChineseText(summaryArticle.content || summaryArticle.htmlContent || '', 10)) {
-        throw createValidationError('缺少由大模型撰写的中文《全球要闻深度综述》(summaryArticle / summaryMarkdown)');
+    // 聚合全量契约校验（一次性输出全部 errors 与 warnings）
+    const validationReport = validateCompiledBundle({
+        compiledData,
+        harvestData,
+        rawEntries: rawEntryList,
+        preAssemblyErrors,
+        curatedArticles,
+        finalNews,
+        articleContexts: articleContexts.slice(0, opts.limit),
+        summaryArticle,
+        duplicateSkippedCount,
+        options: {
+            strict: Boolean(opts.strict),
+            ignoreHarvestId: Boolean(opts.ignoreHarvestId)
+        }
+    });
+
+    if (opts.validateOnly) {
+        return {
+            success: validationReport.valid,
+            validateOnly: true,
+            editionId: validationReport.valid ? (String(compiledData.editionId || '').trim() || computeNewsEditionId(finalNews, summaryArticle)) : null,
+            validation: validationReport,
+            reportText: formatValidationReport(validationReport)
+        };
     }
+
+    if (!validationReport.valid) {
+        throw createValidationError(formatValidationReport(validationReport), validationReport);
+    }
+
+    if (validationReport.warnings.length > 0) {
+        logger.warn('AG-PUBLISH', formatValidationReport(validationReport));
+    }
+
+    const editionId = String(compiledData.editionId || '').trim() || computeNewsEditionId(finalNews, summaryArticle);
+    const harvestId = String(compiledData.harvestId || harvestData?.harvestId || '').trim() || null;
 
     const sourceStats = harvestData?.sourceStats || compiledData.sourceStats || [];
     const publishedBy = String(
@@ -493,56 +661,43 @@ async function runPublish(customOptions = {}) {
     }
 
     const audioBroadcastService = new AudioBroadcastService(null, stateManager);
-    let existingAudio = null;
+    let localAudio = null;
     if (customOptions.audioBroadcast) {
-        existingAudio = normalizeAudioBroadcastBundle(customOptions.audioBroadcast);
-        if (existingAudio) {
-            await audioBroadcastService.saveBundle(existingAudio, { emit: false });
+        localAudio = normalizeAudioBroadcastBundle(customOptions.audioBroadcast);
+        if (localAudio) {
+            await audioBroadcastService.saveBundle(localAudio, { emit: false });
         }
     } else if (compiledData.audioBroadcast) {
-        existingAudio = normalizeAudioBroadcastBundle(compiledData.audioBroadcast);
-        if (existingAudio) {
-            await audioBroadcastService.saveBundle(existingAudio, { emit: false });
+        localAudio = normalizeAudioBroadcastBundle(compiledData.audioBroadcast);
+        if (localAudio) {
+            await audioBroadcastService.saveBundle(localAudio, { emit: false });
         }
     } else {
-        existingAudio = await audioBroadcastService.loadLocalBundle();
+        localAudio = await audioBroadcastService.loadLocalBundle();
     }
 
-    // 多客户端协同兜底：若当前发布机缺少本地社媒热议或语音播报，自动从远端 ag-snapshot 继承以免覆盖丢失
-    if (
-        process.env.NODE_ENV !== 'test' &&
-        shouldPushToGithub &&
-        (!existingPulse || !existingAudio)
-    ) {
-        let remoteSnap = null;
-        const repoDir = opts.repoDir || path.resolve(__dirname, '..');
-        const gitBranch = opts.githubBranch || 'ag-snapshot';
-        const gitRemote = opts.githubRemote || 'origin';
-        try {
-            if (!opts.skipGitPush) {
-                execFileSync('git', ['fetch', '--depth=1', gitRemote, `${gitBranch}:refs/remotes/${gitRemote}/${gitBranch}`], {
-                    cwd: repoDir,
-                    stdio: 'ignore',
-                    timeout: 20000
-                });
-            }
-            for (const refSpec of [`refs/remotes/${gitRemote}/${gitBranch}:latest.json`, `refs/heads/${gitBranch}:latest.json`]) {
-                try {
-                    const raw = execFileSync('git', ['show', refSpec], {
-                        cwd: repoDir,
-                        encoding: 'utf8',
-                        maxBuffer: 25 * 1024 * 1024,
-                        stdio: ['ignore', 'pipe', 'ignore']
-                    });
-                    if (raw && raw.trim()) {
-                        remoteSnap = JSON.parse(raw);
-                        break;
-                    }
-                } catch (_) {}
-            }
-        } catch (_) {}
+    const isUnscopedTestRun =
+        process.env.NODE_ENV === 'test' &&
+        !opts.repoDir &&
+        !opts.skipGitPush;
 
-        if (!remoteSnap) {
+    // 从远端 Git 权威分支获取当前 HEAD SHA 与最新快照（供多客户端冷却复查、pulse 继承及 --force-with-lease 使用）
+    let remoteGitInfo = null;
+    let remoteSnap = null;
+    const repoDir = opts.repoDir || path.resolve(__dirname, '..');
+    const gitBranch = opts.githubBranch || 'ag-snapshot';
+    const gitRemote = opts.githubRemote || 'origin';
+
+    if (shouldPushToGithub && !isUnscopedTestRun) {
+        remoteGitInfo = fetchRemoteSnapshotViaGit({
+            repoDir,
+            remote: gitRemote,
+            branch: gitBranch,
+            skipFetch: Boolean(opts.skipGitPush)
+        });
+        remoteSnap = remoteGitInfo?.snapshot || null;
+
+        if (!remoteSnap && process.env.NODE_ENV !== 'test' && !opts.skipGitPush) {
             try {
                 const ghMgr = new GitHubSyncManager();
                 const res = await ghMgr.fetchRemoteSnapshot(null, { useEtag: false, force: true });
@@ -550,36 +705,67 @@ async function runPublish(customOptions = {}) {
             } catch (_) {}
         }
 
-        if (remoteSnap && typeof remoteSnap === 'object') {
-            if (!existingPulse && remoteSnap.socialPulse) {
-                const inheritedPulse = normalizeSocialPulseBundle(remoteSnap.socialPulse, {
-                    updatedAt: remoteSnap.socialPulseUpdatedAt || remoteSnap.socialPulse.updatedAt
-                });
-                if (inheritedPulse && inheritedPulse.issueCount > 0) {
-                    existingPulse = inheritedPulse;
-                    await socialPulseService.saveBundle(existingPulse, { emit: false });
-                    logger.info('AG-PUBLISH', `已从远端 ag-snapshot 继承保留欧美社媒热议 (${existingPulse.issueCount} 期)`);
-                }
-            }
-            if (!existingAudio && remoteSnap.audioBroadcast) {
-                const inheritedAudio = normalizeAudioBroadcastBundle(remoteSnap.audioBroadcast, {
-                    updatedAt: remoteSnap.audioBroadcastUpdatedAt || remoteSnap.audioBroadcast.updatedAt
-                });
-                if (inheritedAudio && inheritedAudio.trackCount > 0) {
-                    existingAudio = inheritedAudio;
-                    await audioBroadcastService.saveBundle(existingAudio, { emit: false });
-                    logger.info('AG-PUBLISH', `已从远端 ag-snapshot 继承保留双主播语音播报 (${Object.keys(existingAudio.tracks).join(', ')})`);
-                }
+        // 发布期多客户端冷却复查：防止两台客户端分别编译 40 分钟后互相覆盖最新新闻
+        if (!opts.force && opts.cooldownMinutes > 0 && remoteSnap && !opts.skipGitPush) {
+            const remotePublishedMs = Date.parse(remoteSnap.publishedAt || remoteSnap.lastUpdated || '');
+            const remoteBy = String(remoteSnap.publishedBy || remoteSnap.clientId || '').trim();
+            const isDifferentClient = Boolean(remoteBy && publishedBy && remoteBy.toLowerCase() !== publishedBy.toLowerCase());
+            const remoteEdition = String(remoteSnap.editionId || '').trim();
+            if (
+                isDifferentClient &&
+                Number.isFinite(remotePublishedMs) &&
+                remotePublishedMs > 0 &&
+                (Date.now() - remotePublishedMs) < opts.cooldownMinutes * 60 * 1000 &&
+                remoteEdition !== editionId
+            ) {
+                const ageMin = ((Date.now() - remotePublishedMs) / 60000).toFixed(1);
+                const cdErr = new Error(
+                    `发布期冷却拦截: 远端快照在 ${ageMin} 分钟前刚由其他客户端 (${remoteBy}) 发布（冷却窗口 ${opts.cooldownMinutes}m），为防覆盖他人新稿已中止推送（传 --force 可强制覆盖）`
+                );
+                cdErr.code = 'COOLDOWN_CONFLICT';
+                cdErr.statusCode = 409;
+                throw cdErr;
             }
         }
     }
 
-    if (existingAudio) {
-        stateManager.updateAudioBroadcast(existingAudio, false);
+    // 多客户端协同：继承远端 socialPulse（不覆盖丢失）
+    if (!existingPulse && remoteSnap?.socialPulse) {
+        const inheritedPulse = normalizeSocialPulseBundle(remoteSnap.socialPulse, {
+            updatedAt: remoteSnap.socialPulseUpdatedAt || remoteSnap.socialPulse.updatedAt
+        });
+        if (inheritedPulse && inheritedPulse.issueCount > 0) {
+            existingPulse = inheritedPulse;
+            await socialPulseService.saveBundle(existingPulse, { emit: false });
+            logger.info('AG-PUBLISH', `已从远端 ag-snapshot 继承保留欧美社媒热议 (${existingPulse.issueCount} 期)`);
+        }
     }
 
-    const snapshotPayload = {
-        version: '2.0',
+    // 分轨匹配本期 editionId：剔除过期的 tracks.news，保留有效的 tracks.pulse（Q2=A）
+    const audioMatch = resolveEditionMatchedAudio({
+        localAudio,
+        remoteSnap,
+        editionId
+    });
+    let existingAudio = audioMatch.effectiveAudio;
+
+    if (existingAudio) {
+        if (audioMatch.droppedStaleNewsAudio || (!localAudio && existingAudio)) {
+            await audioBroadcastService.saveBundle(existingAudio, { emit: false });
+        }
+        stateManager.updateAudioBroadcast(existingAudio, false);
+    } else if (audioMatch.droppedStaleNewsAudio) {
+        stateManager.updateAudioBroadcast(null, false);
+    }
+
+    const extraPoolNews = curatedArticles.length > finalNews.length
+        ? curatedArticles.slice(finalNews.length)
+        : [];
+    const buildSnapshotPayload = (pulseBundle, audioBundle) => ({
+        version: '3.0',
+        schemaVersion: '3.0',
+        editionId,
+        ...(harvestId ? { harvestId } : {}),
         publishedAt: nowIso,
         lastUpdated: nowIso,
         publishedBy,
@@ -589,23 +775,24 @@ async function runPublish(customOptions = {}) {
         displayedCount: finalNews.length,
         totalPoolCount: curatedArticles.length,
         news: finalNews,
-        allEnhancedNews: curatedArticles,
-        summary: summaryArticle,
+        ...(extraPoolNews.length > 0 ? { extraPoolNews } : {}),
         summaryArticle,
         sourceStats,
-        ...(existingPulse && existingPulse.issueCount > 0
+        ...(pulseBundle && pulseBundle.issueCount > 0
             ? {
-                socialPulse: existingPulse,
-                socialPulseUpdatedAt: existingPulse.updatedAt
+                socialPulse: pulseBundle,
+                socialPulseUpdatedAt: pulseBundle.updatedAt
             }
             : {}),
-        ...(existingAudio && existingAudio.trackCount > 0
+        ...(audioBundle && audioBundle.trackCount > 0
             ? {
-                audioBroadcast: existingAudio,
-                audioBroadcastUpdatedAt: existingAudio.updatedAt
+                audioBroadcast: audioBundle,
+                audioBroadcastUpdatedAt: audioBundle.updatedAt
             }
             : {})
-    };
+    });
+
+    let snapshotPayload = buildSnapshotPayload(existingPulse, existingAudio);
 
     if (opts.snapshotOut) {
         await writeJsonFile(opts.snapshotOut, snapshotPayload);
@@ -613,12 +800,15 @@ async function runPublish(customOptions = {}) {
     }
 
     await writeJsonFile(config.storage.newsFile, {
+        editionId,
+        ...(harvestId ? { harvestId } : {}),
         news: finalNews,
         lastUpdated: nowIso,
         total: finalNews.length
     });
 
     await writeJsonFile(config.storage.summaryFile, {
+        editionId,
         article: summaryArticle,
         savedAt: nowIso,
         version: '2.0'
@@ -627,37 +817,85 @@ async function runPublish(customOptions = {}) {
     stateManager.set('collectionPhase', 'completed', false);
     stateManager.set('sourceStats', sourceStats, false);
     stateManager.set('lastPublishedBy', publishedBy, false);
+    stateManager.set('lastEditionId', editionId, false);
     stateManager.updateNewsData(finalNews, curatedArticles);
     stateManager.updateSummaryArticle(summaryArticle);
     await stateManager.saveToFile(config.storage.stateFile);
 
     logger.info(
         'AG-PUBLISH',
-        `本地数据文件已更新: news=${finalNews.length} 条 (精选池 ${curatedArticles.length} 条), summary=${summaryArticle.wordCount} 字`
+        `本地数据文件已更新: editionId=${editionId}, news=${finalNews.length} 条 (精选池 ${curatedArticles.length} 条), summary=${summaryArticle.wordCount} 字`
     );
 
     let githubSyncResult = null;
-    const isUnscopedTestRun =
-        process.env.NODE_ENV === 'test' &&
-        !opts.repoDir &&
-        !opts.skipGitPush;
-
     if (shouldPushToGithub && !isUnscopedTestRun) {
+        const expectedRemoteSha = customOptions.expectedRemoteSha !== undefined
+            ? customOptions.expectedRemoteSha
+            : (remoteGitInfo && !remoteGitInfo.error ? remoteGitInfo.commitSha : undefined);
+
+        const tryPush = (payloadToPush, leaseSha) => publishSnapshotToGitHub(payloadToPush, {
+            branch: gitBranch,
+            remote: gitRemote,
+            repoDir,
+            skipPush: Boolean(opts.skipGitPush),
+            publishedBy,
+            clientId: publishedBy,
+            ...(leaseSha !== undefined ? { expectedRemoteSha: leaseSha } : {})
+        });
+
         try {
-            githubSyncResult = publishSnapshotToGitHub(snapshotPayload, {
-                branch: opts.githubBranch,
-                remote: opts.githubRemote,
-                repoDir: opts.repoDir,
-                skipPush: Boolean(opts.skipGitPush),
-                publishedBy,
-                clientId: publishedBy
-            });
+            try {
+                githubSyncResult = tryPush(snapshotPayload, expectedRemoteSha);
+            } catch (firstPushErr) {
+                if (firstPushErr.code === 'LEASE_CONFLICT' && !opts.skipGitPush) {
+                    const freshRemote = fetchRemoteSnapshotViaGit({
+                        repoDir,
+                        remote: gitRemote,
+                        branch: gitBranch
+                    });
+                    const prevNewsAt = remoteSnap?.publishedAt || null;
+                    const freshNewsAt = freshRemote?.snapshot?.publishedAt || null;
+                    const prevNewsEdition = remoteSnap?.editionId || null;
+                    const freshNewsEdition = freshRemote?.snapshot?.editionId || null;
+                    const newsUnchanged = Boolean(
+                        freshRemote.exists &&
+                        freshRemote.snapshot &&
+                        freshNewsAt === prevNewsAt &&
+                        freshNewsEdition === prevNewsEdition
+                    );
+
+                    if (newsUnchanged) {
+                        logger.warn(
+                            'AG-PUBLISH',
+                            '检测到并发期间远端仅更新了欧美社媒/音轨（要闻未变），正在自动合并最新 pulse 后重试 --force-with-lease 推送...'
+                        );
+                        if (freshRemote.snapshot.socialPulse) {
+                            const mergedPulse = normalizeSocialPulseBundle(freshRemote.snapshot.socialPulse, {
+                                updatedAt: freshRemote.snapshot.socialPulseUpdatedAt || freshRemote.snapshot.socialPulse.updatedAt
+                            });
+                            if (mergedPulse) existingPulse = mergedPulse;
+                        }
+                        const retriedAudioMatch = resolveEditionMatchedAudio({
+                            localAudio: existingAudio,
+                            remoteSnap: freshRemote.snapshot,
+                            editionId
+                        });
+                        existingAudio = retriedAudioMatch.effectiveAudio;
+                        snapshotPayload = buildSnapshotPayload(existingPulse, existingAudio);
+                        githubSyncResult = tryPush(snapshotPayload, freshRemote.commitSha);
+                    } else {
+                        throw firstPushErr;
+                    }
+                } else {
+                    throw firstPushErr;
+                }
+            }
             logger.success(
                 'AG-PUBLISH',
-                `已发布大模型精编快照至 GitHub 分支 ${githubSyncResult.branch} (commit=${githubSyncResult.commitSha.slice(0, 8)}, pushed=${githubSyncResult.pushed}, by=${publishedBy})`
+                `已发布大模型精编快照至 GitHub 分支 ${githubSyncResult.branch} (edition=${editionId}, commit=${githubSyncResult.commitSha.slice(0, 8)}, pushed=${githubSyncResult.pushed}, by=${publishedBy})`
             );
         } catch (gitErr) {
-            if (hasExplicitGithubOpt || opts.repoDir) {
+            if (hasExplicitGithubOpt || opts.repoDir || gitErr.code === 'LEASE_CONFLICT') {
                 throw gitErr;
             }
             logger.warn('AG-PUBLISH', `推送快照至 GitHub 跳过或失败 (${gitErr.message})，继续执行本地与目标站点发布`);
@@ -700,6 +938,8 @@ async function runPublish(customOptions = {}) {
             const response = await axios.post(
                 publishUrl,
                 {
+                    editionId,
+                    ...(harvestId ? { harvestId } : {}),
                     news: finalNews,
                     allEnhancedNews: curatedArticles,
                     summary: summaryArticle,
@@ -725,7 +965,7 @@ async function runPublish(customOptions = {}) {
                 {
                     headers: { ...headers, Connection: 'close' },
                     timeout: 20000,
-                    httpsAgent: httpsAgentIgnoreTls,
+                    httpsAgent: getHttpsAgent({ keepAlive: false }),
                     ...(isLocalOrLanTarget ? { proxy: false } : {})
                 }
             );
@@ -750,7 +990,7 @@ async function runPublish(customOptions = {}) {
                                 headers,
                                 timeout: 30000,
                                 maxBodyLength: 50 * 1024 * 1024,
-                                httpsAgent: httpsAgentIgnoreTls,
+                                httpsAgent: getHttpsAgent({ keepAlive: false }),
                                 ...(isLocalOrLanTarget ? { proxy: false } : {})
                             }
                         );
@@ -774,6 +1014,8 @@ async function runPublish(customOptions = {}) {
 
     return {
         success: true,
+        editionId,
+        harvestId,
         displayedCount: finalNews.length,
         totalPoolCount: curatedArticles.length,
         summaryArticle,
@@ -781,6 +1023,8 @@ async function runPublish(customOptions = {}) {
         lastUpdated: nowIso,
         publishedBy,
         clientId: publishedBy,
+        droppedStaleNewsAudio: audioMatch.droppedStaleNewsAudio,
+        validation: validationReport,
         snapshotOut: opts.snapshotOut || null,
         githubSync: githubSyncResult,
         remoteResponse
@@ -790,7 +1034,14 @@ async function runPublish(customOptions = {}) {
 if (require.main === module) {
     const cliOpts = parseArgs(process.argv.slice(2));
     runPublish(cliOpts)
-        .then(() => process.exit(0))
+        .then((res) => {
+            if (cliOpts.validateOnly) {
+                console.log(JSON.stringify(res.validation, null, 2));
+                if (res.reportText) console.error(res.reportText);
+                process.exit(res.success ? 0 : 1);
+            }
+            process.exit(0);
+        })
         .catch(err => {
             const status = err.response?.status ? ` (HTTP ${err.response.status})` : '';
             const detail = err.response?.data?.message || err.message;
@@ -799,4 +1050,10 @@ if (require.main === module) {
         });
 }
 
-module.exports = { runPublish, parseArgs, validateCompiledArticle };
+module.exports = {
+    runPublish,
+    parseArgs,
+    validateCompiledArticle,
+    computeNewsEditionId,
+    resolveEditionMatchedAudio
+};

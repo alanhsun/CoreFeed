@@ -546,7 +546,7 @@ def fetch_briefing_with_failover(args):
         or DEFAULT_GITHUB_SNAPSHOT_BASE
     ).rstrip("/")
 
-    for filename in ("briefing.json", "latest.json"):
+    for filename in ("briefing.json", "news.json"):
         gh_url = f"{gh_base}/{filename}"
         try:
             snap = http_json(gh_url, timeout=10.0)
@@ -709,7 +709,7 @@ def cmd_status(args):
     xiaoai_base = discover_openxiaoai_base_url(args.xiaoai_url)
     report = {
         "corefeedLan": {"url": lan_candidates[0], "reachable": False},
-        "corefeedGithubFallback": {"url": f"{DEFAULT_GITHUB_SNAPSHOT_BASE}/latest.json", "reachable": False},
+        "corefeedGithubFallback": {"url": f"{DEFAULT_GITHUB_SNAPSHOT_BASE}/news.json", "reachable": False},
         "openXiaoAiBridge": {"url": xiaoai_base, "reachable": False, "speakerReady": False},
     }
 
@@ -725,7 +725,7 @@ def cmd_status(args):
         report["corefeedLan"]["error"] = str(exc)
 
     gh_base = (getattr(args, "github_base", None) or os.environ.get("COREFEED_GITHUB_SNAPSHOT_BASE") or DEFAULT_GITHUB_SNAPSHOT_BASE).rstrip("/")
-    for fn in ("briefing.json", "latest.json"):
+    for fn in ("briefing.json", "news.json"):
         test_url = f"{gh_base}/{fn}"
         try:
             req = urllib.request.Request(test_url, method="HEAD", headers={"User-Agent": "CoreFeed-Hermes-Skill/2.0"})

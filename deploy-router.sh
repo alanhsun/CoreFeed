@@ -122,7 +122,7 @@ sync_settings_json() {
       timezone: "Asia/Shanghai",
       GITHUB_SYNC_ENABLED: current.GITHUB_SYNC_ENABLED !== undefined ? current.GITHUB_SYNC_ENABLED : true,
       GITHUB_SYNC_INTERVAL_MINUTES: current.GITHUB_SYNC_INTERVAL_MINUTES && Number(current.GITHUB_SYNC_INTERVAL_MINUTES) !== 5 && Number(current.GITHUB_SYNC_INTERVAL_MINUTES) !== 15 ? Number(current.GITHUB_SYNC_INTERVAL_MINUTES) : 60,
-      GITHUB_SNAPSHOT_URL: current.GITHUB_SNAPSHOT_URL || "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json",
+      GITHUB_SNAPSHOT_URL: current.GITHUB_SNAPSHOT_URL || "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json",
       updatedAt: new Date().toISOString()
     };
     fs.writeFileSync(file, JSON.stringify(updated, null, 2) + "\n", "utf8");
@@ -131,7 +131,7 @@ sync_settings_json() {
     SETTINGS_FILE="$_settings_file" node -e "$_node_script" "$_settings_file" 2>/dev/null || true
   elif command -v jq >/dev/null 2>&1; then
     [ -f "$_settings_file" ] || printf '{}\n' > "$_settings_file"
-    jq '.AUTO_UPDATE_ENABLED=true | .enabled=true | .scheduleEnabled=true | .UPDATE_TIMES="08:00,12:30,19:30" | .updateTimes="08:00,12:30,19:30" | .scheduleTimes=["08:00","12:30","19:30"] | .SCHEDULE_TIMEZONE="Asia/Shanghai" | .timezone="Asia/Shanghai" | .GITHUB_SYNC_ENABLED=(if .GITHUB_SYNC_ENABLED == null then true else .GITHUB_SYNC_ENABLED end) | .GITHUB_SYNC_INTERVAL_MINUTES=(if .GITHUB_SYNC_INTERVAL_MINUTES == null or .GITHUB_SYNC_INTERVAL_MINUTES == 5 or .GITHUB_SYNC_INTERVAL_MINUTES == 15 then 60 else .GITHUB_SYNC_INTERVAL_MINUTES end) | .GITHUB_SNAPSHOT_URL=(.GITHUB_SNAPSHOT_URL // "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json")' "$_settings_file" > "${_settings_file}.tmp" 2>/dev/null && mv "${_settings_file}.tmp" "$_settings_file" || rm -f "${_settings_file}.tmp"
+    jq '.AUTO_UPDATE_ENABLED=true | .enabled=true | .scheduleEnabled=true | .UPDATE_TIMES="08:00,12:30,19:30" | .updateTimes="08:00,12:30,19:30" | .scheduleTimes=["08:00","12:30","19:30"] | .SCHEDULE_TIMEZONE="Asia/Shanghai" | .timezone="Asia/Shanghai" | .GITHUB_SYNC_ENABLED=(if .GITHUB_SYNC_ENABLED == null then true else .GITHUB_SYNC_ENABLED end) | .GITHUB_SYNC_INTERVAL_MINUTES=(if .GITHUB_SYNC_INTERVAL_MINUTES == null or .GITHUB_SYNC_INTERVAL_MINUTES == 5 or .GITHUB_SYNC_INTERVAL_MINUTES == 15 then 60 else .GITHUB_SYNC_INTERVAL_MINUTES end) | .GITHUB_SNAPSHOT_URL=(.GITHUB_SNAPSHOT_URL // "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json")' "$_settings_file" > "${_settings_file}.tmp" 2>/dev/null && mv "${_settings_file}.tmp" "$_settings_file" || rm -f "${_settings_file}.tmp"
   elif command -v docker >/dev/null 2>&1 && docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
     docker run --rm -v "${REMOTE_DIR}/data:/app/data" "${IMAGE_NAME}" node -e "$_node_script" "/app/data/settings.json" >/dev/null 2>&1 || true
   elif [ ! -f "$_settings_file" ]; then
@@ -151,7 +151,7 @@ sync_settings_json() {
   "timezone": "Asia/Shanghai",
   "GITHUB_SYNC_ENABLED": true,
   "GITHUB_SYNC_INTERVAL_MINUTES": 60,
-  "GITHUB_SNAPSHOT_URL": "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json"
+  "GITHUB_SNAPSHOT_URL": "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json"
 }
 EOF
   fi
@@ -294,7 +294,7 @@ if is_empty_env_val "$CURRENT_SYNC_INTERVAL" || [ "$CURRENT_SYNC_INTERVAL" = "5"
   upsert_env_var "GITHUB_SYNC_INTERVAL_MINUTES" "60" ".env"
 fi
 if is_empty_env_val "$(get_env_var_from_file "GITHUB_SNAPSHOT_URL" ".env")"; then
-  upsert_env_var "GITHUB_SNAPSHOT_URL" "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/latest.json" ".env"
+  upsert_env_var "GITHUB_SNAPSHOT_URL" "https://raw.githubusercontent.com/alanhsun/CoreFeed/ag-snapshot/manifest.json" ".env"
 fi
 
 sync_settings_json "${REMOTE_DIR}/data/settings.json"
@@ -338,7 +338,7 @@ while [ "$WAIT_COUNT" -lt "$WAIT_RETRIES" ]; do
     SCHEDULE_SYNCED="1"
     echo "⏰ 已激活每日早中晚三次 (08:00, 12:30, 19:30 Asia/Shanghai) 自动更新调度"
     if pull_github_snapshot; then
-      echo "🔄 已从 GitHub 快照分支 (ag-snapshot/latest.json) 强制同步最新中文精编要闻"
+      echo "🔄 已从 GitHub 快照分支 (ag-snapshot/manifest.json) 强制同步最新中文精编要闻"
     fi
     break
   fi

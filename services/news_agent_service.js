@@ -78,9 +78,17 @@ class NewsAgentService {
      * 同步更新内存状态、本地磁盘缓存并向前端推送 Socket.IO 实时刷新事件
      */
     async _publishNewsSnapshot(displayList, fullPool, sourceStats, timestamp, phase = 'completed') {
+        const sharesStateManager = Boolean(
+            this.stateManager &&
+            this.newsService &&
+            this.newsService.stateManager === this.stateManager
+        );
+
         if (this.newsService) {
-            this.newsService.setNewsData(displayList);
-            this.newsService.setLastUpdated(timestamp);
+            if (!sharesStateManager) {
+                this.newsService.setNewsData(displayList);
+                this.newsService.setLastUpdated(timestamp);
+            }
             await this.newsService.saveLocalData(displayList);
         }
 
@@ -94,7 +102,12 @@ class NewsAgentService {
             );
         }
 
-        if (this.io) {
+        const delegatedToStateListener = Boolean(
+            this.stateManager &&
+            typeof this.stateManager.listenerCount === 'function' &&
+            this.stateManager.listenerCount('newsData-changed') > 0
+        );
+        if (this.io && !delegatedToStateListener) {
             this.io.emit('news-updated', {
                 success: true,
                 phase,
